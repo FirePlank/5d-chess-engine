@@ -716,8 +716,6 @@ impl AlphaBeta {
         let mut best = -INF;
         let mut best_action: MoveSeq = Vec::new();
         let mut searched = 0usize;
-        // Quiet actions searched without a cutoff, penalised if a later action cuts.
-        let mut quiets: Vec<MoveSeq> = Vec::new();
         let cap = {
             let base = LMP[(depth as usize).min(LMP.len() - 1)];
             if pv { base * PV_CAP_MULT } else { base }
@@ -829,14 +827,8 @@ impl AlphaBeta {
                 }
                 if alpha >= beta {
                     self.on_cutoff(s, &act, depth, ply);
-                    if !Self::is_tactical(s, &act) {
-                        self.history_malus(s, &quiets, depth);
-                    }
                     self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), &best_action);
                     return best;
-                }
-                if quiet {
-                    quiets.push(act);
                 }
             }
         }
@@ -850,15 +842,6 @@ impl AlphaBeta {
         let bound = if best > alpha0 { Bound::Exact } else { Bound::Upper };
         self.tt_store(key, depth, bound, mate_to_tt(best, ply), &best_action);
         best
-    }
-
-    fn history_malus(&mut self, s: &State, quiets: &[MoveSeq], depth: i32) {
-        for act in quiets {
-            for m in act {
-                let h = &mut self.history[history_index(s, m)];
-                *h = (*h - depth * depth).max(-20000);
-            }
-        }
     }
 
     fn on_cutoff(&mut self, s: &State, act: &MoveSeq, depth: i32, ply: usize) {
