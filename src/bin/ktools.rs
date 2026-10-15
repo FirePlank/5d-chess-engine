@@ -175,6 +175,49 @@ fn main() {
             }
             writeln!(out).unwrap();
         }
+        "futurestats" => {
+            // How often engine actions move on boards other than the mandatory ones (boards
+            // ahead of the present or on inactive timelines), by kind of move.
+            use kairos::core::variants::{apply_uci_moves, position_from_uci};
+            let (mut actions, mut with_future) = (0usize, 0usize);
+            let (mut phys, mut dep, mut arr) = (0usize, 0usize, 0usize);
+            let mut optional_boards = 0usize;
+            for f in &args[2..] {
+                for line in std::fs::read_to_string(f).expect("games").lines() {
+                    let (Some(pos), Some(moves), Some(n)) = (json_field(line, "position"), json_field(line, "moves"), json_field(line, "actions")) else { continue };
+                    let n: usize = n.parse().unwrap_or(0);
+                    let acts: Vec<&str> = moves.split(" submit").map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                    let Ok(mut s) = position_from_uci(pos) else { continue };
+                    for (i, a) in acts.iter().enumerate() {
+                        if i + n >= acts.len() {
+                            let present = s.get_present();
+                            let (amin, amax) = s.get_active_range();
+                            let mandatory = |l: i32| l >= amin && l <= amax && s.get_timeline_end(l) == present;
+                            let ts = s.get_timeline_status();
+                            optional_boards += ts.optional.len();
+                            actions += 1;
+                            let mut fut = false;
+                            for tok in a.split_whitespace() {
+                                let Ok(em) = kairos::core::action::ExtMove::parse(tok) else { continue };
+                                let (fl, tl) = (em.fm.from.l(), em.fm.to.l());
+                                let from_future = !mandatory(fl);
+                                let same_board = em.fm.from.tl() == em.fm.to.tl();
+                                let onto_future = !same_board && s.get_timeline_end(tl) == (em.fm.to.t(), present.1) && !mandatory(tl);
+                                if from_future && same_board { phys += 1; fut = true; }
+                                if from_future && !same_board { dep += 1; fut = true; }
+                                if onto_future { arr += 1; fut = true; }
+                            }
+                            with_future += fut as usize;
+                        }
+                        if apply_uci_moves(&mut s, &format!("{} submit", a)).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+            writeln!(out, "engine actions {} | with a move on a non-mandatory board {} ({:.2}%) | physical {} departures {} arrivals {} | optional boards per action {:.2}",
+                actions, with_future, 100.0 * with_future as f64 / actions.max(1) as f64, phys, dep, arr, optional_boards as f64 / actions.max(1) as f64).unwrap();
+        }
         "abbench" => abbench(
             args.get(2).map(|s| s.as_str()).unwrap_or("data/bench_ab.g"),
             args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20),

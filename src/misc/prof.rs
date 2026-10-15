@@ -1,13 +1,14 @@
 //! Feature-gated wall-clock section counters (`--features prof`); free when disabled.
 
-pub const NAMES: [&str; 16] = [
+pub const NAMES: [&str; 20] = [
     "build_hc", "hc_movegen", "take_point", "jump+present", "find_checks", "space_ops",
-    "ordering", "state_clone", "apply_actions", "eval", "in_check", "tt_validate",
-    "hc_entries", "hc_branch", "hc_finish", "hc_status",
+    "ordering", "state_clone", "qsearch", "eval", "in_check", "tt_validate",
+    "hc_entries", "hc_branch", "hc_finish", "hc_status", "local_captures", "null_move",
+    "spare1", "spare2",
 ];
 
 #[cfg(feature = "prof")]
-pub static COUNTERS: [std::sync::atomic::AtomicU64; 16] = [const { std::sync::atomic::AtomicU64::new(0) }; 16];
+pub static COUNTERS: [std::sync::atomic::AtomicU64; 20] = [const { std::sync::atomic::AtomicU64::new(0) }; 20];
 
 #[cfg(feature = "prof")]
 pub struct Scope(usize, std::time::Instant);
