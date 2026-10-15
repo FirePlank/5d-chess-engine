@@ -42,7 +42,7 @@ const LMR_MIN_INDEX: usize = 4;
 const CHECK_BONUS: i32 = 30_000;
 /// Reverse futility pruning: at non-PV nodes up to this depth, return the static eval when
 /// it beats beta by RFP_MARGIN per ply.
-const RFP_DEPTH: i32 = 0;
+const RFP_DEPTH: i32 = 2;
 const RFP_MARGIN: i32 = 200;
 const DEFAULT_HASH_MB: usize = 64;
 
