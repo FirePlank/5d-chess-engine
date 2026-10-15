@@ -418,7 +418,7 @@ impl AlphaBeta {
 
     /// Moves on boards the side to move doesn't have to play (ahead of the present, or on
     /// inactive timelines) are left out: only the null coordinate stay on those axes.
-    fn without_future(s: &State, info: &HcInfo, ss: SearchSpace, departures: bool) -> SearchSpace {
+    fn without_future(s: &State, info: &HcInfo, ss: SearchSpace) -> SearchSpace {
         let present = s.get_present();
         let (amin, amax) = s.get_active_range();
         let (lo, hi) = s.get_lines_range();
@@ -428,14 +428,7 @@ impl AlphaBeta {
             if l >= amin && l <= amax && s.get_timeline_end(l) == present {
                 continue;
             }
-            let mut set = IntegerSet::singleton(0);
-            if departures {
-                for i in 0..info.axis_len(n) as Index {
-                    if matches!(info.entry(n, i), Entry::Departing { .. }) {
-                        set.insert(i);
-                    }
-                }
-            }
+            let set = IntegerSet::singleton(0);
             allowed.push((n, set));
         }
         if allowed.is_empty() {
@@ -757,20 +750,11 @@ impl AlphaBeta {
         }
 
         let (info, ss) = HcInfo::build_hc(s);
-        // When every action tried gets mated, pieces may also travel back from optional boards
-        // (a spatial move there cannot escape a mate on the boards that must be played); the
-        // full space is only for positions with no legal action otherwise.
         let mut full = Some(ss.clone());
-        let mut with_departures = Some(Self::without_future(s, &info, ss.clone(), true));
-        let mut agen = self.action_gen(s, &info, Self::without_future(s, &info, ss, false));
+        let mut agen = self.action_gen(s, &info, Self::without_future(s, &info, ss));
         let mut generated = 0usize;
         let mut exhausted = false;
-        // Pruning may only stop once some action is known not to lose to mate: while every
-        // action tried so far gets mated, the rest (optional-board moves included) are
-        // searched too, so a mate score is always an upper bound on the mate's length.
-        let mated = |best: i32| best <= -(MATE - 1000);
-        let mut tried: Vec<MoveSeq> = Vec::new();
-        while !exhausted && (searched < cap || mated(best)) {
+        while searched < cap && !exhausted {
             let mut batch: Vec<(i32, MoveSeq)> = Vec::with_capacity(BATCH);
             while batch.len() < BATCH {
                 if self.check_abort() {
@@ -778,26 +762,19 @@ impl AlphaBeta {
                 }
                 match agen.next(&info, s) {
                     None => {
-                        // No legal action without an optional-board move, or all of them
-                        // get mated: the full space.
-                        let next = if generated == 0 {
-                            with_departures = None;
-                            full.take()
-                        } else if mated(best) {
-                            with_departures.take()
-                        } else {
-                            None
-                        };
-                        if let Some(f) = next {
-                            agen = self.action_gen(s, &info, f);
-                            continue;
+                        // Every legal action may need a move on an optional board.
+                        if generated == 0 {
+                            if let Some(f) = full.take() {
+                                agen = self.action_gen(s, &info, f);
+                                continue;
+                            }
                         }
                         exhausted = true;
                         break;
                     }
                     Some(act) => {
                         generated += 1;
-                        if pre_tried.contains(&act) || tt_action.as_ref() == Some(&act) || tried.contains(&act) {
+                        if pre_tried.contains(&act) || tt_action.as_ref() == Some(&act) {
                             continue;
                         }
                         batch.push((self.action_score(s, &act, ply), act));
@@ -806,7 +783,7 @@ impl AlphaBeta {
             }
             batch.sort_by(|a, b| b.0.cmp(&a.0));
             for (sc, act) in batch {
-                if searched >= cap && !mated(best) {
+                if searched >= cap {
                     break;
                 }
                 let mark = Self::make(s, &act);
@@ -839,9 +816,6 @@ impl AlphaBeta {
                     if v > alpha {
                         alpha = v;
                     }
-                }
-                if mated(best) {
-                    tried.push(act.clone());
                 }
                 if alpha >= beta {
                     self.on_cutoff(s, &act, depth, ply);
@@ -953,7 +927,7 @@ impl AlphaBeta {
         // Root actions (all of them, up to the root cap), ordered heuristically.
         let (hc, ss) = HcInfo::build_hc(root);
         let mut full = Some(ss.clone());
-        let mut agen = self.action_gen(root, &hc, Self::without_future(root, &hc, ss, false));
+        let mut agen = self.action_gen(root, &hc, Self::without_future(root, &hc, ss));
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
         // Enumerating every root action can take seconds with many timelines: spend at most
         // a quarter of the budget on it (always keeping at least one action).
