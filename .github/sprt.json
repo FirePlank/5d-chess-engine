@@ -1,0 +1,12 @@
+{
+  "name": "piece_values_5d",
+  "old": "2d0f8d96baa51f71c0857a249d6167b7bfdf3749",
+  "games": 4000,
+  "shards": 40,
+  "tc": "movetime 100",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "ab",
+  "old_args": "ab",
+  "base": "self"
+}
