@@ -3,18 +3,26 @@
 //! Plays opening pairs (colors swapped) between a NEW and a BASE engine, referees every action
 //! with the kairos rules core, and stops on a pentanomial GSPRT decision (fastchess math).
 //!
-//! sprt --new "<cmd>" --base "<cmd>" --book book.g [--movetime 100 | --nodes N | --depth D]
+//! sprt --new "<cmd>" --base "<cmd>" [--book book.g | --book-plies 6]
+//!      [--movetime 100 | --tc 10+0.1 | --nodes N | --depth D]
 //!      [--concurrency 8] [--max-games 20000] [--min-games 0] [--elo0 0] [--elo1 5]
 //!      [--alpha 0.05] [--beta 0.05] [--model normalized|logistic] [--max-actions 160]
 //!      [--games-out games.jsonl] [--seed 1] [--compact]
 //!
-//! `--games-out` appends one JSON object per game; games 2k and 2k+1 form pair k.
+//! Without `--book`, every pair opens from a generated opening: a random 8x8 built-in variant
+//! and `--book-plies` actions chosen by a shallow search with noise, the same for both games.
+//!
+//! `--games-out` appends one JSON object per game; games 2k and 2k+1 form pair k. Its moves
+//! start with the opening's `book` actions.
 
-use kairos::core::action::ExtMove;
-use kairos::core::hypercuboid::HcInfo;
+use kairos::core::action::{ExtMove, MoveSeq};
+use kairos::core::hypercuboid::{HcCursor, HcInfo};
 use kairos::core::promotion::PromotionOptions;
 use kairos::core::state::{MateType, State};
 use kairos::core::variants::{apply_uci_moves, position_from_uci};
+use kairos::engine::ab::AlphaBeta;
+use kairos::engine::{Limits, OptionValue};
+use kairos::misc::ordering::HcOrdering;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -318,6 +326,8 @@ struct Config {
     new_cmd: String,
     base_cmd: String,
     go: String,
+    /// Clock games (`--tc base+inc`, seconds): base and increment in ms.
+    clock: Option<(u64, u64)>,
     timeout: Duration,
     max_actions: usize,
 }
@@ -326,6 +336,8 @@ struct Opening {
     promo: u8,
     position: String,
     moves: String,
+    /// Actions in `moves`.
+    book: usize,
 }
 
 fn parse_book(path: &str) -> Vec<Opening> {
@@ -338,9 +350,115 @@ fn parse_book(path: &str) -> Vec<Opening> {
             Some(i) => (rest[..i].to_string(), rest[i + 6..].trim().to_string()),
             None => (rest.to_string(), String::new()),
         };
-        out.push(Opening { promo: promo.parse().unwrap_or(1), position: pos, moves });
+        let book = moves.matches("submit").count();
+        out.push(Opening { promo: promo.parse().unwrap_or(1), position: pos, moves, book });
     }
     out
+}
+
+const STD: &str = "r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*";
+/// Generated openings start from the built-in 8x8 variants (4x4 games are decided by the
+/// opening, so they only add noise).
+fn starts() -> Vec<String> {
+    vec![
+        format!("size 8x8 odd fen [{STD}:0:1:w]"),
+        format!("size 8x8 odd fen [{STD}:0:0:b][{STD}:0:1:w]"),
+        "size 8x8 odd fen [r*nbycbnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBYCBNR*:0:1:w]".into(),
+        "size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBK*QBNR*:0:1:w]".into(),
+        "size 8x8 odd fen [r*qbnk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*QBNK*BNR*:0:1:w]".into(),
+        format!("size 8x8 even fen [{STD}:-0:1:w][{STD}:+0:1:w]"),
+    ]
+}
+/// Each opening action is chosen among this many candidates (the engine's best-ordered half,
+/// then random ones), each scored by a search to BOOK_DEPTH; one of those within the margin
+/// of the best is played, uniformly at random. Each side's first action takes the wider
+/// BOOK_FIRST_MARGIN (it only excludes blunders): opening scores at this depth swing by
+/// over a thousand between candidates.
+const BOOK_CANDIDATES: usize = 32;
+const BOOK_DEPTH: u32 = 2;
+const BOOK_MARGIN: i32 = 80;
+const BOOK_FIRST_MARGIN: i32 = 600;
+
+fn shuffled_order(w: &HcInfo, mut st: u64) -> HcOrdering {
+    st |= 1;
+    let u = w.get_universe();
+    let orders = (0..u.dimension())
+        .map(|n| {
+            let mut v: Vec<u32> = u[n].iter().collect();
+            for i in (1..v.len()).rev() {
+                st ^= st << 13;
+                st ^= st >> 7;
+                st ^= st << 17;
+                v.swap(i, (st % (i as u64 + 1)) as usize);
+            }
+            v
+        })
+        .collect();
+    HcOrdering::Precomputed(orders)
+}
+
+/// The opening of pair `pair`, deterministic in (seed, pair).
+fn gen_opening(eng: &mut AlphaBeta, seed: u64, pair: usize, plies: usize) -> Opening {
+    let mut st = (seed ^ (pair as u64 + 1).wrapping_mul(0xD1B5_4A32_D192_ED03)).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    let mut rnd = move || {
+        st ^= st << 13;
+        st ^= st >> 7;
+        st ^= st << 17;
+        st
+    };
+    let starts = starts();
+    let position = starts[(rnd() % starts.len() as u64) as usize].clone();
+    let mut s = position_from_uci(&position).expect("start position");
+    let stop = AtomicBool::new(false);
+    let limits = Limits { depth: Some(BOOK_DEPTH), ..Default::default() };
+    let mut moves = String::new();
+    let mut book = 0;
+    while book < plies {
+        let mut cands: Vec<MoveSeq> = eng.node_order(&s, BOOK_CANDIDATES / 2);
+        let (w, ss) = HcInfo::build_hc(&s);
+        let mut cur = HcCursor::new(ss, shuffled_order(&w, rnd()));
+        while cands.len() < BOOK_CANDIDATES {
+            match cur.next(&w, &s) {
+                Some(a) if !cands.contains(&a) => cands.push(a),
+                Some(_) => {}
+                None => break,
+            }
+        }
+        if cands.is_empty() {
+            break;
+        }
+        let mut scored: Vec<(i32, State, String)> = Vec::new();
+        for a in cands {
+            let mut c = s.clone();
+            let mut txt = String::new();
+            for &m in &a {
+                let em = ExtMove::resolve(m, &c);
+                txt += &format!("{} ", em);
+                assert!(c.apply_ext::<false>(em));
+            }
+            txt += "submit";
+            assert!(c.submit::<false>());
+            let mut last = None;
+            let v = match eng.find_best_move(&c, &limits, &stop, &mut |m| last = info_score(&m).or(last)) {
+                Some(_) => -last.unwrap_or(0),
+                None if c.get_mate_type() == MateType::Checkmate => 30000,
+                None => 0,
+            };
+            scored.push((v, c, txt));
+        }
+        let best = scored.iter().map(|x| x.0).max().unwrap();
+        let margin = if book < 2 { BOOK_FIRST_MARGIN } else { BOOK_MARGIN };
+        scored.retain(|x| x.0 >= best - margin);
+        let (_, c, txt) = scored.swap_remove((rnd() % scored.len() as u64) as usize);
+        s = c;
+        moves += &txt;
+        moves.push(' ');
+        book += 1;
+        if !has_legal_action(&s) {
+            break;
+        }
+    }
+    Opening { promo: 1, position, moves: moves.trim().to_string(), book }
 }
 
 fn has_legal_action(s: &State) -> bool {
@@ -392,6 +510,8 @@ fn play_game(cfg: &Config, procs: &mut [Option<Proc>; 2], op: &Opening, new_firs
         p.wait_for("readyok", Duration::from_secs(30))?;
     }
     let first_player = s.get_present().1;
+    // Remaining clock (ms) of NEW and BASE in clock games.
+    let mut clock = [cfg.clock.map(|c| c.0).unwrap_or(0); 2];
     let mut n = 0usize;
     let mut evals: Vec<Option<i32>> = Vec::new();
     let finish = |res_for_mover_new: GameResult, reason: String, n: usize, history: &str, evals: &[Option<i32>]| GameRecord {
@@ -421,8 +541,25 @@ fn play_game(cfg: &Config, procs: &mut [Option<Proc>; 2], op: &Opening, new_firs
         let proc = procs[side].as_mut().unwrap();
         proc.send(&format!("position {} moves {}", op.position, history))?;
         proc.last_score = None;
-        proc.send(&cfg.go)?;
-        let reply = proc.wait_for("bestmove", cfg.timeout)?;
+        let t0 = Instant::now();
+        match cfg.clock {
+            Some((_, inc)) => {
+                // `player` is the side to move (false = white); each engine keeps its own clock.
+                let (w, b) = if player { (clock[1 - side], clock[side]) } else { (clock[side], clock[1 - side]) };
+                proc.send(&format!("go wtime {} btime {} winc {} binc {}", w, b, inc, inc))?;
+            }
+            None => proc.send(&cfg.go)?,
+        }
+        // A clock game allows one second of grace past the flag before the engine is dropped.
+        let timeout = cfg.clock.map(|_| Duration::from_millis(clock[side] + 1000)).unwrap_or(cfg.timeout);
+        let reply = proc.wait_for("bestmove", timeout)?;
+        if let Some((_, inc)) = cfg.clock {
+            let used = t0.elapsed().as_millis() as u64;
+            if used > clock[side] {
+                return Ok(finish(new_result(false), "time forfeit".into(), n, &history, &evals));
+            }
+            clock[side] = clock[side] - used + inc;
+        }
         evals.push(proc.last_score);
         if reply.starts_with("nobestmove") {
             return Ok(finish(new_result(false), "nobestmove with legal actions".into(), n, &history, &evals));
@@ -454,7 +591,8 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let new_cmd = arg(&args, "--new").expect("--new <cmd>");
     let base_cmd = arg(&args, "--base").expect("--base <cmd>");
-    let book = parse_book(&arg(&args, "--book").unwrap_or_else(|| "data/book.g".into()));
+    let book: Vec<Opening> = arg(&args, "--book").map(|p| parse_book(&p)).unwrap_or_default();
+    let book_plies: usize = arg(&args, "--book-plies").and_then(|v| v.parse().ok()).unwrap_or(6);
     let conc: usize = arg(&args, "--concurrency").and_then(|v| v.parse().ok()).unwrap_or(8);
     let max_games: usize = arg(&args, "--max-games")
         .or_else(|| arg(&args, "--games"))
@@ -469,7 +607,15 @@ fn main() {
     let normalized = arg(&args, "--model").map(|m| m != "logistic").unwrap_or(true);
     let max_actions: usize = arg(&args, "--max-actions").and_then(|v| v.parse().ok()).unwrap_or(160);
     let seed: u64 = arg(&args, "--seed").and_then(|v| v.parse().ok()).unwrap_or(1);
-    let (go, budget_ms) = if let Some(n) = arg(&args, "--nodes") {
+    // --tc base+inc in seconds, e.g. 10+0.1.
+    let clock = arg(&args, "--tc").map(|tc| {
+        let (b, i) = tc.split_once('+').unwrap_or((tc.as_str(), "0"));
+        let ms = |x: &str| (x.parse::<f64>().expect("--tc base+inc") * 1000.0).round() as u64;
+        (ms(b), ms(i))
+    });
+    let (go, budget_ms) = if let Some((b, i)) = clock {
+        (format!("tc {}+{} ms", b, i), b + i)
+    } else if let Some(n) = arg(&args, "--nodes") {
         (format!("go nodes {}", n), 30000u64)
     } else if let Some(d) = arg(&args, "--depth") {
         (format!("go depth {}", d), 60000)
@@ -481,6 +627,7 @@ fn main() {
         new_cmd: new_cmd.clone(),
         base_cmd: base_cmd.clone(),
         go: go.clone(),
+        clock,
         timeout: Duration::from_millis(budget_ms * 4 + 10000),
         max_actions,
     };
@@ -488,7 +635,7 @@ fn main() {
     let upper = ((1.0 - beta) / alpha).ln();
     println!("SPRT  NEW: {}\n      BASE: {}", new_cmd, base_cmd);
     println!(
-        "      {} | bounds [{}, {}] {} | alpha={} beta={} | LLR bounds [{:.2}, {:.2}] | {} openings x2 | {} workers",
+        "      {} | bounds [{}, {}] {} | alpha={} beta={} | LLR bounds [{:.2}, {:.2}] | {} | {} workers",
         go,
         elo0,
         elo1,
@@ -497,7 +644,7 @@ fn main() {
         beta,
         lower,
         upper,
-        book.len(),
+        if book.is_empty() { format!("generated openings, {} actions", book_plies) } else { format!("{} openings x2", book.len()) },
         conc
     );
     let log_path = arg(&args, "--log");
@@ -547,12 +694,20 @@ fn main() {
         );
         handles.push(std::thread::spawn(move || {
             let mut procs: [Option<Proc>; 2] = [None, None];
+            let mut book_engine = AlphaBeta::new();
+            book_engine.set_option("Hash", &OptionValue::Int(8));
             while !done.load(Ordering::SeqCst) {
                 let k = next_pair.fetch_add(1, Ordering::SeqCst);
                 if 2 * k >= max_games {
                     break;
                 }
-                let op = &book[order[k % order.len()]];
+                let generated;
+                let op = if book.is_empty() {
+                    generated = gen_opening(&mut book_engine, seed, k, book_plies);
+                    &generated
+                } else {
+                    &book[order[k % order.len()]]
+                };
                 let mut results = Vec::new();
                 for new_first in [true, false] {
                     let mut attempt = 0;
@@ -612,7 +767,7 @@ fn main() {
                         let esc = |x: &str| x.replace('\\', "\\\\").replace('"', "\\\"");
                         let _ = writeln!(
                             f,
-                            "{{\"game\":{},\"pair\":{},\"new_first\":{},\"score\":{},\"reason\":\"{}\",\"actions\":{},\"position\":\"{}\",\"moves\":\"{}\",\"evals\":[{}]}}",
+                            "{{\"game\":{},\"pair\":{},\"new_first\":{},\"score\":{},\"reason\":\"{}\",\"actions\":{},\"position\":\"{}\",\"book\":{},\"moves\":\"{}\",\"evals\":[{}]}}",
                             2 * k + gi,
                             k,
                             gi == 0,
@@ -620,6 +775,7 @@ fn main() {
                             esc(&r.reason),
                             r.actions,
                             esc(&op.position),
+                            op.book,
                             esc(r.log.trim()),
                             r.evals.iter().map(|e| e.map(|v| v.to_string()).unwrap_or("null".into())).collect::<Vec<_>>().join(",")
                         );

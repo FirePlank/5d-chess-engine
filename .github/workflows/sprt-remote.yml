@@ -55,7 +55,7 @@ jobs:
             echo "per_shard=$per"
             echo "old=$(jq -r '.old' $c)"
             echo "name=$(jq -r '.name' $c)"
-            echo "tc=$(jq -r '.tc // "movetime 100"' $c)"
+            echo "tc=$(jq -r '.tc // "tc 10+0.1"' $c)"
             echo "elo0=$(jq -r '.elo0 // 0' $c)"
             echo "elo1=$(jq -r '.elo1 // 5' $c)"
             echo "new_args=$(jq -r '.new_args // ""' $c)"
@@ -210,7 +210,7 @@ jobs:
           [ "$base" = self ] || old_args="${base#cpp:}"
           tc="${{ needs.setup.outputs.tc }}"
           ./bins/sprt --new "$PWD/bins/new-kairos ${{ needs.setup.outputs.new_args }}" \
-            --base "$PWD/bins/old-kairos $old_args" --book data/book.g \
+            --base "$PWD/bins/old-kairos $old_args" \
             --${tc% *} ${tc#* } --elo0="${{ needs.setup.outputs.elo0 }}" --elo1="${{ needs.setup.outputs.elo1 }}" \
             --concurrency "$(nproc)" --compact --seed "${{ matrix.shard }}" \
             --min-games "${{ needs.setup.outputs.per_shard }}" --max-games "${{ needs.setup.outputs.per_shard }}" \
