@@ -7,6 +7,7 @@
 //! Quiescence searches captures and promotions only, one quiet filler move per board.
 
 use super::hce;
+use super::time::TimePlan;
 use super::{Limits, OptionValue};
 use crate::core::action::{Action, FullMove, MoveSeq};
 use crate::core::bitboard::{marked_pos, pmask};
@@ -566,6 +567,13 @@ impl AlphaBeta {
         })
     }
 
+    /// Boards the side to move must play this action.
+    fn mandatory_boards(s: &State) -> usize {
+        let present = s.get_present();
+        let (amin, amax) = s.get_active_range();
+        (amin..=amax).filter(|&l| s.get_timeline_end(l) == present).count()
+    }
+
     fn in_check(s: &State) -> bool {
         let _p = crate::misc::prof::scope(10);
         s.has_phantom_check()
@@ -913,10 +921,8 @@ impl AlphaBeta {
         self.nodes = 0;
         self.aborted = false;
         self.node_limit = limits.nodes;
-        let budget = limits.movetime.or_else(|| {
-            limits.time_left.map(|t| (t / 25 + limits.increment.unwrap_or(0) * 3 / 4).min(t / 3))
-        });
-        self.deadline = budget.map(|ms| start + Duration::from_millis(ms.saturating_sub(5).max(1)));
+        let plan = TimePlan::new(limits, Self::mandatory_boards(root));
+        self.deadline = plan.as_ref().map(|p| start + Duration::from_millis(p.maximum.saturating_sub(5).max(1)));
         for k in self.killers.iter_mut() {
             *k = [None, None];
         }
@@ -931,7 +937,8 @@ impl AlphaBeta {
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
         // Enumerating every root action can take seconds with many timelines: spend at most
         // a quarter of the budget on it (always keeping at least one action).
-        let gen_deadline = budget.map(|ms| start + Duration::from_millis(ms / 4));
+        let gen_deadline = plan.as_ref().map(|p| start + Duration::from_millis(p.optimum / 4));
+        let mut complete = false;
         while roots.len() < ROOT_CAP {
             if !roots.is_empty() && gen_deadline.map(|d| Instant::now() >= d).unwrap_or(false) {
                 break;
@@ -939,17 +946,28 @@ impl AlphaBeta {
             match agen.next(&hc, root) {
                 Some(a) => roots.push((self.action_score(root, &a, 0), a)),
                 None if roots.is_empty() && full.is_some() => agen = self.action_gen(root, &hc, full.take().unwrap()),
-                None => break,
+                None => {
+                    complete = true;
+                    break;
+                }
             }
         }
         if roots.is_empty() {
             return None;
         }
+        // A forced action on the clock is played at once.
+        if complete && roots.len() == 1 && plan.as_ref().is_some_and(|p| p.clock) {
+            return Some(Action::from_moveseq(&roots[0].1, root));
+        }
         roots.sort_by(|a, b| b.0.cmp(&a.0));
         let mut best: MoveSeq = roots[0].1.clone();
         let mut best_score: i32 = 0;
         self.seek_mate = false;
+        // Clock stability: decaying count of best-action changes and running average score.
+        let mut changes = 0.0f64;
+        let mut avg_score: Option<i32> = None;
         for depth in 1..=max_depth {
+            let prev_best = best.clone();
             // seekMate bar: 3000 + 100000 / depth^2 (Stockfish's form, in our units).
             self.seek_mate = depth > 1 && best_score.abs() >= 3000 + 100_000 / (depth * depth);
             let mut alpha = -INF;
@@ -1037,6 +1055,17 @@ impl AlphaBeta {
             }
             if self.aborted {
                 break;
+            }
+            if let Some(p) = plan.as_ref().filter(|p| p.clock) {
+                changes = changes / 2.0 + if depth > 1 && best != prev_best { 1.0 } else { 0.0 };
+                let falling = avg_score.map_or(1.0, |a| (1.0 + (a - best_score) as f64 / 150.0).clamp(0.75, 1.6));
+                avg_score = Some(avg_score.map_or(best_score, |a| (a + best_score) / 2));
+                let instability = (0.8 + 0.6 * changes).min(2.0);
+                // The next depth costs about as much as all before it together: none is
+                // started past half the target.
+                if elapsed * 1000.0 > p.target(falling, instability) * 0.5 {
+                    break;
+                }
             }
             // Keep searching after a mate (pruning can report false or long mates) until the
             // mate is well inside the searched depth.
