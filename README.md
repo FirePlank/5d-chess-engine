@@ -8,8 +8,8 @@ A Rust engine for [5D Chess With Multiverse Time Travel](https://www.5dchesswith
 
 - **Rules**: Full 5D rules on boards up to 8x8: time travel, branching timelines, the present, odd/even timeline layouts, all fairy pieces (princess, unicorn, dragon, brawn, royal queen, common king), castling, en passant and promotion.
 - **Legal actions**: A hypercuboid search enumerates legal turns lazily, so checkmate detection and move generation stay tractable with many timelines.
-- **Search**: Iterative deepening PVS over whole turns with a transposition table, killer and history ordering, late move reductions and a tactical quiescence search.
-- **Evaluation**: Handcrafted evaluation over every timeline's latest board.
+- **Search**: Iterative deepening PVS over whole turns with a transposition table, killer and history ordering, late move pruning and reductions and a tactical quiescence search. Turns are enumerated best-first by the summed scores of their per-board moves, with checking moves (including checks across time and timelines) ordered first.
+- **Evaluation**: Handcrafted evaluation over every timeline's latest board, with timeline advantage weighted by the material still able to use it.
 - **Protocol**: Speaks 5DUCI, so it plugs into any 5DUCI interface or match runner.
 
 ## Quick Start

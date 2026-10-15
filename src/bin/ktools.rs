@@ -80,6 +80,24 @@ fn main() {
             &args[4.min(args.len())..],
             &mut out,
         ),
+        "rootgen" => {
+            use kairos::engine::ab::AlphaBeta;
+            use kairos::engine::{Engine, OptionValue};
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or("games/bench_ab.g");
+            let text = std::fs::read_to_string(path).expect("positions");
+            for (k, line) in text.lines().filter(|l| l.starts_with("G ")).enumerate() {
+                let s = parse_g_line(line).unwrap();
+                for bf in [false, true] {
+                    let mut e = AlphaBeta::new(Default::default(), Default::default());
+                    e.set_option("best_first", &OptionValue::Bool(bf));
+                    let t = Instant::now();
+                    let n = e.node_order(&s, 4000).len();
+                    let (w, _) = HcInfo::build_hc(&s);
+                    write!(out, "pos {} dim {} bf={} actions {} in {:.1}ms | ", k, w.dimension(), bf, n, t.elapsed().as_secs_f64() * 1e3).unwrap();
+                }
+                writeln!(out).unwrap();
+            }
+        }
         "depthstat" => {
             use kairos::engine::ab::AlphaBeta;
             use kairos::engine::{Engine, Limits};

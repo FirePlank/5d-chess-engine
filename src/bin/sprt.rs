@@ -235,6 +235,18 @@ struct Proc {
     stdin: ChildStdin,
     rx: Receiver<String>,
     name: String,
+    /// Last search score reported in an info line (mover's view; mates as +-20000).
+    last_score: Option<i32>,
+}
+
+/// Score from an engine info line: "score cp X" or "score mate N".
+fn info_score(line: &str) -> Option<i32> {
+    let mut it = line.split_whitespace().skip_while(|w| *w != "score").skip(1);
+    match (it.next()?, it.next()?) {
+        ("cp", v) => v.parse().ok(),
+        ("mate", v) => v.parse::<i32>().ok().map(|n| if n > 0 || v == "+0" { 20000 } else { -20000 }),
+        _ => None,
+    }
 }
 
 impl Proc {
@@ -258,7 +270,7 @@ impl Proc {
                 }
             }
         });
-        let mut p = Proc { child, stdin, rx, name: name.into() };
+        let mut p = Proc { child, stdin, rx, name: name.into(), last_score: None };
         p.send("5duci")?;
         p.wait_for("5duciok", Duration::from_secs(30))?;
         p.send("setoption name debug value false")?;
@@ -276,7 +288,14 @@ impl Proc {
             match self.rx.recv_timeout(left) {
                 Ok(l) if l.starts_with(prefix) => return Ok(l),
                 Ok(l) if prefix == "bestmove" && l.starts_with("nobestmove") => return Ok(l),
-                Ok(_) => continue,
+                Ok(l) => {
+                    if l.starts_with("info") {
+                        if let Some(sc) = info_score(&l) {
+                            self.last_score = Some(sc);
+                        }
+                    }
+                    continue;
+                }
                 Err(RecvTimeoutError::Timeout) => return Err(format!("{} timed out waiting for {}", self.name, prefix)),
                 Err(RecvTimeoutError::Disconnected) => return Err(format!("{} exited", self.name)),
             }
@@ -357,6 +376,8 @@ struct GameRecord {
     reason: String,
     actions: usize,
     log: String,
+    /// Each engine action's reported score, from the mover's view.
+    evals: Vec<Option<i32>>,
 }
 
 /// `new_white`: whether NEW plays the side to move first in the opening position.
@@ -372,11 +393,13 @@ fn play_game(cfg: &Config, procs: &mut [Option<Proc>; 2], op: &Opening, new_firs
     }
     let first_player = s.get_present().1;
     let mut n = 0usize;
-    let finish = |res_for_mover_new: GameResult, reason: String, n: usize, history: &str| GameRecord {
+    let mut evals: Vec<Option<i32>> = Vec::new();
+    let finish = |res_for_mover_new: GameResult, reason: String, n: usize, history: &str, evals: &[Option<i32>]| GameRecord {
         result: res_for_mover_new,
         reason,
         actions: n,
         log: history.to_string(),
+        evals: evals.to_vec(),
     };
     loop {
         let player = s.get_present().1;
@@ -390,21 +413,23 @@ fn play_game(cfg: &Config, procs: &mut [Option<Proc>; 2], op: &Opening, new_firs
                 MateType::Checkmate => (new_result(false), "checkmate"),
                 _ => (GameResult::Draw, "stalemate"),
             };
-            return Ok(finish(r.0, r.1.into(), n, &history));
+            return Ok(finish(r.0, r.1.into(), n, &history, &evals));
         }
         if n >= cfg.max_actions {
-            return Ok(finish(GameResult::Draw, "action limit".into(), n, &history));
+            return Ok(finish(GameResult::Draw, "action limit".into(), n, &history, &evals));
         }
         let proc = procs[side].as_mut().unwrap();
         proc.send(&format!("position {} moves {}", op.position, history))?;
+        proc.last_score = None;
         proc.send(&cfg.go)?;
         let reply = proc.wait_for("bestmove", cfg.timeout)?;
+        evals.push(proc.last_score);
         if reply.starts_with("nobestmove") {
-            return Ok(finish(new_result(false), "nobestmove with legal actions".into(), n, &history));
+            return Ok(finish(new_result(false), "nobestmove with legal actions".into(), n, &history, &evals));
         }
         let toks: Vec<String> = reply.split_whitespace().skip(1).map(|x| x.to_string()).collect();
         if let Err(e) = referee_apply(&mut s, &toks) {
-            return Ok(finish(new_result(false), format!("illegal action ({}): {}", e, toks.join(" ")), n, &history));
+            return Ok(finish(new_result(false), format!("illegal action ({}): {}", e, toks.join(" ")), n, &history, &evals));
         }
         for t in &toks {
             history.push(' ');
@@ -561,7 +586,7 @@ fn main() {
                                         1 => GameResult::Win,
                                         _ => GameResult::Draw,
                                     };
-                                    results.push(GameRecord { result, reason: format!("protocol: {}", e), actions: 0, log: String::new() });
+                                    results.push(GameRecord { result, reason: format!("protocol: {}", e), actions: 0, log: String::new(), evals: Vec::new() });
                                     break;
                                 }
                             }
@@ -587,7 +612,7 @@ fn main() {
                         let esc = |x: &str| x.replace('\\', "\\\\").replace('"', "\\\"");
                         let _ = writeln!(
                             f,
-                            "{{\"game\":{},\"pair\":{},\"new_first\":{},\"score\":{},\"reason\":\"{}\",\"actions\":{},\"position\":\"{}\",\"moves\":\"{}\"}}",
+                            "{{\"game\":{},\"pair\":{},\"new_first\":{},\"score\":{},\"reason\":\"{}\",\"actions\":{},\"position\":\"{}\",\"moves\":\"{}\",\"evals\":[{}]}}",
                             2 * k + gi,
                             k,
                             gi == 0,
@@ -595,7 +620,8 @@ fn main() {
                             esc(&r.reason),
                             r.actions,
                             esc(&op.position),
-                            esc(r.log.trim())
+                            esc(r.log.trim()),
+                            r.evals.iter().map(|e| e.map(|v| v.to_string()).unwrap_or("null".into())).collect::<Vec<_>>().join(",")
                         );
                         let _ = f.flush();
                     }
