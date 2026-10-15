@@ -26,6 +26,12 @@ pub struct Board {
 #[derive(Debug, Clone)]
 pub struct FenError(pub String);
 
+#[derive(Clone, Copy, Debug)]
+pub struct RoyalSafety {
+    pub in_check: bool,
+    pub pinned: Bitboard,
+}
+
 impl std::fmt::Debug for Board {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Board({})", self.get_fen(true))
@@ -266,6 +272,31 @@ impl Board {
         }
     }
 
+    /// Move whatever stands on `from` to `to` (capturing), clearing unmoved flags on both.
+    /// Same result as `set_piece(to, get_piece(from)); set_piece(from, NO_PIECE)`.
+    #[inline(always)]
+    pub fn transfer(&mut self, from: i32, to: i32) {
+        let (zf, zt) = (pmask(from), pmask(to));
+        for bb in self.bbs.iter_mut() {
+            let had = *bb & zf != 0;
+            *bb &= !(zf | zt);
+            if had {
+                *bb |= zt;
+            }
+        }
+        self.umove_mask &= !(zf | zt);
+    }
+
+    /// Empty one square.
+    #[inline(always)]
+    pub fn clear_square(&mut self, pos: i32) {
+        let z = !pmask(pos);
+        for bb in self.bbs.iter_mut() {
+            *bb &= z;
+        }
+        self.umove_mask &= z;
+    }
+
     /// Copy of this board with one square replaced.
     #[inline]
     pub fn replace_piece(&self, pos: i32, p: Piece) -> Board {
@@ -373,6 +404,30 @@ impl Board {
             return true;
         }
         false
+    }
+
+    /// Whether color `c` has a royal under attack, and which of its pieces are pinned to a
+    /// royal by an enemy slider (moving them off the line could expose it).
+    pub fn royal_safety(&self, c: bool) -> RoyalSafety {
+        let own = self.friendly(c);
+        let enemy = self.hostile(c);
+        let occ = self.occupied();
+        let rooks = self.lrook() & enemy;
+        let bishops = self.lbishop() & enemy;
+        let mut r = RoyalSafety { in_check: false, pinned: 0 };
+        for k in marked_pos(self.royal() & own) {
+            if self.is_under_attack(k, c) {
+                r.in_check = true;
+            }
+            let pinners = (rook_attack(k, 0) & rooks) | (bishop_attack(k, 0) & bishops);
+            for sq in marked_pos(pinners) {
+                let btw = BETWEEN[k as usize][sq as usize] & occ;
+                if btw.count_ones() == 1 {
+                    r.pinned |= btw & own;
+                }
+            }
+        }
+        r
     }
 
     pub fn raw_bbs(&self) -> [Bitboard; 12] {

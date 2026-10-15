@@ -2,7 +2,7 @@
 
 pub const NAMES: [&str; 12] = [
     "build_hc", "hc_movegen", "take_point", "jump+present", "find_checks", "space_ops",
-    "ordering", "state_clone", "apply_actions", "linear_eval", "mate_type", "other",
+    "ordering", "state_clone", "apply_actions", "eval", "in_check", "tt_validate",
 ];
 
 #[cfg(feature = "prof")]

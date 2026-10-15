@@ -32,6 +32,23 @@ pub struct State {
     pub(crate) present: i32,
     pub(crate) player: bool,
     pub(crate) promotions: PromotionOptions,
+    /// Board mutations since tracking was enabled, for `unmake`.
+    ops: Vec<Op>,
+    track: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Op {
+    Append(i32),
+    Insert(i32, (i32, i32, i32, i32)),
+}
+
+/// Restore point for `State::unmake`.
+#[derive(Clone, Copy, Debug)]
+pub struct Mark {
+    ops: usize,
+    present: i32,
+    player: bool,
 }
 
 /// Timelines split by playability for the player to move.
@@ -52,7 +69,7 @@ impl TimelineStatus {
 impl State {
     pub fn new(m: Multiverse, promotions: PromotionOptions) -> State {
         let (present, player) = m.get_present();
-        State { m, present, player, promotions }
+        State { m, present, player, promotions, ops: Vec::new(), track: false }
     }
 
     #[inline(always)]
@@ -130,6 +147,37 @@ impl State {
     }
     pub fn gen_piece_move(&self, p: Vec4, out: &mut Vec<Vec4>) {
         self.m.gen_piece_move(p, self.player, out)
+    }
+
+    /// Record board mutations from now on so they can be undone with `unmake`.
+    pub fn enable_undo(&mut self) {
+        self.track = true;
+        self.ops.clear();
+    }
+
+    #[inline]
+    pub fn mark(&self) -> Mark {
+        Mark { ops: self.ops.len(), present: self.present, player: self.player }
+    }
+
+    /// Undo every move and submit since `mark` (requires `enable_undo`).
+    pub fn unmake(&mut self, mark: Mark) {
+        while self.ops.len() > mark.ops {
+            match self.ops.pop().unwrap() {
+                Op::Append(l) => self.m.pop_board(l),
+                Op::Insert(l, ranges) => self.m.remove_last_line(l, ranges),
+            }
+        }
+        self.present = mark.present;
+        self.player = mark.player;
+    }
+
+    #[inline]
+    fn append(&mut self, l: i32, b: Board) {
+        if self.track {
+            self.ops.push(Op::Append(l));
+        }
+        self.m.append_board(l, b);
     }
 
     pub fn new_line(&self) -> i32 {
@@ -212,11 +260,11 @@ impl State {
             } else {
                 b.move_piece(p.xy(), q.xy())
             };
-            self.m.append_board(p.l(), nb);
+            self.append(p.l(), nb);
         } else if (q.t(), player) == self.m.get_timeline_end(q.l()) {
             let b = *self.m.board(p.l(), p.t(), player);
             let pic = piece_name(b.get_piece(p.xy()));
-            self.m.append_board(p.l(), b.replace_piece(p.xy(), NO_PIECE));
+            self.append(p.l(), b.replace_piece(p.xy(), NO_PIECE));
             let z = pmask(p.xy());
             let cb = *self.m.board(q.l(), q.t(), player);
             let nb = if b.lrawn() & z != 0 && (q.y() == 0 || q.y() == size_y - 1) {
@@ -229,11 +277,11 @@ impl State {
             } else {
                 cb.replace_piece(q.xy(), pic)
             };
-            self.m.append_board(q.l(), nb);
+            self.append(q.l(), nb);
         } else {
             let b = *self.m.board(p.l(), p.t(), player);
             let pic = piece_name(b.get_piece(p.xy()));
-            self.m.append_board(p.l(), b.replace_piece(p.xy(), NO_PIECE));
+            self.append(p.l(), b.replace_piece(p.xy(), NO_PIECE));
             let xb = *self.m.board(q.l(), q.t(), player);
             let (t, c) = next_turn((q.t(), player));
             let z = pmask(p.xy());
@@ -248,6 +296,9 @@ impl State {
                 xb.replace_piece(q.xy(), pic)
             };
             let nl = self.new_line();
+            if self.track {
+                self.ops.push(Op::Insert(nl, self.m.ranges()));
+            }
             self.m.insert_board(nl, t, c, nb);
             let (new_present, _) = self.m.get_present();
             if new_present < self.present {

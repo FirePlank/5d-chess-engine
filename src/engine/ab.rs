@@ -9,7 +9,7 @@ use super::{Engine, Limits, OptionValue};
 use crate::core::action::{Action, FullMove, MoveSeq};
 use crate::core::hypercuboid::{Entry, HcCursor, HcInfo, SearchMode};
 use crate::core::piece::*;
-use crate::core::state::State;
+use crate::core::state::{Mark, State};
 use crate::misc::integer_set::Index;
 use crate::misc::ordering::HcOrdering;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -195,7 +195,8 @@ impl AlphaBeta {
         }
     }
 
-    fn ordering(&self, s: &State, info: &HcInfo) -> HcOrdering {
+    pub fn ordering(&self, s: &State, info: &HcInfo) -> HcOrdering {
+        let _p = crate::misc::prof::scope(6);
         let u = info.get_universe();
         let mut orders = Vec::with_capacity(u.dimension());
         // Branch axes share entries; score them once.
@@ -252,7 +253,40 @@ impl AlphaBeta {
         })
     }
 
-    /// Apply an action that was generated as legal for `s`.
+    /// Play an action generated as legal for `s`; undo with `s.unmake(mark)`.
+    fn make(s: &mut State, act: &MoveSeq) -> Mark {
+        let _p = crate::misc::prof::scope(7);
+        let mark = s.mark();
+        for &m in act {
+            s.apply_move::<true>(m);
+        }
+        s.submit::<true>();
+        mark
+    }
+
+    /// Play a remembered action (TT/killer) only if it is legal in `s`.
+    fn make_checked(s: &mut State, act: &MoveSeq) -> Option<Mark> {
+        let _p = crate::misc::prof::scope(11);
+        let player = s.get_present().1;
+        let mark = s.mark();
+        let mut ok = true;
+        for &m in act {
+            if s.get_board_ptr(m.from.l(), m.from.t(), player).is_none()
+                || s.get_timeline_end(m.from.l()) != (m.from.t(), player)
+                || !s.apply_move::<false>(m)
+            {
+                ok = false;
+                break;
+            }
+        }
+        if ok && s.submit::<false>() && s.first_check(s.get_present().1).is_none() {
+            return Some(mark);
+        }
+        s.unmake(mark);
+        None
+    }
+
+    /// Owned copy of the position after `act` (for PV reporting).
     fn child(s: &State, act: &MoveSeq) -> State {
         let mut c = s.clone();
         for &m in act {
@@ -262,25 +296,8 @@ impl AlphaBeta {
         c
     }
 
-    /// Validate a remembered action (TT/killer) in `s`.
-    fn legal_child(s: &State, act: &MoveSeq) -> Option<State> {
-        let player = s.get_present().1;
-        let mut c = s.clone();
-        for &m in act {
-            if c.get_board_ptr(m.from.l(), m.from.t(), player).is_none() || c.get_timeline_end(m.from.l()) != (m.from.t(), player) {
-                return None;
-            }
-            if !c.apply_move::<false>(m) {
-                return None;
-            }
-        }
-        if !c.submit::<false>() || c.first_check(c.get_present().1).is_some() {
-            return None;
-        }
-        Some(c)
-    }
-
     fn in_check(s: &State) -> bool {
+        let _p = crate::misc::prof::scope(10);
         s.has_phantom_check()
     }
 
@@ -288,7 +305,7 @@ impl AlphaBeta {
         if Self::in_check(s) { -(MATE - ply as i32) } else { 0 }
     }
 
-    fn qsearch(&mut self, s: &State, ply: usize, mut alpha: i32, beta: i32, qd: i32) -> i32 {
+    fn qsearch(&mut self, s: &mut State, ply: usize, mut alpha: i32, beta: i32, qd: i32) -> i32 {
         self.nodes += 1;
         if self.check_abort() {
             return 0;
@@ -321,8 +338,9 @@ impl AlphaBeta {
                 break;
             }
             tried += 1;
-            let c = Self::child(s, &act);
-            let v = -self.qsearch(&c, ply + 1, -beta, -alpha, qd - 1);
+            let mark = Self::make(s, &act);
+            let v = -self.qsearch(s, ply + 1, -beta, -alpha, qd - 1);
+            s.unmake(mark);
             if self.aborted {
                 return 0;
             }
@@ -342,7 +360,7 @@ impl AlphaBeta {
         best
     }
 
-    fn negamax(&mut self, s: &State, depth: i32, ply: usize, mut alpha: i32, beta: i32, pv: bool) -> i32 {
+    fn negamax(&mut self, s: &mut State, depth: i32, ply: usize, mut alpha: i32, beta: i32, pv: bool) -> i32 {
         if depth <= 0 {
             return self.qsearch(s, ply, alpha, beta, self.params.qdepth);
         }
@@ -383,8 +401,9 @@ impl AlphaBeta {
 
         // Remembered action first.
         if let Some(act) = &tt_action {
-            if let Some(c) = Self::legal_child(s, act) {
-                let v = -self.negamax(&c, depth - 1, ply + 1, -beta, -alpha, pv);
+            if let Some(mark) = Self::make_checked(s, act) {
+                let v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, pv);
+                s.unmake(mark);
                 if self.aborted {
                     return 0;
                 }
@@ -433,7 +452,7 @@ impl AlphaBeta {
                 if searched >= cap {
                     break;
                 }
-                let c = Self::child(s, &act);
+                let mark = Self::make(s, &act);
                 let quiet = sc < 10_000;
                 let mut r = 0;
                 if depth >= self.params.lmr_min_depth && searched >= self.params.lmr_min_index && quiet {
@@ -444,16 +463,17 @@ impl AlphaBeta {
                 }
                 let mut v;
                 if searched == 0 {
-                    v = -self.negamax(&c, depth - 1, ply + 1, -beta, -alpha, pv);
+                    v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, pv);
                 } else {
-                    v = -self.negamax(&c, depth - 1 - r, ply + 1, -alpha - 1, -alpha, false);
+                    v = -self.negamax(s, depth - 1 - r, ply + 1, -alpha - 1, -alpha, false);
                     if !self.aborted && v > alpha && r > 0 {
-                        v = -self.negamax(&c, depth - 1, ply + 1, -alpha - 1, -alpha, false);
+                        v = -self.negamax(s, depth - 1, ply + 1, -alpha - 1, -alpha, false);
                     }
                     if !self.aborted && v > alpha && v < beta && pv {
-                        v = -self.negamax(&c, depth - 1, ply + 1, -beta, -alpha, true);
+                        v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, true);
                     }
                 }
+                s.unmake(mark);
                 if self.aborted {
                     return 0;
                 }
@@ -512,9 +532,10 @@ impl AlphaBeta {
             if act.is_empty() {
                 break;
             }
-            let Some(c) = Self::legal_child(&s, &act) else { break };
+            if Self::make_checked(&mut s, &act).is_none() {
+                break;
+            }
             line.push(act);
-            s = c;
         }
         line
     }
@@ -581,6 +602,8 @@ impl Engine for AlphaBeta {
             *k = [None, None];
         }
         let max_depth = limits.depth.unwrap_or(64) as i32;
+        let mut work = root.clone();
+        work.enable_undo();
 
         // Root actions (all of them, up to the root cap), ordered heuristically.
         let (hc, ss) = HcInfo::build_hc(root);
@@ -614,16 +637,17 @@ impl Engine for AlphaBeta {
             let mut iter_best: Option<(i32, MoveSeq)> = None;
             let mut scores: Vec<i32> = Vec::with_capacity(roots.len());
             for (k, (_, act)) in roots.iter().enumerate() {
-                let c = Self::child(root, act);
+                let mark = Self::make(&mut work, act);
                 let v = if k == 0 {
-                    -self.negamax(&c, depth - 1, 1, -beta, -alpha, true)
+                    -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true)
                 } else {
-                    let mut v = -self.negamax(&c, depth - 1, 1, -alpha - 1, -alpha, false);
+                    let mut v = -self.negamax(&mut work, depth - 1, 1, -alpha - 1, -alpha, false);
                     if !self.aborted && v > alpha {
-                        v = -self.negamax(&c, depth - 1, 1, -beta, -alpha, true);
+                        v = -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true);
                     }
                     v
                 };
+                work.unmake(mark);
                 if self.aborted {
                     break;
                 }

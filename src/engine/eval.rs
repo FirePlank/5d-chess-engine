@@ -99,6 +99,7 @@ fn board_score(b: &Board, p: &EvalParams, w: i32, h: i32) -> i32 {
 }
 
 pub fn evaluate(s: &State, p: &EvalParams) -> i32 {
+    let _p = crate::misc::prof::scope(9);
     let (l_min, l_max) = s.get_lines_range();
     let (amin, amax) = s.get_active_range();
     let (w, h) = s.get_board_size();

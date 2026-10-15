@@ -78,7 +78,6 @@ pub struct HcInfo {
     dim: usize,
     universe: Hc,
     new_axis: usize,
-    mandatory_lines: Vec<i32>,
     /// Coordinate groups per axis (index `new_axis` is shared by all branch axes).
     groups: Vec<AxisGroups>,
 }
@@ -201,12 +200,13 @@ impl HcInfo {
         let mut departures: Vec<Vec<Vec4>> = vec![Vec::new(); playable.len()];
         let mut arrivals: Vec<(i32, Vec<FullMove>)> = Vec::new();
         let mut tos: Vec<Vec4> = Vec::new();
+        let mut scratch = super::multiverse::MoveList::new();
         let gen_scope = crate::misc::prof::scope(1);
         for from in s.get_all_pieces(&playable) {
             let source_axis = line_axes[&from.l()];
             let mut has_depart = false;
             tos.clear();
-            s.gen_piece_move(from, &mut tos);
+            s.multiverse().gen_piece_move_with(from, player, &mut tos, &mut scratch);
             for &to in &tos {
                 let m = FullMove::new(from, to);
                 if from.tl() != to.tl() {
@@ -236,37 +236,44 @@ impl HcInfo {
             s.normalize_promotion(super::action::ExtMove::new(m, NO_PIECE)).map(|e| e.promote_to).unwrap_or(NO_PIECE)
         };
 
+        // Royal safety per board: only royal moves, pinned pieces, en passant or a board
+        // already in check can leave the mover's royal attacked, so most results skip the
+        // full check test.
+        let mut safety_cache: Vec<(i32, i32, super::board::RoyalSafety)> = Vec::new();
+        let mut safety = |l: i32, t: i32| -> super::board::RoyalSafety {
+            if let Some(e) = safety_cache.iter().find(|e| e.0 == l && e.1 == t) {
+                return e.2;
+            }
+            let r = s.board(l, t, player).royal_safety(player);
+            safety_cache.push((l, t, r));
+            r
+        };
+        let is_royal_piece = |pc: Piece| matches!(to_white(piece_name(pc)), KING_W | ROYAL_QUEEN_W);
         for axis in 0..playable.len() {
             let l = playable[axis];
             let arriving = arrivals.iter().find(|b| b.0 == l).map(|b| &b.1);
             let mut locs: Vec<Entry> = Vec::with_capacity(1 + stays[axis].len() + departures[axis].len());
             locs.push(Entry::Null);
+            let board_t = s.get_timeline_end(l).0;
+            let rs = safety(l, board_t);
             for &m in &stays[axis] {
                 let (p, q) = (m.from, m.to);
                 let d = q - p;
                 let source = s.board(p.l(), p.t(), player);
                 let mut nb = *source;
                 let z = pmask(p.xy());
-                if source.lpawn() & z != 0 && d.x() != 0 && source.get_piece(q.xy()) == NO_PIECE {
-                    nb.set_piece(ppos(q.x(), p.y()), NO_PIECE);
-                    let piece = nb.get_piece(p.xy());
-                    nb.set_piece(q.xy(), piece);
-                    nb.set_piece(p.xy(), NO_PIECE);
+                let mut needs_test = rs.in_check || (source.royal() | rs.pinned) & z != 0;
+                if source.lpawn() & z != 0 && d.x() != 0 && source.occupied() & pmask(q.xy()) == 0 {
+                    nb.clear_square(ppos(q.x(), p.y()));
+                    nb.transfer(p.xy(), q.xy());
+                    needs_test = true;
                 } else if source.king() & z != 0 && d.x().abs() > 1 {
                     let rook_x1 = if d.x() < 0 { 0 } else { size_x - 1 };
                     let rook_x2 = q.x() + if d.x() < 0 { 1 } else { -1 };
-                    let rf = ppos(rook_x1, p.y());
-                    let rt = ppos(rook_x2, q.y());
-                    let rook = nb.get_piece(rf);
-                    nb.set_piece(rt, rook);
-                    nb.set_piece(rf, NO_PIECE);
-                    let king = nb.get_piece(p.xy());
-                    nb.set_piece(q.xy(), king);
-                    nb.set_piece(p.xy(), NO_PIECE);
+                    nb.transfer(ppos(rook_x1, p.y()), ppos(rook_x2, q.y()));
+                    nb.transfer(p.xy(), q.xy());
                 } else {
-                    let piece = nb.get_piece(p.xy());
-                    nb.set_piece(q.xy(), piece);
-                    nb.set_piece(p.xy(), NO_PIECE);
+                    nb.transfer(p.xy(), q.xy());
                 }
                 if source.lpawn() & z != 0 && (q.y() == 0 || q.y() == size_y - 1) {
                     let promotion = promo_piece(m);
@@ -274,15 +281,18 @@ impl HcInfo {
                         nb.set_piece(q.xy(), if player { to_black(promotion) } else { promotion });
                     }
                 }
-                if !has_physical_check(&nb, player) {
+                if !needs_test || !has_physical_check(&nb, player) {
                     locs.push(Entry::Physical { m, b: nb });
                 }
             }
             for &p in &departures[axis] {
                 let idx = locs.len() as Index;
-                let mut nb = *s.board(p.l(), p.t(), player);
-                nb.set_piece(p.xy(), NO_PIECE);
-                if !has_physical_check(&nb, player) {
+                let source = s.board(p.l(), p.t(), player);
+                let mut nb = *source;
+                nb.clear_square(p.xy());
+                let z = pmask(p.xy());
+                let needs_test = rs.in_check || (source.royal() | rs.pinned) & z != 0;
+                if !needs_test || !has_physical_check(&nb, player) {
                     locs.push(Entry::Departing { from: p, b: nb });
                     jump_indices.push((p, idx));
                 }
@@ -301,7 +311,8 @@ impl HcInfo {
                         }
                         let mut nb = *s.board(q.l(), q.t(), player);
                         nb.set_piece(q.xy(), pic);
-                        if !has_physical_check(&nb, player) {
+                        let needs_test = is_royal_piece(pic) || safety(q.l(), q.t()).in_check;
+                        if !needs_test || !has_physical_check(&nb, player) {
                             let fa = line_axes[&m.from.l()] as u32;
                             locs.push(Entry::Arriving { m, b: nb, idx: INVALID, fa });
                         }
@@ -326,7 +337,8 @@ impl HcInfo {
                 if let Some(dep) = find_jump(&jump_indices, m.from) {
                     let mut nb = *s.board(q.l(), q.t(), player);
                     nb.set_piece(q.xy(), pic);
-                    if !has_physical_check(&nb, player) {
+                    let needs_test = is_royal_piece(pic) || safety(q.l(), q.t()).in_check;
+                    if !needs_test || !has_physical_check(&nb, player) {
                         let fa = line_axes[&m.from.l()] as u32;
                         locs.push(Entry::Arriving { m, b: nb, idx: dep, fa });
                     }
@@ -389,7 +401,6 @@ impl HcInfo {
                 dim: dimension,
                 universe,
                 new_axis,
-                mandatory_lines: ts.mandatory,
             },
             ss,
         )
@@ -557,89 +568,77 @@ impl HcInfo {
         None
     }
 
-    pub fn test_present(&self, st: &State, p: &Point, hc: &Hc) -> Option<Slice> {
-        let (old_present, c) = st.get_present();
-        let (l0_min, l0_max) = st.get_initial_lines_range();
+    /// Whether the point moves the present; if not, a slice of points that fail for the same
+    /// reason. The new present is computed exactly: moved timelines advance one half-turn, new
+    /// timelines start after their arrival, and the active range is recomputed from the final
+    /// timeline span (which can reactivate old timelines).
+    pub fn test_present(&self, st: &State, p: &Point, _hc: &Hc) -> Option<Slice> {
+        let (_, c) = st.get_present();
         let (l_min, l_max) = st.get_lines_range();
-        let (mut l1_min, mut l1_max) = (l_min, l_max);
-        let (mut active_min, mut active_max) = st.get_active_range();
-        let mut mint = old_present;
-        let mut pass_coord: Option<(usize, Index)> = None;
-        for &l in &self.mandatory_lines {
-            let n = self.line_axes[&l];
-            if self.entry(n, p[n]).is_null() {
-                pass_coord = Some((n, p[n]));
+        // New timelines in creation order (the branch axes form a prefix).
+        let mut new_ends: Vec<i32> = Vec::new();
+        let mut k = 0;
+        for n in self.new_axis..self.dim {
+            match self.entry(n, p[n]) {
+                Entry::Arriving { m, .. } => new_ends.push(2 * m.to.t() + c as i32 + 1),
+                _ => break,
+            }
+            k += 1;
+        }
+        let (l1_min, l1_max) = if c { (l_min - k as i32, l_max) } else { (l_min, l_max + k as i32) };
+        let (amin, amax) = super::multiverse::active_range_for(st.multiverse().layout(), l1_min, l1_max);
+        let end_after = |l: i32| -> i32 {
+            if l < l_min || l > l_max {
+                let j = if c { l_min - 1 - l } else { l - l_max - 1 };
+                return new_ends[j as usize];
+            }
+            let v = st.multiverse().timeline_end_v(l);
+            match self.line_axes.get(&l) {
+                Some(&n) if !self.entry(n, p[n]).is_null() => v + 1,
+                _ => v,
+            }
+        };
+        let mut wit: Option<(i32, i32)> = None;
+        for l in amin..=amax {
+            let v = end_after(l);
+            if wit.map(|w| v < w.1).unwrap_or(true) {
+                wit = Some((l, v));
             }
         }
-        for n in self.new_axis..self.dimension() {
-            let loc = self.entry(n, p[n]);
-            if loc.is_null() {
-                break;
-            }
-            let mut reactivated = None;
-            let l_new;
-            if !c {
-                l1_max += 1;
-                l_new = l1_max;
-            } else {
-                l1_min -= 1;
-                l_new = l1_min;
-            }
-            let whites = l1_max - l0_max;
-            let blacks = l0_min - l1_min;
-            if l_new > l0_max && whites <= blacks + 1 && l_new > active_max {
-                active_max += 1;
-                if l1_min < active_min {
-                    active_min -= 1;
-                    reactivated = Some(active_min);
-                }
-            } else if l_new < l0_min && blacks <= whites + 1 && l_new < active_min {
-                active_min -= 1;
-                if l1_max > active_max {
-                    active_max += 1;
-                    reactivated = Some(active_max);
-                }
-            }
-            let (t, _) = loc.tl();
-            if t < mint && active_min <= l_new && l_new <= active_max {
-                mint = t;
-                pass_coord = None;
-            }
-            if let Some(r) = reactivated {
-                let (nt, nc) = st.get_timeline_end(r);
-                if nt <= mint && nc == c {
-                    mint = nt;
-                    let n1 = self.line_axes[&r];
-                    if self.entry(n1, p[n1]).is_null() {
-                        pass_coord = Some((n1, p[n1]));
-                    }
-                }
-            }
+        let (w_line, w_v) = wit?;
+        if (w_v & 1 != 0) != c {
+            return None;
         }
-        let (pass_n, pass_i) = pass_coord?;
+        // Every point below keeps the witness timeline unmoved and active and adds no active
+        // timeline that ends (on the opponent's turn) before it.
         let mut problem = Slice::new();
-        problem.fix_axis(pass_n, IntegerSet::singleton(pass_i));
-        let whites = l_max - l0_max;
-        let blacks = l0_min - l_min;
-        let adv = if c { whites - blacks } else { blacks - whites };
-        let hi = (adv + self.new_axis as i32).min(self.dimension() as i32 - 1);
-        let mut n = self.new_axis as i32;
-        while n <= hi {
-            let nn = n as usize;
+        let w_axis = self.line_axes[&w_line];
+        problem.fix_axis(w_axis, IntegerSet::singleton(0));
+        for (&l, &n) in &self.line_axes {
+            if n >= self.new_axis || n == w_axis || l < amin || l > amax {
+                continue;
+            }
+            if st.multiverse().timeline_end_v(l) + 1 < w_v {
+                problem.fix_axis(n, IntegerSet::singleton(0));
+            }
+        }
+        let t_w = w_v >> 1;
+        for (j, n) in (self.new_axis..self.dim).enumerate() {
             let mut s = IntegerSet::new();
-            for i in hc[nn].iter() {
-                match self.entry(nn, i) {
-                    Entry::Null => s.insert(i),
-                    Entry::Arriving { m, .. } => {
-                        if m.to.t() >= mint {
+            if j < k {
+                let line = if c { l_min - 1 - j as i32 } else { l_max + 1 + j as i32 };
+                let active = line >= amin && line <= amax;
+                for i in self.universe[n].iter() {
+                    if let Entry::Arriving { m, .. } = self.entry(n, i) {
+                        if !active || m.to.t() >= t_w {
                             s.insert(i);
                         }
                     }
-                    _ => unreachable!(),
                 }
+            } else {
+                s.insert(0);
             }
-            problem.fix_axis(nn, s);
-            n += 1;
+            problem.fix_axis(n, s);
         }
         debug_assert!(problem.contains(p));
         Some(problem)
