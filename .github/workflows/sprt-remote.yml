@@ -1,0 +1,226 @@
+# Sharded SPRT on GitHub-hosted runners. Every test is a `test: <name>` commit on the `sprt`
+# branch carrying .github/sprt.json; old = the config's ref (or the C++ reference engine),
+# new = that commit. Shards post their pentanomial pair counts as commit statuses; the local
+# driver (scripts/sprt_run.sh) sums them and cancels the run once the LLR crosses a bound.
+name: SPRT remote
+
+on:
+  push:
+    branches: [sprt]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: sprt
+  cancel-in-progress: false
+
+env:
+  # Shards run on other machines than the build job: no `native`.
+  RUSTFLAGS: -C target-cpu=x86-64-v3
+  CPP_REF: d765d3d2451929ab84958298b6e105419a92792a
+
+jobs:
+  setup:
+    if: "github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'test: ')"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    outputs:
+      shards: ${{ steps.cfg.outputs.shards }}
+      per_shard: ${{ steps.cfg.outputs.per_shard }}
+      old: ${{ steps.cfg.outputs.old }}
+      name: ${{ steps.cfg.outputs.name }}
+      tc: ${{ steps.cfg.outputs.tc }}
+      elo0: ${{ steps.cfg.outputs.elo0 }}
+      elo1: ${{ steps.cfg.outputs.elo1 }}
+      new_args: ${{ steps.cfg.outputs.new_args }}
+      old_args: ${{ steps.cfg.outputs.old_args }}
+      base: ${{ steps.cfg.outputs.base }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read config
+        id: cfg
+        run: |
+          c=.github/sprt.json
+          shards=$(jq -r '.shards // 40' $c)
+          games=$(jq -r '.games' $c)
+          per=$(( (games + shards - 1) / shards )); per=$(( per + per % 2 ))
+          {
+            echo "shards=$(jq -nc --argjson n $shards '[range(1; $n + 1)]')"
+            echo "per_shard=$per"
+            echo "old=$(jq -r '.old' $c)"
+            echo "name=$(jq -r '.name' $c)"
+            echo "tc=$(jq -r '.tc // "movetime 100"' $c)"
+            echo "elo0=$(jq -r '.elo0 // 0' $c)"
+            echo "elo1=$(jq -r '.elo1 // 5' $c)"
+            echo "new_args=$(jq -r '.new_args // "ab"' $c)"
+            echo "old_args=$(jq -r '.old_args // "ab"' $c)"
+            echo "base=$(jq -r '.base // "self"' $c)"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: sprt-bin
+          cache-directories: target-old
+
+      - name: Content keys
+        id: keys
+        run: |
+          key() {
+            { git ls-tree -r "$1" -- src Cargo.toml Cargo.lock build.rs | grep -v $'\tsrc/bin/'
+              git ls-tree "$1" -- src/bin/kairos.rs; } | sha256sum | cut -c1-24
+          }
+          echo "new=$(key HEAD)" >> "$GITHUB_OUTPUT"
+          echo "old=$(key "${{ steps.cfg.outputs.old }}")" >> "$GITHUB_OUTPUT"
+          if [ "${{ steps.cfg.outputs.base }}" = self ] && [ "$(key HEAD)" = "$(key "${{ steps.cfg.outputs.old }}")" ] \
+             && [ "${{ steps.cfg.outputs.new_args }}" = "${{ steps.cfg.outputs.old_args }}" ]; then
+            echo "::error::Null test: new and old engine are identical"; exit 1
+          fi
+
+      - name: Restore new binary
+        id: newbin
+        uses: actions/cache/restore@v4
+        with:
+          path: kbin
+          key: kairos-${{ steps.keys.outputs.new }}
+
+      - name: Build new
+        run: |
+          mkdir -p bins
+          cargo build --release --bin sprt
+          cp target/release/sprt bins/sprt
+          if [ "${{ steps.newbin.outputs.cache-hit }}" = "true" ]; then
+            mv kbin/kairos bins/new-kairos
+          else
+            cargo build --release --bin kairos
+            cp target/release/kairos bins/new-kairos
+            mkdir -p kbin && cp bins/new-kairos kbin/kairos
+          fi
+
+      - if: steps.newbin.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: kbin
+          key: kairos-${{ steps.keys.outputs.new }}
+
+      - name: Clear
+        run: rm -rf kbin
+
+      - name: Restore old binary
+        if: steps.cfg.outputs.base == 'self'
+        id: oldbin
+        uses: actions/cache/restore@v4
+        with:
+          path: kbin
+          key: kairos-${{ steps.keys.outputs.old }}
+
+      - name: Build old
+        if: steps.cfg.outputs.base == 'self'
+        run: |
+          if [ "${{ steps.oldbin.outputs.cache-hit }}" = "true" ]; then
+            mv kbin/kairos bins/old-kairos
+          else
+            git worktree add ../old "${{ steps.cfg.outputs.old }}"
+            (cd ../old && CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target-old" cargo build --release --bin kairos)
+            cp target-old/release/kairos bins/old-kairos
+            mkdir -p kbin && cp bins/old-kairos kbin/kairos
+          fi
+
+      - if: steps.cfg.outputs.base == 'self' && steps.oldbin.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: kbin
+          key: kairos-${{ steps.keys.outputs.old }}
+
+      - name: Restore C++ reference
+        if: steps.cfg.outputs.base != 'self'
+        id: cppbin
+        uses: actions/cache/restore@v4
+        with:
+          path: cppbin
+          key: cpp-ref-${{ env.CPP_REF }}
+
+      - name: Build C++ reference
+        if: steps.cfg.outputs.base != 'self' && steps.cppbin.outputs.cache-hit != 'true'
+        run: |
+          git clone -q https://github.com/ftxi/5dchess_engine ../cppref
+          git -C ../cppref checkout -q "$CPP_REF"
+          cmake -S ../cppref -B ../cppref/build -DENGINE=ON -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=g++-14 -DCMAKE_CXX_FLAGS="-march=x86-64-v3"
+          cmake --build ../cppref/build --parallel
+          mkdir -p cppbin && cp ../cppref/build/5dchess cppbin/5dchess
+
+      - if: steps.cfg.outputs.base != 'self' && steps.cppbin.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: cppbin
+          key: cpp-ref-${{ env.CPP_REF }}
+
+      - name: Stage C++ reference
+        if: steps.cfg.outputs.base != 'self'
+        run: cp cppbin/5dchess bins/old-kairos
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bins
+          path: bins/
+          retention-days: 1
+
+  play:
+    needs: setup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.setup.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            scripts/sprt_merge.py
+            data/book.g
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: bins
+          path: bins
+
+      - name: Play shard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          chmod +x bins/*
+          G="shard_${{ matrix.shard }}.jsonl"
+          touch "$G"
+          report() {
+            gh api -X POST "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" -f state="$1" \
+              -f context="sprt/shard-${{ matrix.shard }}" -f description="$(python3 scripts/sprt_merge.py --counts "$G")" \
+              > /dev/null || true
+          }
+          ( while sleep 180; do report pending; done ) &
+          base="${{ needs.setup.outputs.base }}"
+          old_args="${{ needs.setup.outputs.old_args }}"
+          [ "$base" = self ] || old_args="${base#cpp:}"
+          tc="${{ needs.setup.outputs.tc }}"
+          ./bins/sprt --new "$PWD/bins/new-kairos ${{ needs.setup.outputs.new_args }}" \
+            --base "$PWD/bins/old-kairos $old_args" --book data/book.g \
+            --${tc% *} ${tc#* } --elo0="${{ needs.setup.outputs.elo0 }}" --elo1="${{ needs.setup.outputs.elo1 }}" \
+            --concurrency "$(nproc)" --compact --seed "${{ matrix.shard }}" \
+            --min-games "${{ needs.setup.outputs.per_shard }}" --max-games "${{ needs.setup.outputs.per_shard }}" \
+            --games-out "$G" | tail -12
+          kill %1 2> /dev/null || true
+          report success
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.shard }}
+          path: shard_${{ matrix.shard }}.jsonl
+          retention-days: 3

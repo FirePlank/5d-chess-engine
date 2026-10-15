@@ -1,0 +1,38 @@
+[package]
+name = "kairos"
+version = "0.1.0"
+edition = "2024"
+description = "A 5D Chess With Multiverse Time Travel engine"
+license = "GPL-3.0-only"
+
+[lib]
+name = "kairos"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kairos"
+path = "src/bin/kairos.rs"
+
+[[bin]]
+name = "ktools"
+path = "src/bin/ktools.rs"
+
+[[bin]]
+name = "sprt"
+path = "src/bin/sprt.rs"
+
+[features]
+prof = []
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+debug = false
+
+[profile.profiling]
+inherits = "release"
+debug = true

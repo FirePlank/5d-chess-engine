@@ -1,0 +1,12 @@
+/target
+/target-*
+/games
+/baseline
+*.exe
+*.pdb
+*.log
+*.jsonl
+# Other engines kept locally for reference and comparison
+/5dchess_engine
+/VibeDAI
+/oracle
