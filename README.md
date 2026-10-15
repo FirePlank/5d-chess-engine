@@ -9,14 +9,14 @@ A Rust engine for [5D Chess With Multiverse Time Travel](https://www.5dchesswith
 - **Rules**: Full 5D rules on boards up to 8x8: time travel, branching timelines, the present, odd/even timeline layouts, all fairy pieces (princess, unicorn, dragon, brawn, royal queen, common king), castling, en passant and promotion.
 - **Legal actions**: A hypercuboid search enumerates legal turns lazily, so checkmate detection and move generation stay tractable with many timelines.
 - **Search**: Iterative deepening PVS over whole turns with a transposition table, killer and history ordering, late move pruning and reductions and a tactical quiescence search. Turns are enumerated best-first by the summed scores of their per-board moves, with checking moves (including checks across time and timelines) ordered first.
-- **Evaluation**: Handcrafted evaluation over every timeline's latest board, with timeline advantage weighted by the material still able to use it.
+- **Evaluation**: Linear evaluation over every timeline's latest board (material, timeline advantage, king safety including pieces near a royal from neighbouring timelines, mobility, pawn structure) with weights fitted to game results.
 - **Protocol**: Speaks 5DUCI, so it plugs into any 5DUCI interface or match runner.
 
 ## Quick Start
 
 ```bash
 cargo build --release
-./target/release/kairos ab
+./target/release/kairos
 ```
 
 Then talk 5DUCI on stdin:
@@ -30,8 +30,6 @@ go movetime 1000
 
 The engine answers with `bestmove <moves>`; the GUI applies them and sends `submit`.
 
-Other engines are built into the same binary (`kairos mcts`, `kairos linear`, `kairos flat-ucb`, ...) for comparison; run `kairos --help` for the list.
-
 ## Testing
 
 ```bash
@@ -40,12 +38,16 @@ cargo test --release
 
 # Perft of positions in a file (one "G ..." line per position)
 ./target/release/ktools perft 3 < data/perft.g
+
+# Node oracles (must not change for pure speed work)
+./target/release/ktools bench
+AB_NODES=20000 ./target/release/ktools abbench
 ```
 
 Strength is measured with the SPRT harness in `src/bin/sprt.rs` (pentanomial GSPRT, colour-swapped opening pairs from `data/book.g`):
 
 ```bash
-./target/release/sprt --new "target/release/kairos ab" --base "baseline/kairos ab" \
+./target/release/sprt --new target/release/kairos --base baseline/kairos \
   --movetime 100 --concurrency 12 --elo0 0 --elo1 5
 ```
 

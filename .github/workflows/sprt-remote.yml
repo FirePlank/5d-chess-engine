@@ -58,8 +58,8 @@ jobs:
             echo "tc=$(jq -r '.tc // "movetime 100"' $c)"
             echo "elo0=$(jq -r '.elo0 // 0' $c)"
             echo "elo1=$(jq -r '.elo1 // 5' $c)"
-            echo "new_args=$(jq -r '.new_args // "ab"' $c)"
-            echo "old_args=$(jq -r '.old_args // "ab"' $c)"
+            echo "new_args=$(jq -r '.new_args // ""' $c)"
+            echo "old_args=$(jq -r '.old_args // ""' $c)"
             echo "base=$(jq -r '.base // "self"' $c)"
           } >> "$GITHUB_OUTPUT"
 

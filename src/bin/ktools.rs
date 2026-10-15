@@ -69,45 +69,38 @@ fn main() {
             }
         }
         "blunders" => blunders(
-            args.get(2).map(|s| s.as_str()).unwrap_or("games/sprt/games_timeline_scaled_300.jsonl"),
+            args.get(2).map(|s| s.as_str()).unwrap_or("games/sprt/games_hce_v8.jsonl"),
             args.get(3).and_then(|s| s.parse().ok()).unwrap_or(100),
-            &args[4.min(args.len())..],
             &mut out,
         ),
         "materank" => materank(
-            args.get(2).map(|s| s.as_str()).unwrap_or("games/sprt/games_timeline_scaled_300.jsonl"),
+            args.get(2).map(|s| s.as_str()).unwrap_or("games/sprt/games_hce_v8.jsonl"),
             args.get(3).and_then(|s| s.parse().ok()).unwrap_or(300),
-            &args[4.min(args.len())..],
             &mut out,
         ),
         "rootgen" => {
             use kairos::engine::ab::AlphaBeta;
-            use kairos::engine::{Engine, OptionValue};
             let path = args.get(2).map(|s| s.as_str()).unwrap_or("games/bench_ab.g");
             let text = std::fs::read_to_string(path).expect("positions");
             for (k, line) in text.lines().filter(|l| l.starts_with("G ")).enumerate() {
                 let s = parse_g_line(line).unwrap();
-                for bf in [false, true] {
-                    let mut e = AlphaBeta::new(Default::default(), Default::default());
-                    e.set_option("best_first", &OptionValue::Bool(bf));
-                    let t = Instant::now();
-                    let n = e.node_order(&s, 4000).len();
-                    let (w, _) = HcInfo::build_hc(&s);
-                    write!(out, "pos {} dim {} bf={} actions {} in {:.1}ms | ", k, w.dimension(), bf, n, t.elapsed().as_secs_f64() * 1e3).unwrap();
-                }
-                writeln!(out).unwrap();
+                let e = AlphaBeta::new();
+                let t = Instant::now();
+                let n = e.node_order(&s, 4000).len();
+                let (w, _) = HcInfo::build_hc(&s);
+                writeln!(out, "pos {} dim {} actions {} in {:.1}ms", k, w.dimension(), n, t.elapsed().as_secs_f64() * 1e3).unwrap();
             }
         }
         "depthstat" => {
             use kairos::engine::ab::AlphaBeta;
-            use kairos::engine::{Engine, Limits};
+            use kairos::engine::Limits;
             let path = args.get(2).map(|s| s.as_str()).unwrap_or("games/sprt/games_timeline_scaled_300.jsonl");
             let ms: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(100);
             let positions = mate_positions(path, 60);
             let stop = std::sync::atomic::AtomicBool::new(false);
             let mut hist = std::collections::BTreeMap::new();
             for p in &positions {
-                let mut e = AlphaBeta::new(Default::default(), Default::default());
+                let mut e = AlphaBeta::new();
                 let mut last = String::new();
                 e.find_best_move(p, &Limits { movetime: Some(ms), ..Default::default() }, &stop, &mut |m| last = m);
                 let d: u32 = last.split_whitespace().nth(1).and_then(|x| x.parse().ok()).unwrap_or(0);
@@ -117,21 +110,9 @@ fn main() {
             }
             writeln!(out, "{:?}", hist).unwrap();
         }
-        "netdata" => netdata(&args[2..], &mut out),
-        "netcheck" => {
-            use kairos::engine::evalnet::{Net, NI};
-            let net = Net::from_bytes(&std::fs::read(&args[2]).unwrap()).expect("net");
-            let raw = std::fs::read(&args[3]).unwrap();
-            let f: Vec<f32> = raw.chunks_exact(4).take(4 * (NI + 4)).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
-            for r in f.chunks_exact(NI + 4) {
-                let x: [f32; NI] = r[..NI].try_into().unwrap();
-                write!(out, "{} ", net.residual(&x)).unwrap();
-            }
-            writeln!(out).unwrap();
-        }
         "abbench" => abbench(
-            args.get(2).map(|s| s.as_str()).unwrap_or("data/bench.g"),
-            args.get(3).and_then(|s| s.parse().ok()).unwrap_or(4),
+            args.get(2).map(|s| s.as_str()).unwrap_or("data/bench_ab.g"),
+            args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20),
             &mut out,
         ),
         "naive" => {
@@ -267,7 +248,7 @@ fn main() {
         }
         "validate" => {
             // HC search (several orderings/modes) vs exhaustive naive search.
-            use kairos::core::hypercuboid::{HcCursor, SearchMode};
+            use kairos::core::hypercuboid::HcCursor;
             use kairos::core::naive::naive_actions_budget;
             let limit: usize = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(20000);
             let (mut checked, mut skipped, mut bad) = (0, 0, 0);
@@ -288,15 +269,20 @@ fn main() {
                 let want: std::collections::BTreeSet<String> = naive.iter().map(seq_string).collect();
                 checked += 1;
                 let mut results = Vec::new();
-                for variant in 0..5u32 {
+                for variant in 0..5u64 {
                     let (w, ss) = HcInfo::build_hc(&s);
-                    let (order, mode) = match variant {
-                        0 => (kairos::misc::ordering::HcOrdering::Natural, SearchMode::Balanced),
-                        1 => (kairos::engine::ab::AlphaBeta::new(Default::default(), Default::default()).ordering(&s, &w, true), SearchMode::Balanced),
-                        v => (kairos::misc::ordering::HcOrdering::random(w.get_universe(), &mut kairos::misc::rng::Mt19937::new(v)),
-                              if v == 3 { SearchMode::Iterative } else { SearchMode::Balanced }),
+                    if variant == 2 {
+                        // The engine's best-first enumeration.
+                        let acts = kairos::engine::ab::AlphaBeta::new().node_order(&s, limit * 2 + 1);
+                        results.push(acts.iter().map(seq_string).collect());
+                        continue;
+                    }
+                    let order = match variant {
+                        0 => kairos::misc::ordering::HcOrdering::Natural,
+                        1 => kairos::engine::ab::AlphaBeta::new().ordering(&s, &w),
+                        v => shuffled_order(&w, v),
                     };
-                    let mut cur = HcCursor::new(ss, order, mode);
+                    let mut cur = HcCursor::new(ss, order);
                     let mut got = std::collections::BTreeSet::new();
                     while let Some(a) = cur.next(&w, &s) {
                         got.insert(seq_string(&a));
@@ -316,7 +302,9 @@ fn main() {
             writeln!(out, "checked {} skipped {} mismatched {}", checked, skipped, bad).unwrap();
         }
         "ordercheck" => {
-            use kairos::core::hypercuboid::{HcCursor, SearchMode};
+            // Legal-action counts under the natural, engine and shuffled orders must agree.
+            use kairos::core::hypercuboid::HcCursor;
+            let cap: usize = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(20000);
             for line in stdin.lock().lines() {
                 let line = line.unwrap();
                 if !line.starts_with("G ") {
@@ -324,44 +312,38 @@ fn main() {
                 }
                 let s = parse_g_line(&line).unwrap();
                 let (w, ss) = HcInfo::build_hc(&s);
-                let natural = w.search(&s, ss.clone()).count();
-                let ab = kairos::engine::ab::AlphaBeta::new(Default::default(), Default::default());
-                let mut cur = HcCursor::new(ss, ab.ordering(&s, &w, true), SearchMode::Balanced);
-                let mut n = 0;
-                while cur.next(&w, &s).is_some() {
-                    n += 1;
-                }
-                writeln!(out, "natural {} scored {} dim {} new_axis {}", natural, n, w.dimension(), w.first_branch_axis()).unwrap();
-                for mode in [SearchMode::Balanced, SearchMode::Iterative, SearchMode::Stable] {
-                    let mut counts = Vec::new();
-                    for seed in 1..=6u32 {
-                        let mut rng = kairos::misc::rng::Mt19937::new(seed);
-                        let (w2, ss2) = HcInfo::build_hc(&s);
-                        let order = kairos::misc::ordering::HcOrdering::random(w2.get_universe(), &mut rng);
-                        let mut cur = HcCursor::new(ss2, order, mode);
-                        let mut k = 0;
-                        while cur.next(&w2, &s).is_some() {
-                            k += 1;
-                        }
-                        counts.push(k);
+                let natural = w.search(&s, ss).take(cap).count();
+                let best_first = kairos::engine::ab::AlphaBeta::new().node_order(&s, cap).len();
+                let mut shuffled = Vec::new();
+                for seed in 1..=6u64 {
+                    let (w2, ss2) = HcInfo::build_hc(&s);
+                    let mut cur = HcCursor::new(ss2, shuffled_order(&w2, seed));
+                    let mut k = 0;
+                    while k < cap && cur.next(&w2, &s).is_some() {
+                        k += 1;
                     }
-                    writeln!(out, "  random {:?}: {:?}", mode, counts).unwrap();
+                    shuffled.push(k);
                 }
+                writeln!(out, "natural {} best-first {} shuffled {:?} dim {} new_axis {}", natural, best_first, shuffled, w.dimension(), w.first_branch_axis()).unwrap();
             }
         }
         "bench" => bench(args.get(2).map(|s| s.as_str()).unwrap_or("data/bench.g"), &mut out),
         _ => {
-            eprintln!("usage: ktools dump [cap] < positions.g | ktools perft <depth> [cap] < positions.g");
+            eprintln!(
+                "usage: ktools <mode> ...\n  \
+                 perft <depth> [cap] | dump [cap] | naive | validate [limit] | ordercheck [cap] | slicecheck | explain <moves>\n  \
+                 \x20 (positions as G lines on stdin)\n  \
+                 bench [file]            perft oracle\n  \
+                 abbench [file] [depth]  alpha-beta node oracle (AB_NODES caps nodes per position)\n  \
+                 blunders <games.jsonl> [n] | materank <games.jsonl> [n] | depthstat <games.jsonl> [ms] | rootgen [file]"
+            );
         }
     }
 }
 
-/// Node oracle + speed benchmark: capped perft and fixed-iteration seeded MCTS searches.
-/// The checksum must not change for pure speed optimizations.
+/// Move generation oracle + speed benchmark: capped perft over the bench positions. The
+/// checksum must not change for pure speed optimizations.
 fn bench(path: &str, out: &mut impl Write) {
-    use kairos::engine::features::default_weights;
-    use kairos::engine::mcts::*;
-    use kairos::engine::{Engine, Limits};
     use std::hash::{Hash, Hasher};
     let text = std::fs::read_to_string(path).expect("bench positions");
     let positions: Vec<State> = text.lines().filter(|l| l.starts_with("G ")).map(|l| parse_g_line(l).unwrap()).collect();
@@ -373,60 +355,15 @@ fn bench(path: &str, out: &mut impl Write) {
         n.hash(&mut h);
         leaves += n;
     }
-    let perft_secs = t0.elapsed().as_secs_f64();
-    let stop = std::sync::atomic::AtomicBool::new(false);
-    let t1 = Instant::now();
-    let mut iters = 0u64;
-    for (k, s) in positions.iter().enumerate() {
-        for name in ["mcts", "linear"] {
-            let roll = Rollout::new(
-                DefaultKind::Rollout { selection: Selection::Random, cutoff: if name == "mcts" { Cutoff::Zero } else { Cutoff::Linear("default") } },
-                60,
-                DEFAULT_TEMPERATURE,
-                default_weights(),
-                Some(k as u32 + 11),
-            );
-            let mut e = Mcts::new(name, TreeKind::Uct, OrderKind::Random, roll, Some(k as u32 + 11));
-            let limits = Limits { depth: Some(6), ..Default::default() };
-            let mut infos = Vec::new();
-            let best = e.find_best_move(s, &limits, &stop, &mut |m| infos.push(m));
-            best.map(|a| a.to_string()).hash(&mut h);
-            for m in &infos {
-                if let Some(p) = m.find("mcts_score") {
-                    m[p..].hash(&mut h);
-                }
-                if let Some(p) = m.find("tree_nodes=") {
-                    m[p..].split_whitespace().next().hash(&mut h);
-                }
-            }
-            iters += 60;
-        }
-        if std::env::var("BENCH_VERBOSE").is_ok() {
-            let (lo, hi) = s.get_lines_range();
-            eprintln!("pos {} lines {}..{} present {:?} cumulative {:.2}s", k, lo, hi, s.get_present(), t1.elapsed().as_secs_f64());
-        }
-    }
-    let mcts_secs = t1.elapsed().as_secs_f64();
-    writeln!(
-        out,
-        "oracle {:016x} | perft leaves {} in {:.3}s ({:.0}/s) | mcts {} iters in {:.3}s ({:.1} it/s) | total {:.3}s",
-        h.finish(),
-        leaves,
-        perft_secs,
-        leaves as f64 / perft_secs,
-        iters,
-        mcts_secs,
-        iters as f64 / mcts_secs,
-        perft_secs + mcts_secs
-    )
-    .unwrap();
+    let secs = t0.elapsed().as_secs_f64();
+    writeln!(out, "oracle {:016x} | perft leaves {} in {:.3}s ({:.0}/s)", h.finish(), leaves, secs, leaves as f64 / secs).unwrap();
     write!(out, "{}", kairos::misc::prof::report()).unwrap();
 }
 
 /// Alpha-beta node oracle: fixed-depth searches; checksum covers node counts and best moves.
 fn abbench(path: &str, depth: u32, out: &mut impl Write) {
     use kairos::engine::ab::AlphaBeta;
-    use kairos::engine::{Engine, Limits};
+    use kairos::engine::Limits;
     use std::hash::{Hash, Hasher};
     let text = std::fs::read_to_string(path).expect("bench positions");
     let positions: Vec<State> = text.lines().filter(|l| l.starts_with("G ")).map(|l| parse_g_line(l).unwrap()).collect();
@@ -435,15 +372,7 @@ fn abbench(path: &str, depth: u32, out: &mut impl Write) {
     let t0 = Instant::now();
     let mut total_nodes = 0u64;
     for (k, s) in positions.iter().enumerate() {
-        let mut e = AlphaBeta::new(Default::default(), Default::default());
-        if let Ok(opts) = std::env::var("AB_OPTS") {
-            use kairos::engine::OptionValue;
-            for o in opts.split_whitespace() {
-                if let Some((k, v)) = o.split_once('=') {
-                    e.set_option(k, &OptionValue::parse(v));
-                }
-            }
-        }
+        let mut e = AlphaBeta::new();
         let node_cap = std::env::var("AB_NODES").ok().and_then(|v| v.parse().ok());
         let limits = Limits { depth: Some(depth), nodes: node_cap, ..Default::default() };
         let mut last = String::new();
@@ -497,10 +426,10 @@ fn has_mate_in_1(s: &State, cap: usize) -> bool {
 
 /// For checkmate games: replays to the loser's last decision and asks whether alpha-beta with
 /// various node budgets still plays into a mate in one.
-fn blunders(path: &str, max_games: usize, opts: &[String], out: &mut impl Write) {
+fn blunders(path: &str, max_games: usize, out: &mut impl Write) {
     use kairos::core::variants::{apply_uci_moves, position_from_uci};
     use kairos::engine::ab::AlphaBeta;
-    use kairos::engine::{Engine, Limits, OptionValue};
+    use kairos::engine::Limits;
     let no_safety = std::env::var("NO_SAFETY").is_ok();
     let text = std::fs::read_to_string(path).expect("games");
     let mut positions: Vec<State> = Vec::new();
@@ -542,12 +471,7 @@ fn blunders(path: &str, max_games: usize, opts: &[String], out: &mut impl Write)
                             budgets
                                 .iter()
                                 .map(|&n| {
-                                    let mut e = AlphaBeta::new(Default::default(), Default::default());
-                                    for o in opts {
-                                        if let Some((k, v)) = o.split_once('=') {
-                                            e.set_option(k, &OptionValue::parse(v));
-                                        }
-                                    }
+                                    let mut e = AlphaBeta::new();
                                     let limits = Limits { depth: Some(60), nodes: Some(n), ..Default::default() };
                                     let a = e.find_best_move(p, &limits, &stop, &mut |_| {})?;
                                     let q = p.can_apply_action(&a)?;
@@ -609,21 +533,16 @@ fn mate_positions(path: &str, max_games: usize) -> Vec<State> {
 
 /// Rank of the first mating action in the alpha-beta node ordering, for positions where the
 /// side to move mated in the game. `opts` are `key=value` engine options.
-fn materank(path: &str, max_games: usize, opts: &[String], out: &mut impl Write) {
+fn materank(path: &str, max_games: usize, out: &mut impl Write) {
     use kairos::engine::ab::AlphaBeta;
-    use kairos::engine::{Engine, OptionValue};
+
     let positions = mate_positions(path, max_games);
     let ranks: Vec<Option<usize>> = std::thread::scope(|sc| {
         let hs: Vec<_> = positions
             .chunks(positions.len().div_ceil(14).max(1))
             .map(|chunk| {
                 sc.spawn(move || {
-                    let mut e = AlphaBeta::new(Default::default(), Default::default());
-                    for o in opts {
-                        if let Some((k, v)) = o.split_once('=') {
-                            e.set_option(k, &OptionValue::parse(v));
-                        }
-                    }
+                    let e = AlphaBeta::new();
                     chunk
                         .iter()
                         .map(|p| e.node_order(p, 2000).iter().position(|a| apply_seq(p, a).map(|c| is_mated(&c)).unwrap_or(false)))
@@ -650,108 +569,22 @@ fn materank(path: &str, max_games: usize, opts: &[String], out: &mut impl Write)
     .unwrap();
 }
 
-/// Eval-net training records from harness JSONL games: for every position where an engine
-/// chose an action, the net inputs, the handcrafted score, the engine's reported score and
-/// the game result, all from the side to move's view, and the game number.
-///   ktools netdata out.bin games1.jsonl games2.jsonl ...
-/// Record: NI + 4 little-endian f32 (inputs, base, teacher or NaN, wdl, game).
-fn netdata(args: &[String], out: &mut impl Write) {
-    use kairos::core::variants::{apply_uci_moves, position_from_uci};
-    use kairos::engine::evalnet::{inputs, NI};
-    use kairos::engine::hce::{evaluate, tuned_weights};
-    let out_path = &args[0];
-    let mut lines: Vec<String> = Vec::new();
-    for f in &args[1..] {
-        let text = std::fs::read_to_string(f).expect("games");
-        lines.extend(text.lines().filter(|l| !l.trim().is_empty()).map(String::from));
-    }
-    let threads = 14;
-    // Base score: the evaluation the search uses (the tuned feature HCE).
-    let ep = tuned_weights();
-    let chunks: Vec<Vec<f32>> = std::thread::scope(|sc| {
-        let hs: Vec<_> = (0..threads)
-            .map(|tid| {
-                let (lines, ep) = (&lines, &ep);
-                sc.spawn(move || {
-                    let mut rec: Vec<f32> = Vec::new();
-                    let mut g = tid;
-                    while g < lines.len() {
-                        let line = &lines[g];
-                        g += threads;
-                        let (Some(pos), Some(moves), Some(score)) =
-                            (json_field(line, "position"), json_field(line, "moves"), json_field(line, "score"))
-                        else {
-                            continue;
-                        };
-                        let Ok(score) = score.parse::<f32>() else { continue };
-                        let new_first = json_field(line, "new_first") == Some("true");
-                        // Older files have no scores: label with the result only.
-                        let evs: Vec<Option<i32>> = match line.find("\"evals\":") {
-                            Some(e) => {
-                                let t = &line[e + 8..];
-                                let t = t[t.find('[').unwrap_or(0) + 1..t.find(']').unwrap_or(0)].to_string();
-                                t.split(',').map(|x| x.trim().parse().ok()).collect()
-                            }
-                            None => vec![None; json_field(line, "actions").and_then(|a| a.parse().ok()).unwrap_or(0)],
-                        };
-                        let acts: Vec<&str> = moves.split(" submit").map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
-                        let n_eng = evs.len();
-                        if n_eng == 0 || acts.len() < n_eng {
-                            continue;
-                        }
-                        let opening = acts.len() - n_eng;
-                        let Ok(mut s) = position_from_uci(pos) else { continue };
-                        let mut ok = true;
-                        let mut first_player = None;
-                        let mut pending: Vec<(usize, Vec<f32>, bool)> = Vec::new();
-                        for (i, a) in acts.iter().enumerate() {
-                            if i == opening {
-                                first_player = Some(s.get_present().1);
-                            }
-                            if i >= opening {
-                                let base = evaluate(&s, ep);
-                                let x = inputs(&s, base);
-                                let mut r = x.to_vec();
-                                r.push(base as f32);
-                                let t = evs[i - opening];
-                                r.push(match t {
-                                    Some(v) if v.abs() < 20000 => v as f32,
-                                    _ => f32::NAN,
-                                });
-                                pending.push((i, r, s.get_present().1));
-                            }
-                            if apply_uci_moves(&mut s, &format!("{} submit", a)).is_err() {
-                                ok = false;
-                                break;
-                            }
-                        }
-                        let Some(first) = first_player else { continue };
-                        if !ok {
-                            continue;
-                        }
-                        // NEW's colour and the result for white.
-                        let new_black = if new_first { first } else { !first };
-                        let white = if score == 0.5 { 0.5 } else if (score == 1.0) != new_black { 1.0 } else { 0.0 };
-                        for (_, mut r, stm_black) in pending {
-                            r.push(if stm_black { 1.0 - white } else { white });
-                            r.push(g as f32 - threads as f32);
-                            rec.extend(r);
-                        }
-                    }
-                    rec
-                })
-            })
-            .collect();
-        hs.into_iter().map(|h| h.join().unwrap()).collect()
-    });
-    let mut bytes: Vec<u8> = Vec::new();
-    let mut n = 0usize;
-    for c in &chunks {
-        n += c.len() / (NI + 4);
-        for v in c {
-            bytes.extend_from_slice(&v.to_le_bytes());
-        }
-    }
-    std::fs::write(out_path, &bytes).expect("write records");
-    writeln!(out, "{} records ({} inputs + 4) from {} games -> {}", n, NI, lines.len(), out_path).unwrap();
+
+/// A random per-axis order (for checking that the action set does not depend on order).
+fn shuffled_order(w: &HcInfo, seed: u64) -> kairos::misc::ordering::HcOrdering {
+    let mut st = seed.wrapping_mul(0x9E3779B97F4A7C15) | 1;
+    let u = w.get_universe();
+    let orders = (0..u.dimension())
+        .map(|n| {
+            let mut v: Vec<u32> = u[n].iter().collect();
+            for i in (1..v.len()).rev() {
+                st ^= st << 13;
+                st ^= st >> 7;
+                st ^= st << 17;
+                v.swap(i, (st % (i as u64 + 1)) as usize);
+            }
+            v
+        })
+        .collect();
+    kairos::misc::ordering::HcOrdering::Precomputed(orders)
 }

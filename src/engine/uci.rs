@@ -1,6 +1,7 @@
 //! 5DUCI protocol loop (engine side).
 
-use super::{Engine, Limits, OptionValue};
+use super::ab::AlphaBeta;
+use super::{Limits, OptionValue};
 use crate::core::state::State;
 use crate::core::variants::{apply_uci_moves, position_from_uci, startpos};
 use std::io::{BufRead, Write};
@@ -15,7 +16,7 @@ fn out(line: &str) {
     let _ = lock.flush();
 }
 
-pub fn run(engine: Box<dyn Engine>) {
+pub fn run(engine: AlphaBeta) {
     let engine = Arc::new(Mutex::new(engine));
     let stop = Arc::new(AtomicBool::new(false));
     let busy = Arc::new(AtomicBool::new(false));
@@ -40,7 +41,7 @@ pub fn run(engine: Box<dyn Engine>) {
         let cmd = it.next().unwrap_or("");
         match cmd {
             "5duci" => {
-                out(&format!("id name kairos-{}", engine.lock().unwrap().name()));
+                out("id name kairos");
                 out("id author kairos");
                 out("5duciok");
             }
