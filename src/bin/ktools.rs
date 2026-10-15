@@ -934,7 +934,7 @@ fn shuffled_order(w: &HcInfo, seed: u64) -> kairos::misc::ordering::HcOrdering {
             v
         })
         .collect();
-    kairos::misc::ordering::HcOrdering::Precomputed(orders)
+    kairos::misc::ordering::HcOrdering::Precomputed(kairos::misc::ordering::AxisOrders::new(orders))
 }
 
 /// Mate puzzles: "# mate <n> <name>" comment lines, each followed by a G line. Reports the

@@ -12,7 +12,7 @@ use super::vec4::Vec4;
 use crate::misc::geometry::{Hc, Point, SearchSpace, Slice};
 use crate::misc::graph::Graph;
 use crate::misc::integer_set::{Index, IntegerSet};
-use crate::misc::ordering::HcOrdering;
+use crate::misc::ordering::{AxisOrders, HcOrdering};
 
 const INVALID: Index = Index::MAX;
 
@@ -108,6 +108,7 @@ struct BuildScratch {
     /// Departure coordinate of each source square, per axis.
     jump_tab: Vec<[Index; 64]>,
     safety: Vec<(i32, i32, RoyalSafety)>,
+    group_slots: GroupSlots,
 }
 
 #[derive(Default)]
@@ -119,40 +120,59 @@ struct AxisGroups {
     by_from: Vec<(u32, IntegerSet)>,
 }
 
+/// Position of each departure's (and departure axis') group while one `AxisGroups` is
+/// built; entries are valid when stamped with the current build.
+#[derive(Default)]
+struct GroupSlots {
+    stamp: u32,
+    /// By departure axis * 64 + departure square.
+    dep: Vec<(u32, u32)>,
+    /// By departure axis.
+    from: Vec<(u32, u32)>,
+}
+
+impl GroupSlots {
+    fn begin(&mut self, axes: usize) {
+        if self.dep.len() < axes * 64 {
+            self.dep.resize(axes * 64, (0, 0));
+            self.from.resize(axes, (0, 0));
+        }
+        self.stamp = self.stamp.wrapping_add(1);
+        if self.stamp == 0 {
+            self.dep.iter_mut().for_each(|e| e.0 = 0);
+            self.from.iter_mut().for_each(|e| e.0 = 0);
+            self.stamp = 1;
+        }
+    }
+}
+
 impl AxisGroups {
-    fn rebuild(&mut self, entries: &[Entry]) {
+    /// Group `entries` (their arrivals come from `axes` departure axes).
+    fn rebuild(&mut self, entries: &[Entry], axes: usize, slots: &mut GroupSlots) {
         self.nonjump = IntegerSet::new();
         self.by_dep.clear();
         self.by_from.clear();
-        // Arrivals of one piece mostly come in runs: try the group used last first.
-        let (mut last_dep, mut last_from) = (0usize, 0usize);
+        slots.begin(axes);
+        let stamp = slots.stamp;
         for (i, e) in entries.iter().enumerate() {
             let i = i as Index;
             match e {
                 Entry::Physical { .. } | Entry::Null => self.nonjump.insert(i),
-                Entry::Arriving { idx, fa, .. } if *idx != INVALID => {
+                Entry::Arriving { m, idx, fa, .. } if *idx != INVALID => {
                     let (fa, idx) = (*fa, *idx);
-                    let hit = |d: &(u32, Index, IntegerSet)| d.0 == fa && d.1 == idx;
-                    if !self.by_dep.get(last_dep).is_some_and(hit) {
-                        last_dep = match self.by_dep.iter().position(hit) {
-                            Some(k) => k,
-                            None => {
-                                self.by_dep.push((fa, idx, IntegerSet::new()));
-                                self.by_dep.len() - 1
-                            }
-                        };
+                    // (departure axis, departure square) identifies the departure coordinate.
+                    let slot = &mut slots.dep[fa as usize * 64 + m.from.xy() as usize];
+                    if slot.0 != stamp {
+                        *slot = (stamp, self.by_dep.len() as u32);
+                        self.by_dep.push((fa, idx, IntegerSet::new()));
                     }
-                    self.by_dep[last_dep].2.insert(i);
-                    if !self.by_from.get(last_from).is_some_and(|d| d.0 == fa) {
-                        last_from = match self.by_from.iter().position(|d| d.0 == fa) {
-                            Some(k) => k,
-                            None => {
-                                self.by_from.push((fa, IntegerSet::new()));
-                                self.by_from.len() - 1
-                            }
-                        };
+                    self.by_dep[slot.1 as usize].2.insert(i);
+                    let slot = &mut slots.from[fa as usize];
+                    if slot.0 != stamp {
+                        *slot = (stamp, self.by_from.len() as u32);
+                        self.by_from.push((fa, IntegerSet::new()));
                     }
-                    self.by_from[last_from].1.insert(i);
+                    self.by_from[slot.1 as usize].1.insert(i);
                 }
                 _ => {}
             }
@@ -260,7 +280,7 @@ impl HcInfo {
         let st_scope = crate::misc::prof::scope(15);
         let HcInfo { player: info_player, line_axes, axis_lo, axis_of, axis_coords, branch_entries, dim, universe, new_axis, groups, scratch, all_lines_mine, lone_checks } =
             self;
-        let BuildScratch { playable, stays, departures, arrivals, sorted, line_counts, ml, jump_tab, safety } = scratch;
+        let BuildScratch { playable, stays, departures, arrivals, sorted, line_counts, ml, jump_tab, safety, group_slots } = scratch;
         let present = s.get_present();
         let player = present.1;
         let (lines_lo, lines_hi) = s.get_lines_range();
@@ -512,9 +532,8 @@ impl HcInfo {
         let mut hc_n_lines = universe.clone();
         let mut non_null = IntegerSet::new();
         if np < dimension {
-            for i in 1..n_branch {
-                non_null.insert(i as Index);
-            }
+            non_null = IntegerSet::range(n_branch as Index);
+            non_null.erase(0);
             for n in np..dimension {
                 hc_n_lines[n].assign_singleton(0);
             }
@@ -528,9 +547,9 @@ impl HcInfo {
             groups.resize_with(np + 1, AxisGroups::default);
         }
         for n in 0..np {
-            groups[n].rebuild(&axis_coords[n]);
+            groups[n].rebuild(&axis_coords[n], np, group_slots);
         }
-        groups[np].rebuild(branch_entries);
+        groups[np].rebuild(branch_entries, np, group_slots);
         *info_player = player;
         *dim = dimension;
         *new_axis = np;
@@ -553,17 +572,33 @@ impl HcInfo {
         result.resize(dim, INVALID);
         want.clear();
         want.resize(dim, false);
+        // Arrivals on branch axes whose departure left the hypercuboid (the departure axes
+        // all come first, so this is the same for every branch axis).
+        let mut branch_ghosts: Option<IntegerSet> = None;
         for n in 0..dim {
             let grp = &self.groups[n.min(self.new_axis)];
             // Arrivals whose departure left the hypercuboid can never be paired.
-            let mut ghost: Option<IntegerSet> = None;
-            for (fa, dep, set) in &grp.by_dep {
-                if !hc[*fa as usize].contains(*dep) && set.intersects(&hc[n]) {
-                    ghost.get_or_insert_with(IntegerSet::new).or_assign(set);
+            if n < self.new_axis {
+                let mut ghost: Option<IntegerSet> = None;
+                for (fa, dep, set) in &grp.by_dep {
+                    if !hc[*fa as usize].contains(*dep) && set.intersects(&hc[n]) {
+                        ghost.get_or_insert_with(IntegerSet::new).or_assign(set);
+                    }
                 }
-            }
-            if let Some(gs) = ghost {
-                hc[n].minus(&gs);
+                if let Some(gs) = ghost {
+                    hc[n].minus(&gs);
+                }
+            } else {
+                let gs = branch_ghosts.get_or_insert_with(|| {
+                    let mut g = IntegerSet::new();
+                    for (fa, dep, set) in &grp.by_dep {
+                        if !hc[*fa as usize].contains(*dep) {
+                            g.or_assign(set);
+                        }
+                    }
+                    g
+                });
+                hc[n].minus(gs);
             }
             if hc[n].is_empty() {
                 return false;
@@ -612,7 +647,7 @@ impl HcInfo {
                     }
                 }
                 HcOrdering::Precomputed(o) => {
-                    for &i in &o[n] {
+                    for &i in o.axis(n) {
                         if live.contains(i) && visit(i) {
                             break;
                         }
@@ -1034,14 +1069,18 @@ impl BfHeap {
     fn push(&mut self, hc: Hc, class: i32) {
         let _p = crate::misc::prof::scope(11);
         let mut bound = 0i64;
+        let shared = match &self.order {
+            HcOrdering::Precomputed(o) => o.shared,
+            HcOrdering::Natural => usize::MAX,
+        };
         for n in 0..hc.dimension() {
-            let sc = &self.scores[n];
+            let sc = &self.scores[n.min(shared)];
             let set = &hc[n];
             let best = match &self.order {
                 // An order lists its axis' universe best first, so the first member of the
                 // set has the set's best score.
                 HcOrdering::Precomputed(o) if set.is_subset_of(&self.universe[n]) => {
-                    o[n].iter().find(|&&i| set.contains(i)).map(|&i| sc[i as usize])
+                    o.axis(n).iter().find(|&&i| set.contains(i)).map(|&i| sc[i as usize])
                 }
                 _ => set.iter().map(|i| sc.get(i as usize).copied().unwrap_or(0)).max(),
             };
@@ -1081,7 +1120,7 @@ impl Default for BestFirstCursor {
         BestFirstCursor {
             heap: BfHeap {
                 heap: std::collections::BinaryHeap::new(),
-                order: HcOrdering::Precomputed(Vec::new()),
+                order: HcOrdering::Precomputed(AxisOrders::default()),
                 scores: Vec::new(),
                 universe: Hc::default(),
                 seq: 0,
@@ -1095,7 +1134,7 @@ impl Default for BestFirstCursor {
 impl BestFirstCursor {
     /// The per-axis orders (each listing its axis' universe coordinates, best first) and
     /// coordinate scores, to fill before `restart` (their storage is kept between uses).
-    pub fn ordering_mut(&mut self) -> (&mut Vec<Vec<Index>>, &mut Vec<Vec<i32>>) {
+    pub fn ordering_mut(&mut self) -> (&mut AxisOrders, &mut Vec<Vec<i32>>) {
         (self.heap.order.axes_mut(), &mut self.heap.scores)
     }
 

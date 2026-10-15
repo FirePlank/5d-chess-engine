@@ -19,7 +19,7 @@ use crate::core::piece::*;
 use crate::core::state::{Mark, State};
 use crate::misc::geometry::SearchSpace;
 use crate::misc::integer_set::Index;
-use crate::misc::ordering::HcOrdering;
+use crate::misc::ordering::{AxisOrders, HcOrdering};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -478,29 +478,24 @@ impl AlphaBeta {
         info: &HcInfo,
         checks: bool,
         scratch: &mut OrderScratch,
-        orders: &mut Vec<Vec<Index>>,
+        orders: &mut AxisOrders,
         scores: &mut Vec<Vec<i32>>,
     ) {
         let _p = crate::misc::prof::scope(6);
         let u = info.get_universe();
-        let dim = u.dimension();
+        // Branch axes share entries: they are scored once and share the first one's lists.
+        let fba = info.first_branch_axis();
+        let dim = u.dimension().min(fba + 1);
+        orders.shared = fba;
+        let orders = &mut orders.lists;
         if orders.len() < dim {
             orders.resize_with(dim, Vec::new);
         }
         if scores.len() < dim {
             scores.resize_with(dim, Vec::new);
         }
-        let fba = info.first_branch_axis();
         let mut detector = if checks { Some(CheckDetector::new(info, s, scratch)) } else { None };
         for n in 0..dim {
-            // Branch axes share entries; score them once.
-            if n > fba {
-                let (head, tail) = orders.split_at_mut(n);
-                tail[0].clone_from(&head[fba]);
-                let (head, tail) = scores.split_at_mut(n);
-                tail[0].clone_from(&head[fba]);
-                continue;
-            }
             let v = &mut scratch.sort;
             v.clear();
             for i in u[n].iter() {
@@ -524,7 +519,7 @@ impl AlphaBeta {
 
     /// Per-axis order of a node's coordinates (diagnostics).
     pub fn ordering(&self, s: &State, info: &HcInfo) -> HcOrdering {
-        let mut orders = Vec::new();
+        let mut orders = AxisOrders::default();
         self.node_ordering(s, info, true, &mut OrderScratch::default(), &mut orders, &mut Vec::new());
         HcOrdering::Precomputed(orders)
     }
