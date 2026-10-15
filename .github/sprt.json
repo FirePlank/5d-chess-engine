@@ -1,0 +1,12 @@
+{
+  "name": "check_ext",
+  "old": "acce2b3976d310b061fa3e983cb89d59474b575e",
+  "games": 16000,
+  "shards": 40,
+  "tc": "movetime 100",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "ab",
+  "old_args": "ab",
+  "base": "self"
+}
