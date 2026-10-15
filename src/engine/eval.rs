@@ -44,7 +44,7 @@ impl Default for EvalParams {
             dragon: 350,
             brawn: 140,
             common_king: 370,
-            inactive_weight: 12,
+            inactive_weight: 8,
             timeline_slot: 30,
             tempo: 15,
             center_knight: 8,
