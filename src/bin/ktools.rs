@@ -23,6 +23,67 @@ fn mate_name(m: MateType) -> &'static str {
     }
 }
 
+fn coord(v: kairos::core::vec4::Vec4) -> String {
+    format!("{},{},{},{}", v.l(), v.t(), v.x(), v.y())
+}
+
+fn move_string(m: &kairos::core::action::FullMove) -> String {
+    format!("{}>{}", coord(m.from), coord(m.to))
+}
+
+/// The `rules` mode record of one position (see `ktools rules`).
+fn rules_dump(s: &State, cap: usize, mate: bool, out: &mut impl Write) {
+    let m = s.multiverse();
+    let (present, player) = s.get_present();
+    let (lmin, lmax) = s.get_lines_range();
+    let (amin, amax) = s.get_active_range();
+    let (sx, sy) = s.get_board_size();
+    writeln!(
+        out,
+        "I player {} present {} lines {} {} active {} {} even {} size {} {} promo {}",
+        player as u8, present, lmin, lmax, amin, amax, m.layout().is_even() as u8, sx, sy, s.get_promotion_options().0
+    )
+    .unwrap();
+    for (l, t, c, fen) in m.get_boards(true) {
+        writeln!(out, "B {} {} {} {}", l, t, c as u8, fen).unwrap();
+    }
+    let st = s.get_timeline_status();
+    let join = |v: &[i32]| v.iter().map(|l| l.to_string()).collect::<Vec<_>>().join(",");
+    writeln!(out, "T mandatory {} optional {}", join(&st.mandatory), join(&st.optional)).unwrap();
+    let mut moves = Vec::new();
+    for l in st.playable() {
+        for p in s.get_all_pieces(&[l]) {
+            let mut to = Vec::new();
+            s.gen_piece_move(p, &mut to);
+            for q in to {
+                moves.push(format!("{}>{}", coord(p), coord(q)));
+            }
+        }
+    }
+    moves.sort();
+    writeln!(out, "N {}", moves.len()).unwrap();
+    for mv in &moves {
+        writeln!(out, "m {}", mv).unwrap();
+    }
+    let mut checks: Vec<String> = s.phantom().find_checks(!player).iter().map(move_string).collect();
+    checks.sort();
+    for c in &checks {
+        writeln!(out, "k {}", c).unwrap();
+    }
+    writeln!(out, "C {}", s.has_phantom_check() as u8).unwrap();
+    if !mate {
+        return;
+    }
+    let mate = s.get_mate_type();
+    let (w, ss) = HcInfo::build_hc(s);
+    let acts: Vec<String> =
+        w.search(s, ss).take(cap).map(|a| a.iter().map(move_string).collect::<Vec<_>>().join(" ")).collect();
+    writeln!(out, "M {} {}", mate_name(mate), acts.len()).unwrap();
+    for a in &acts {
+        writeln!(out, "a {}", a).unwrap();
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mode = args.get(1).map(|s| s.as_str()).unwrap_or("help");
@@ -433,6 +494,173 @@ fn main() {
                     shuffled.push(k);
                 }
                 writeln!(out, "natural {} best-first {} shuffled {:?} dim {} new_axis {}", natural, best_first, shuffled, w.dimension(), w.first_branch_axis()).unwrap();
+            }
+        }
+        "rules" => {
+            // rules [cap] [nomate] : boards, playable timelines, pseudo-legal moves, checks, mate
+            // type and up to `cap` legal actions per position, for cross-checking against other
+            // implementations ("nomate" skips the mate type and actions). Coordinates are
+            // "l,t,x,y" in the internal timeline numbering (y = 0 is rank 1).
+            let cap: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let mate = args.get(3).map(|s| s.as_str()) != Some("nomate");
+            for line in stdin.lock().lines() {
+                let line = line.unwrap();
+                if !line.starts_with("G ") {
+                    continue;
+                }
+                writeln!(out, "{}", line).unwrap();
+                match parse_g_line(&line) {
+                    Ok(s) => rules_dump(&s, cap, mate, &mut out),
+                    Err(e) => writeln!(out, "E {}", e).unwrap(),
+                }
+                out.flush().unwrap();
+            }
+        }
+        "randplay" => {
+            // randplay <plies> <games> <seed> [branchy] : random legal games from each start
+            // position, printing a "G" line for every position reached ("branchy" prefers, out
+            // of a few random actions, one that time travels the most).
+            use kairos::core::action::ExtMove;
+            use kairos::core::hypercuboid::{HcCursor, SearchMode};
+            use kairos::misc::ordering::HcOrdering;
+            use kairos::misc::rng::Mt19937;
+            let plies: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10);
+            let games: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1);
+            let mut rng = Mt19937::new(args.get(4).and_then(|s| s.parse().ok()).unwrap_or(1));
+            let branchy = args.get(5).map(|s| s.as_str()) == Some("branchy");
+            for line in stdin.lock().lines() {
+                let line = line.unwrap();
+                if !line.starts_with("G ") {
+                    continue;
+                }
+                for _ in 0..games {
+                    let mut s = parse_g_line(&line).unwrap();
+                    let mut hist = if line.contains(" moves") { line.clone() } else { format!("{} moves", line) };
+                    for _ in 0..plies {
+                        writeln!(out, "{}", hist).unwrap();
+                        let (w, ss) = HcInfo::build_hc(&s);
+                        let order = HcOrdering::random(w.get_universe(), &mut rng);
+                        let mut cur = HcCursor::new(ss, order, SearchMode::Balanced);
+                        let a = if branchy {
+                            // Up to 200 legal actions; pick at random among those that time travel.
+                            let mut acts = Vec::new();
+                            while acts.len() < 200 {
+                                match cur.next(&w, &s) {
+                                    Some(a) => acts.push(a),
+                                    None => break,
+                                }
+                            }
+                            let jumping: Vec<usize> =
+                                (0..acts.len()).filter(|&i| acts[i].iter().any(|m| m.from.tl() != m.to.tl())).collect();
+                            if acts.is_empty() {
+                                break;
+                            }
+                            let i = if jumping.is_empty() {
+                                rng.next_u32() as usize % acts.len()
+                            } else {
+                                jumping[rng.next_u32() as usize % jumping.len()]
+                            };
+                            acts.swap_remove(i)
+                        } else {
+                            match cur.next(&w, &s) {
+                                Some(a) => a,
+                                None => break,
+                            }
+                        };
+                        for &m in &a {
+                            let em = ExtMove::resolve(m, &s);
+                            hist += &format!(" {}", em);
+                            assert!(s.apply_ext::<false>(em));
+                        }
+                        hist += " submit";
+                        assert!(s.submit::<false>());
+                    }
+                }
+                out.flush().unwrap();
+            }
+        }
+        "replay" => {
+            // replay : parse each "G" line (applying its moves) and print the ones that fail.
+            let (mut ok, mut bad) = (0, 0);
+            for line in stdin.lock().lines() {
+                let line = line.unwrap();
+                if !line.starts_with("G ") {
+                    continue;
+                }
+                match parse_g_line(&line) {
+                    Ok(_) => ok += 1,
+                    Err(e) => {
+                        bad += 1;
+                        writeln!(out, "E {}
+{}", e, line).unwrap();
+                    }
+                }
+            }
+            writeln!(out, "replayed {} failed {}", ok, bad).unwrap();
+        }
+        "playcheck" => {
+            // playcheck : for each "G" game line, replay its moves and check at every submit that the
+            // action just played is legal and that the position before it was not reported as mate.
+            use kairos::core::action::{ExtMove, FullMove};
+            use kairos::core::naive::is_legal_action;
+            for line in stdin.lock().lines() {
+                let line = line.unwrap();
+                if !line.starts_with("G ") {
+                    continue;
+                }
+                let (head, moves) = match line.find(" moves") {
+                    Some(i) => (&line[..i], &line[i + 6..]),
+                    None => (&line[..], ""),
+                };
+                let mut s = match parse_g_line(head) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        writeln!(out, "E {}", e).unwrap();
+                        continue;
+                    }
+                };
+                let (mut ply, mut problems) = (0, Vec::new());
+                let mut act: Vec<FullMove> = Vec::new();
+                let mut before = s.clone();
+                for tok in moves.split_whitespace() {
+                    if tok == "submit" {
+                        let mate = before.get_mate_type();
+                        if mate != MateType::None {
+                            problems.push(format!("ply {} mate {} before a played action", ply, mate_name(mate)));
+                        }
+                        if !is_legal_action(&before, &act) {
+                            problems.push(format!("ply {} action not legal: {}", ply, seq_string(&act)));
+                        }
+                        if !s.submit::<false>() {
+                            problems.push(format!("ply {} cannot submit", ply));
+                            break;
+                        }
+                        ply += 1;
+                        act.clear();
+                        before = s.clone();
+                    } else {
+                        let mv = match ExtMove::parse(tok) {
+                            Ok(m) => m,
+                            Err(e) => {
+                                problems.push(format!("ply {} {}", ply, e));
+                                break;
+                            }
+                        };
+                        match s.normalize_promotion(mv) {
+                            Some(n) if s.apply_ext::<false>(n) => act.push(mv.fm),
+                            _ => {
+                                problems.push(format!("ply {} cannot apply {}", ply, tok));
+                                break;
+                            }
+                        }
+                    }
+                }
+                let end = if act.is_empty() { mate_name(s.get_mate_type()) } else { "partial" };
+                writeln!(out, "R plies {} end {} problems {}", ply, end, problems.len()).unwrap();
+                for p in &problems {
+                    writeln!(out, "  {}", p).unwrap();
+                }
+                out.flush().unwrap();
             }
         }
         "bench" => bench(args.get(2).map(|s| s.as_str()).unwrap_or("data/bench.g"), &mut out),
