@@ -21,6 +21,10 @@ path = "src/bin/ktools.rs"
 name = "sprt"
 path = "src/bin/sprt.rs"
 
+[[bin]]
+name = "tune"
+path = "src/bin/tune.rs"
+
 [features]
 prof = []
 

@@ -68,6 +68,37 @@ fn main() {
                 out.flush().unwrap();
             }
         }
+        "blunders" => blunders(
+            args.get(2).map(|s| s.as_str()).unwrap_or("games/sprt/games_timeline_scaled_300.jsonl"),
+            args.get(3).and_then(|s| s.parse().ok()).unwrap_or(100),
+            &args[4.min(args.len())..],
+            &mut out,
+        ),
+        "materank" => materank(
+            args.get(2).map(|s| s.as_str()).unwrap_or("games/sprt/games_timeline_scaled_300.jsonl"),
+            args.get(3).and_then(|s| s.parse().ok()).unwrap_or(300),
+            &args[4.min(args.len())..],
+            &mut out,
+        ),
+        "depthstat" => {
+            use kairos::engine::ab::AlphaBeta;
+            use kairos::engine::{Engine, Limits};
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or("games/sprt/games_timeline_scaled_300.jsonl");
+            let ms: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(100);
+            let positions = mate_positions(path, 60);
+            let stop = std::sync::atomic::AtomicBool::new(false);
+            let mut hist = std::collections::BTreeMap::new();
+            for p in &positions {
+                let mut e = AlphaBeta::new(Default::default(), Default::default());
+                let mut last = String::new();
+                e.find_best_move(p, &Limits { movetime: Some(ms), ..Default::default() }, &stop, &mut |m| last = m);
+                let d: u32 = last.split_whitespace().nth(1).and_then(|x| x.parse().ok()).unwrap_or(0);
+                let roots: u32 = last.split_whitespace().skip_while(|w| *w != "roots").nth(1).and_then(|x| x.parse().ok()).unwrap_or(0);
+                *hist.entry(d).or_insert(0) += 1;
+                writeln!(out, "depth {} roots {} nodes {}", d, roots, last.split_whitespace().skip_while(|w| *w != "nodes").nth(1).unwrap_or("?")).unwrap();
+            }
+            writeln!(out, "{:?}", hist).unwrap();
+        }
         "abbench" => abbench(
             args.get(2).map(|s| s.as_str()).unwrap_or("data/bench.g"),
             args.get(3).and_then(|s| s.parse().ok()).unwrap_or(4),
@@ -391,4 +422,192 @@ fn abbench(path: &str, depth: u32, out: &mut impl Write) {
     let secs = t0.elapsed().as_secs_f64();
     writeln!(out, "aboracle {:016x} | depth {} | nodes {} in {:.3}s ({:.0} nps)", h.finish(), depth, total_nodes, secs, total_nodes as f64 / secs).unwrap();
     write!(out, "{}", kairos::misc::prof::report()).unwrap();
+}
+
+fn json_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let pat = format!("\"{}\":", key);
+    let i = line.find(&pat)? + pat.len();
+    let rest = line[i..].trim_start();
+    if let Some(r) = rest.strip_prefix('"') {
+        Some(&r[..r.find('"')?])
+    } else {
+        let end = rest.find(|c| c == ',' || c == '}').unwrap_or(rest.len());
+        Some(rest[..end].trim())
+    }
+}
+
+fn apply_seq(s: &State, a: &MoveSeq) -> Option<State> {
+    let mut c = s.clone();
+    for fm in a {
+        if !c.apply_move::<false>(*fm) {
+            return None;
+        }
+    }
+    if c.submit::<false>() { Some(c) } else { None }
+}
+
+fn is_mated(s: &State) -> bool {
+    let (w, ss) = HcInfo::build_hc(s);
+    w.search(s, ss).next().is_none() && s.has_phantom_check()
+}
+
+/// Does the side to move have a mating action among its first `cap` actions?
+fn has_mate_in_1(s: &State, cap: usize) -> bool {
+    let (w, ss) = HcInfo::build_hc(s);
+    w.search(s, ss).take(cap).any(|a| apply_seq(s, &a).map(|c| is_mated(&c)).unwrap_or(false))
+}
+
+/// For checkmate games: replays to the loser's last decision and asks whether alpha-beta with
+/// various node budgets still plays into a mate in one.
+fn blunders(path: &str, max_games: usize, opts: &[String], out: &mut impl Write) {
+    use kairos::core::variants::{apply_uci_moves, position_from_uci};
+    use kairos::engine::ab::AlphaBeta;
+    use kairos::engine::{Engine, Limits, OptionValue};
+    let no_safety = std::env::var("NO_SAFETY").is_ok();
+    let text = std::fs::read_to_string(path).expect("games");
+    let mut positions: Vec<State> = Vec::new();
+    for line in text.lines() {
+        if positions.len() >= max_games {
+            break;
+        }
+        if json_field(line, "reason") != Some("checkmate") {
+            continue;
+        }
+        let (Some(pos), Some(moves)) = (json_field(line, "position"), json_field(line, "moves")) else { continue };
+        let acts: Vec<&str> = moves.split(" submit").map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+        if acts.len() < 4 {
+            continue;
+        }
+        let Ok(mut s) = position_from_uci(pos) else { continue };
+        let mut ok = true;
+        for a in &acts[..acts.len() - 2] {
+            if apply_uci_moves(&mut s, &format!("{} submit", a)).is_err() {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            positions.push(s);
+        }
+    }
+    let budgets: Vec<u64> = std::env::var("BUDGETS").ok().map(|v| v.split(',').filter_map(|x| x.parse().ok()).collect()).unwrap_or(vec![5_000, 50_000, 500_000]);
+    let budgets = &budgets;
+    let results: Vec<Vec<Option<bool>>> = std::thread::scope(|sc| {
+        let hs: Vec<_> = positions
+            .chunks(positions.len().div_ceil(14).max(1))
+            .map(|chunk| {
+                sc.spawn(move || {
+                    let stop = std::sync::atomic::AtomicBool::new(false);
+                    chunk
+                        .iter()
+                        .map(|p| {
+                            budgets
+                                .iter()
+                                .map(|&n| {
+                                    let mut e = AlphaBeta::new(Default::default(), Default::default());
+                                    for o in opts {
+                                        if let Some((k, v)) = o.split_once('=') {
+                                            e.set_option(k, &OptionValue::parse(v));
+                                        }
+                                    }
+                                    let limits = Limits { depth: Some(60), nodes: Some(n), ..Default::default() };
+                                    let a = e.find_best_move(p, &limits, &stop, &mut |_| {})?;
+                                    let q = p.can_apply_action(&a)?;
+                                    Some(has_mate_in_1(&q, 3000))
+                                })
+                                .chain(std::iter::once({
+                                    // Is any action safe from mate in one? (first 300 actions)
+                                    if no_safety {
+                                        Some(true)
+                                    } else {
+                                        let (w, ss) = HcInfo::build_hc(p);
+                                        let safe = w.search(p, ss).take(300).any(|a| {
+                                            apply_seq(p, &a).map(|q| !has_mate_in_1(&q, 3000)).unwrap_or(false)
+                                        });
+                                        Some(safe)
+                                    }
+                                }))
+                                .collect()
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        hs.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    });
+    let lost = results.iter().filter(|v| v[budgets.len()] == Some(false)).count();
+    writeln!(out, "positions with no mate-in-1-safe action (first 300): {}/{}", lost, results.len()).unwrap();
+    for (k, &n) in budgets.iter().enumerate() {
+        let avoidable = results.iter().filter(|v| v[k] == Some(true) && v[budgets.len()] == Some(true)).count();
+        writeln!(out, "nodes {:7}: avoidable mate-in-1 blunders {}", n, avoidable).unwrap();
+        let r: Vec<Option<bool>> = results.iter().map(|v| v[k]).collect();
+        let blund = r.iter().filter(|x| **x == Some(true)).count();
+        let none = r.iter().filter(|x| x.is_none()).count();
+        writeln!(out, "nodes {:7}: still mated-in-1 {}/{} (no action {})", n, blund, r.len(), none).unwrap();
+    }
+}
+
+/// Positions just before a game-ending mate (winner to move), from harness JSONL.
+fn mate_positions(path: &str, max_games: usize) -> Vec<State> {
+    use kairos::core::variants::{apply_uci_moves, position_from_uci};
+    let text = std::fs::read_to_string(path).expect("games");
+    let mut positions = Vec::new();
+    for line in text.lines() {
+        if positions.len() >= max_games {
+            break;
+        }
+        if json_field(line, "reason") != Some("checkmate") {
+            continue;
+        }
+        let (Some(pos), Some(moves)) = (json_field(line, "position"), json_field(line, "moves")) else { continue };
+        let acts: Vec<&str> = moves.split(" submit").map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+        let Ok(mut s) = position_from_uci(pos) else { continue };
+        if acts[..acts.len() - 1].iter().all(|a| apply_uci_moves(&mut s, &format!("{} submit", a)).is_ok()) {
+            positions.push(s);
+        }
+    }
+    positions
+}
+
+/// Rank of the first mating action in the alpha-beta node ordering, for positions where the
+/// side to move mated in the game. `opts` are `key=value` engine options.
+fn materank(path: &str, max_games: usize, opts: &[String], out: &mut impl Write) {
+    use kairos::engine::ab::AlphaBeta;
+    use kairos::engine::{Engine, OptionValue};
+    let positions = mate_positions(path, max_games);
+    let ranks: Vec<Option<usize>> = std::thread::scope(|sc| {
+        let hs: Vec<_> = positions
+            .chunks(positions.len().div_ceil(14).max(1))
+            .map(|chunk| {
+                sc.spawn(move || {
+                    let mut e = AlphaBeta::new(Default::default(), Default::default());
+                    for o in opts {
+                        if let Some((k, v)) = o.split_once('=') {
+                            e.set_option(k, &OptionValue::parse(v));
+                        }
+                    }
+                    chunk
+                        .iter()
+                        .map(|p| e.node_order(p, 2000).iter().position(|a| apply_seq(p, a).map(|c| is_mated(&c)).unwrap_or(false)))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        hs.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    });
+    let n = ranks.len();
+    let within = |k: usize| ranks.iter().filter(|r| r.map(|x| x < k).unwrap_or(false)).count();
+    writeln!(
+        out,
+        "positions {} | first mate within 1: {} 4: {} 16: {} 48: {} 200: {} 2000: {} | not found {}",
+        n,
+        within(1),
+        within(4),
+        within(16),
+        within(48),
+        within(200),
+        within(2000),
+        ranks.iter().filter(|r| r.is_none()).count()
+    )
+    .unwrap();
 }
