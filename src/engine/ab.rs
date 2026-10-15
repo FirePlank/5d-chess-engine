@@ -9,7 +9,7 @@ use super::features::{MoveEvaluator, MoveWeights};
 use super::{Engine, Limits, OptionValue};
 use crate::core::action::{Action, FullMove, MoveSeq};
 use crate::core::board::Board;
-use crate::core::hypercuboid::{Entry, HcCursor, HcInfo, SearchMode};
+use crate::core::hypercuboid::{BestFirstCursor, Entry, HcCursor, HcInfo, SearchMode};
 use crate::core::bitboard::*;
 use crate::core::piece::*;
 use crate::core::state::{Mark, State};
@@ -27,11 +27,21 @@ struct ActionGen {
     heads: Vec<Option<(i32, MoveSeq)>>,
     filled: Vec<bool>,
     tail: HcCursor,
+    best_first: Option<BestFirstCursor>,
 }
 
 impl ActionGen {
     fn new(ss: SearchSpace, order: HcOrdering, merge: bool) -> Self {
+        Self::with_scores(ss, order, None, merge)
+    }
+
+    fn with_scores(ss: SearchSpace, order: HcOrdering, scores: Option<Vec<Vec<i32>>>, merge: bool) -> Self {
         let order = std::rc::Rc::new(order);
+        if let Some(sc) = scores {
+            let bf = BestFirstCursor::new(ss, order.clone(), std::rc::Rc::new(sc));
+            let empty = HcCursor::with_shared(SearchSpace::default(), order, SearchMode::Balanced);
+            return ActionGen { cursors: Vec::new(), heads: Vec::new(), filled: Vec::new(), tail: empty, best_first: Some(bf) };
+        }
         // Subspaces are ordered [k branches, ..., 1 branch, 0 branches]. Only the 0- and
         // 1-branch ones are merged; finding a first legal action with several simultaneous
         // branches can be very expensive, so those come last, in one tail cursor.
@@ -45,10 +55,13 @@ impl ActionGen {
         }
         let tail_cursor = HcCursor::with_shared(SearchSpace::from_vec(tail), order, SearchMode::Balanced);
         let n = merged.len();
-        ActionGen { cursors: merged, heads: vec![None; n], filled: vec![false; n], tail: tail_cursor }
+        ActionGen { cursors: merged, heads: vec![None; n], filled: vec![false; n], tail: tail_cursor, best_first: None }
     }
 
     fn next(&mut self, info: &HcInfo, s: &State, score: &mut dyn FnMut(&MoveSeq) -> i32) -> Option<(i32, MoveSeq)> {
+        if let Some(bf) = &mut self.best_first {
+            return bf.next(info, s).map(|a| (score(&a), a));
+        }
         let mut best: Option<usize> = None;
         // Later cursors hold fewer branches: they win ties.
         for k in (0..self.cursors.len()).rev() {
@@ -119,6 +132,8 @@ pub struct AbParams {
     pub check_bonus: i32,
     /// Interior nodes with at most this remaining depth order checks first.
     pub check_order_depth: i32,
+    /// Enumerate actions best-first by summed semimove scores (interior nodes and root).
+    pub best_first: bool,
 }
 
 impl Default for AbParams {
@@ -140,6 +155,7 @@ impl Default for AbParams {
             check_order: 0,
             check_bonus: 30_000,
             check_order_depth: 64,
+            best_first: false,
         }
     }
 }
@@ -379,28 +395,50 @@ impl AlphaBeta {
     }
 
     pub fn ordering(&self, s: &State, info: &HcInfo, checks: bool) -> HcOrdering {
+        self.ordering_scores(s, info, checks).0
+    }
+
+    /// Per-axis order (best first) and each coordinate's score, indexed by coordinate.
+    fn ordering_scores(&self, s: &State, info: &HcInfo, checks: bool) -> (HcOrdering, Vec<Vec<i32>>) {
         let _p = crate::misc::prof::scope(6);
         let u = info.get_universe();
         let mut orders = Vec::with_capacity(u.dimension());
+        let mut scores: Vec<Vec<i32>> = Vec::with_capacity(u.dimension());
         // Branch axes share entries; score them once.
-        let mut branch_cache: Option<Vec<Index>> = None;
+        let mut branch_cache: Option<(Vec<Index>, Vec<i32>)> = None;
         let mut checks = if checks && self.params.check_order > 0 { Some(MoveEvaluator::new(info, s, MoveWeights([0.0; 12]))) } else { None };
         for n in 0..u.dimension() {
             if n >= info.first_branch_axis() {
-                if let Some(c) = &branch_cache {
-                    orders.push(c.clone());
+                if let Some((o, sc)) = &branch_cache {
+                    orders.push(o.clone());
+                    scores.push(sc.clone());
                     continue;
                 }
             }
             let mut v: Vec<(i32, Index)> = u[n].iter().map(|i| (self.coord_score(s, info, n, i, &mut checks), i)).collect();
+            let mut sc = vec![0i32; v.iter().map(|x| x.1 as usize + 1).max().unwrap_or(0)];
+            for &(score, i) in &v {
+                sc[i as usize] = score;
+            }
             v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
             let o: Vec<Index> = v.into_iter().map(|x| x.1).collect();
             if n >= info.first_branch_axis() {
-                branch_cache = Some(o.clone());
+                branch_cache = Some((o.clone(), sc.clone()));
             }
             orders.push(o);
+            scores.push(sc);
         }
-        HcOrdering::Precomputed(orders)
+        (HcOrdering::Precomputed(orders), scores)
+    }
+
+    /// Action generator for an interior node or the root.
+    fn action_gen(&self, s: &State, info: &HcInfo, ss: SearchSpace, checks: bool) -> ActionGen {
+        if self.params.best_first {
+            let (order, scores) = self.ordering_scores(s, info, checks);
+            ActionGen::with_scores(ss, order, Some(scores), self.params.merge_branches)
+        } else {
+            ActionGen::new(ss, self.ordering(s, info, checks), self.params.merge_branches)
+        }
     }
 
     fn action_score(&self, s: &State, act: &MoveSeq, ply: usize) -> i32 {
@@ -432,8 +470,7 @@ impl AlphaBeta {
     /// The first `cap` actions of `s` in the order an interior node would try them (diagnostics).
     pub fn node_order(&self, s: &State, cap: usize) -> Vec<MoveSeq> {
         let (info, ss) = HcInfo::build_hc(s);
-        let order = self.ordering(s, &info, true);
-        let mut agen = ActionGen::new(ss, order, self.params.merge_branches);
+        let mut agen = self.action_gen(s, &info, ss, true);
         let mut out = Vec::new();
         let mut exhausted = false;
         while out.len() < cap && !exhausted {
@@ -674,8 +711,7 @@ impl AlphaBeta {
         }
 
         let (info, ss) = HcInfo::build_hc(s);
-        let order = self.ordering(s, &info, depth <= self.params.check_order_depth);
-        let mut agen = ActionGen::new(ss, order, self.params.merge_branches);
+        let mut agen = self.action_gen(s, &info, ss, depth <= self.params.check_order_depth);
         let mut generated = 0usize;
         let mut exhausted = false;
         while searched < cap && !exhausted {
@@ -833,6 +869,7 @@ impl Engine for AlphaBeta {
             ("check_order", Some(x)) => self.params.check_order = x as u8,
             ("check_bonus", Some(x)) => self.params.check_bonus = x as i32,
             ("check_order_depth", Some(x)) => self.params.check_order_depth = x as i32,
+            ("best_first", _) => self.params.best_first = !matches!(value, OptionValue::Bool(false)),
             ("root_cap", Some(x)) => self.params.root_cap = (x as usize).max(1),
             ("lmr_min_depth", Some(x)) => self.params.lmr_min_depth = x as i32,
             ("lmr_min_index", Some(x)) => self.params.lmr_min_index = x as usize,
@@ -877,8 +914,7 @@ impl Engine for AlphaBeta {
 
         // Root actions (all of them, up to the root cap), ordered heuristically.
         let (hc, ss) = HcInfo::build_hc(root);
-        let order = self.ordering(root, &hc, true);
-        let mut agen = ActionGen::new(ss, order, self.params.merge_branches);
+        let mut agen = self.action_gen(root, &hc, ss, true);
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
         // Enumerating every root action can take seconds with many timelines: spend at most
         // a quarter of the budget on it (always keeping at least one action).

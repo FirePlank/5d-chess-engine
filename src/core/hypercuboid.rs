@@ -874,6 +874,92 @@ impl HcCursor {
     }
 }
 
+/// Legal actions roughly best-first by the sum of per-axis coordinate scores. The remaining
+/// space is kept as hypercuboids in a heap keyed by the score of their best point (each
+/// axis' first coordinate in `order`, which must be sorted by `scores` descending), so
+/// after the top action the next ones deviate on whichever axis loses least, instead of
+/// varying the last axis first. Problems are removed from the popped hypercuboid only.
+/// Subspaces of the initial search space keep their precedence (later ones first).
+pub struct BestFirstCursor {
+    heap: std::collections::BinaryHeap<BfItem>,
+    order: std::rc::Rc<HcOrdering>,
+    scores: std::rc::Rc<Vec<Vec<i32>>>,
+    seq: u64,
+}
+
+struct BfItem {
+    key: (i32, i64, u64),
+    hc: Hc,
+}
+impl PartialEq for BfItem {
+    fn eq(&self, o: &Self) -> bool {
+        self.key == o.key
+    }
+}
+impl Eq for BfItem {}
+impl PartialOrd for BfItem {
+    fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(o))
+    }
+}
+impl Ord for BfItem {
+    fn cmp(&self, o: &Self) -> std::cmp::Ordering {
+        self.key.cmp(&o.key)
+    }
+}
+
+impl BestFirstCursor {
+    pub fn new(ss: SearchSpace, order: std::rc::Rc<HcOrdering>, scores: std::rc::Rc<Vec<Vec<i32>>>) -> Self {
+        let mut c = BestFirstCursor { heap: std::collections::BinaryHeap::new(), order, scores, seq: 0 };
+        let n = ss.hcs.len();
+        for (k, hc) in ss.hcs.into_iter().enumerate() {
+            c.push(hc, (n - 1 - k) as i32);
+        }
+        c
+    }
+
+    fn push(&mut self, hc: Hc, class: i32) {
+        let _p = crate::misc::prof::scope(11);
+        let mut bound = 0i64;
+        for n in 0..hc.dimension() {
+            let sc = &self.scores[n];
+            let best = hc[n].iter().map(|i| sc.get(i as usize).copied().unwrap_or(0)).max();
+            match best {
+                Some(b) => bound += b as i64,
+                None => return,
+            }
+        }
+        self.seq += 1;
+        self.heap.push(BfItem { key: (-class, bound, self.seq), hc });
+    }
+
+    pub fn next(&mut self, info: &HcInfo, s: &State) -> Option<MoveSeq> {
+        while let Some(BfItem { key, mut hc }) = self.heap.pop() {
+            let class = -key.0;
+            let pt = match info.take_point(&mut hc, &self.order) {
+                Some(p) => p,
+                None => continue,
+            };
+            match info.find_problem(s, &pt, &hc) {
+                None => {
+                    let act = info.to_action(&pt);
+                    for h in hc.remove_point(&pt).hcs {
+                        self.push(h, class);
+                    }
+                    return Some(act);
+                }
+                Some(problem) => {
+                    let _p = crate::misc::prof::scope(5);
+                    for h in hc.remove_slice(&problem).hcs {
+                        self.push(h, class);
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
 /// Lazy enumeration of legal actions over a borrowed state.
 pub struct HcSearch<'a> {
     info: &'a HcInfo,
