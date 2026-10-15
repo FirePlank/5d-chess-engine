@@ -80,7 +80,53 @@ pub fn default_weights() -> Weights {
 
 /// Weights used by the alpha-beta search with `use_hce` (Texel-tuned, see bin/tune.rs).
 pub fn tuned_weights() -> Weights {
-    default_weights()
+    [
+        143.7, // mat_a_pawn
+        150.0, // mat_a_brawn
+        -206.1, // mat_a_knight
+        414.5, // mat_a_bishop
+        372.7, // mat_a_rook
+        1250.0, // mat_a_queen
+        900.0, // mat_a_princess
+        250.0, // mat_a_unicorn
+        150.0, // mat_a_dragon
+        300.0, // mat_a_cking
+        -134.1, // mat_i_pawn
+        75.0, // mat_i_brawn
+        14.2, // mat_i_knight
+        275.1, // mat_i_bishop
+        -34.9, // mat_i_rook
+        1276.4, // mat_i_queen
+        450.0, // mat_i_princess
+        125.0, // mat_i_unicorn
+        75.0, // mat_i_dragon
+        150.0, // mat_i_cking
+        77.4, // cent_knight
+        106.1, // cent_bishop
+        -10.3, // cent_rook
+        -32.2, // cent_queen
+        2.0, // cent_other
+        11.1, // pawn_adv
+        -265.5, // pawn_near
+        -308.8, // king_cent
+        1915.8, // tl_slots
+        37.5, // tl_slots_heavy
+        157.4, // k_holes
+        2511.5, // k_knights
+        -323.7, // k_open_orth
+        -3.4, // k_open_diag
+        832.8, // k_shield
+        -337.9, // k_zone_att
+        72.4, // mob_knight
+        51.7, // mob_bishop
+        -1.5, // mob_rook
+        155.9, // mob_queen
+        -299.6, // mob_king
+        -24.1, // hanging
+        -2985.0, // royal_att
+        734.8, // tempo
+        75.5, // active_lines
+    ]
 }
 
 #[inline(always)]
