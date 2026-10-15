@@ -358,7 +358,9 @@ fn main() {
                     let mut hc = ss.pop_back().unwrap();
                     let before = ss.clone();
                     let hc0 = hc.clone();
-                    let Some(pt) = w.take_point(&mut hc, &order) else {
+                    let mut psc = kairos::core::hypercuboid::PointScratch::default();
+                    let pt = if w.take_point(&mut hc, &order, &mut psc) { Some(psc.point) } else { None };
+                    let Some(pt) = pt else {
                         for (k, t) in targets.iter().enumerate() {
                             if alive[k] && hc0.contains(&t.1) && !before.contains(&t.1) { writeln!(out, "step {} take_point dropped {}", step, t.0).unwrap(); alive[k] = false; }
                         }

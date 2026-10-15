@@ -114,6 +114,16 @@ impl AxisGroups {
     }
 }
 
+/// Reusable buffers for `HcInfo::take_point`; the point taken is left in `point`.
+#[derive(Default)]
+pub struct PointScratch {
+    g: Graph,
+    must_include: Vec<Index>,
+    edge_refs: Vec<Index>,
+    want: Vec<bool>,
+    pub point: Point,
+}
+
 /// True if a royal piece of `defender`'s color is attacked on this board.
 pub fn has_physical_check(position: &Board, defender: bool) -> bool {
     let defending = if defender { position.black() } else { position.white() };
@@ -397,7 +407,7 @@ impl HcInfo {
                 c != player && has_physical_check(s.board(l, t, c), player)
             })
         {
-            universe[0] = IntegerSet::new();
+            universe[0].clear();
         }
         let mut hc_n_lines = universe.clone();
         let mut non_null = IntegerSet::new();
@@ -406,12 +416,12 @@ impl HcInfo {
                 non_null.insert(i as Index);
             }
             for n in new_axis..dimension {
-                hc_n_lines[n] = IntegerSet::singleton(0);
+                hc_n_lines[n].assign_singleton(0);
             }
         }
         let mut ss = SearchSpace::from_vec(vec![hc_n_lines.clone()]);
         for n in new_axis..dimension {
-            hc_n_lines[n] = non_null.clone();
+            hc_n_lines[n].assign(&non_null);
             ss.push_front(hc_n_lines.clone());
         }
         let mut groups: Vec<AxisGroups> = axis_coords
@@ -434,16 +444,20 @@ impl HcInfo {
         )
     }
 
-    /// Pick a point in `hc` whose departures and arrivals pair up. Prunes arrivals whose
-    /// departure is no longer available.
-    pub fn take_point(&self, hc: &mut Hc, order: &HcOrdering) -> Option<Point> {
+    /// Pick a point in `hc` whose departures and arrivals pair up (into `sc.point`). Prunes
+    /// arrivals whose departure is no longer available.
+    pub fn take_point(&self, hc: &mut Hc, order: &HcOrdering, sc: &mut PointScratch) -> bool {
         let _p = crate::misc::prof::scope(2);
         let dim = self.dimension();
-        let mut g = Graph::new(dim);
-        let mut must_include: Vec<Index> = Vec::new();
-        let mut edge_refs = vec![INVALID; dim * dim];
-        let mut result: Point = vec![INVALID; dim];
-        let mut want = vec![false; dim];
+        let PointScratch { g, must_include, edge_refs, want, point: result } = sc;
+        g.reset(dim);
+        must_include.clear();
+        edge_refs.clear();
+        edge_refs.resize(dim * dim, INVALID);
+        result.clear();
+        result.resize(dim, INVALID);
+        want.clear();
+        want.resize(dim, false);
         for n in 0..dim {
             let grp = &self.groups[n.min(self.new_axis)];
             // Arrivals whose departure left the hypercuboid can never be paired.
@@ -457,7 +471,7 @@ impl HcInfo {
                 hc[n].minus(&gs);
             }
             if hc[n].is_empty() {
-                return None;
+                return false;
             }
             let live = &hc[n];
             let need_nonjump = live.intersects(&grp.nonjump);
@@ -514,14 +528,14 @@ impl HcInfo {
                 must_include.push(n as Index);
             }
         }
-        let matching = g.find_matching(&must_include)?;
-        for (u, v) in matching {
+        let Some(matching) = g.find_matching(must_include) else { return false };
+        for &(u, v) in matching {
             let (u, v) = (u as usize, v as usize);
             result[u] = edge_refs[u * dim + v];
             result[v] = edge_refs[v * dim + u];
         }
         debug_assert!(result.iter().all(|&i| i != INVALID));
-        Some(result)
+        true
     }
 
 
@@ -819,24 +833,25 @@ fn get_move_path(s: &CheckPosition<'_>, fm: FullMove, c: bool) -> (Vec<Vec4>, i3
 pub struct HcCursor {
     pub ss: SearchSpace,
     pub order: HcOrdering,
+    sc: PointScratch,
 }
 
 impl HcCursor {
     pub fn new(ss: SearchSpace, order: HcOrdering) -> Self {
-        HcCursor { ss, order }
+        HcCursor { ss, order, sc: PointScratch::default() }
     }
 
     pub fn next(&mut self, info: &HcInfo, s: &State) -> Option<MoveSeq> {
         while !self.ss.is_empty() {
             let mut hc = self.ss.pop_back().unwrap();
-            let pt = match info.take_point(&mut hc, &self.order) {
-                Some(p) => p,
-                None => continue,
-            };
-            match info.find_problem(s, &pt, &hc) {
+            if !info.take_point(&mut hc, &self.order, &mut self.sc) {
+                continue;
+            }
+            let pt = &self.sc.point;
+            match info.find_problem(s, pt, &hc) {
                 None => {
-                    let act = info.to_action(&pt);
-                    self.ss.concat(hc.remove_point(&pt));
+                    let act = info.to_action(pt);
+                    hc.remove_point_with(pt, |h| self.ss.push_back(h));
                     return Some(act);
                 }
                 Some(problem) => {
@@ -857,10 +872,32 @@ impl HcCursor {
 /// varying the last axis first. Problems are removed from the popped hypercuboid only.
 /// Subspaces of the initial search space keep their precedence (later ones first).
 pub struct BestFirstCursor {
-    heap: std::collections::BinaryHeap<BfItem>,
+    heap: BfHeap,
     order: HcOrdering,
+    sc: PointScratch,
+}
+
+struct BfHeap {
+    heap: std::collections::BinaryHeap<BfItem>,
     scores: Vec<Vec<i32>>,
     seq: u64,
+}
+
+impl BfHeap {
+    fn push(&mut self, hc: Hc, class: i32) {
+        let _p = crate::misc::prof::scope(11);
+        let mut bound = 0i64;
+        for n in 0..hc.dimension() {
+            let sc = &self.scores[n];
+            let best = hc[n].iter().map(|i| sc.get(i as usize).copied().unwrap_or(0)).max();
+            match best {
+                Some(b) => bound += b as i64,
+                None => return,
+            }
+        }
+        self.seq += 1;
+        self.heap.push(BfItem { key: (-class, bound, self.seq), hc });
+    }
 }
 
 struct BfItem {
@@ -886,49 +923,31 @@ impl Ord for BfItem {
 
 impl BestFirstCursor {
     pub fn new(ss: SearchSpace, order: HcOrdering, scores: Vec<Vec<i32>>) -> Self {
-        let mut c = BestFirstCursor { heap: std::collections::BinaryHeap::new(), order, scores, seq: 0 };
+        let mut heap = BfHeap { heap: std::collections::BinaryHeap::new(), scores, seq: 0 };
         let n = ss.hcs.len();
         for (k, hc) in ss.hcs.into_iter().enumerate() {
-            c.push(hc, (n - 1 - k) as i32);
+            heap.push(hc, (n - 1 - k) as i32);
         }
-        c
-    }
-
-    fn push(&mut self, hc: Hc, class: i32) {
-        let _p = crate::misc::prof::scope(11);
-        let mut bound = 0i64;
-        for n in 0..hc.dimension() {
-            let sc = &self.scores[n];
-            let best = hc[n].iter().map(|i| sc.get(i as usize).copied().unwrap_or(0)).max();
-            match best {
-                Some(b) => bound += b as i64,
-                None => return,
-            }
-        }
-        self.seq += 1;
-        self.heap.push(BfItem { key: (-class, bound, self.seq), hc });
+        BestFirstCursor { heap, order, sc: PointScratch::default() }
     }
 
     pub fn next(&mut self, info: &HcInfo, s: &State) -> Option<MoveSeq> {
-        while let Some(BfItem { key, mut hc }) = self.heap.pop() {
+        while let Some(BfItem { key, mut hc }) = self.heap.heap.pop() {
             let class = -key.0;
-            let pt = match info.take_point(&mut hc, &self.order) {
-                Some(p) => p,
-                None => continue,
-            };
-            match info.find_problem(s, &pt, &hc) {
+            if !info.take_point(&mut hc, &self.order, &mut self.sc) {
+                continue;
+            }
+            let pt = &self.sc.point;
+            let heap = &mut self.heap;
+            match info.find_problem(s, pt, &hc) {
                 None => {
-                    let act = info.to_action(&pt);
-                    for h in hc.remove_point(&pt).hcs {
-                        self.push(h, class);
-                    }
+                    let act = info.to_action(pt);
+                    hc.remove_point_with(pt, |h| heap.push(h, class));
                     return Some(act);
                 }
                 Some(problem) => {
                     let _p = crate::misc::prof::scope(5);
-                    for h in hc.remove_slice(&problem).hcs {
-                        self.push(h, class);
-                    }
+                    hc.remove_slice_with(&problem, |h| heap.push(h, class));
                 }
             }
         }

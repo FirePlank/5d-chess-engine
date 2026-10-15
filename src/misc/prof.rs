@@ -9,6 +9,8 @@ pub const NAMES: [&str; 20] = [
 
 #[cfg(feature = "prof")]
 pub static COUNTERS: [std::sync::atomic::AtomicU64; 20] = [const { std::sync::atomic::AtomicU64::new(0) }; 20];
+#[cfg(feature = "prof")]
+pub static CALLS: [std::sync::atomic::AtomicU64; 20] = [const { std::sync::atomic::AtomicU64::new(0) }; 20];
 
 #[cfg(feature = "prof")]
 pub struct Scope(usize, std::time::Instant);
@@ -16,6 +18,7 @@ pub struct Scope(usize, std::time::Instant);
 impl Drop for Scope {
     fn drop(&mut self) {
         COUNTERS[self.0].fetch_add(self.1.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        CALLS[self.0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
 #[cfg(feature = "prof")]
@@ -33,8 +36,9 @@ pub fn report() -> String {
         let mut s = String::new();
         for (i, n) in NAMES.iter().enumerate() {
             let v = COUNTERS[i].load(std::sync::atomic::Ordering::Relaxed);
+            let calls = CALLS[i].load(std::sync::atomic::Ordering::Relaxed);
             if v > 0 {
-                s += &format!("  {:<14} {:>9.3}s\n", n, v as f64 * 1e-9);
+                s += &format!("  {:<14} {:>9.3}s {:>10} calls {:>8.2}us/call\n", n, v as f64 * 1e-9, calls, v as f64 * 1e-3 / calls.max(1) as f64);
             }
         }
         s
