@@ -14,6 +14,29 @@ fn targets(s: &State, l: i32, t: i32, x: i32, y: i32) -> Vec<(i32, i32, i32, i32
 }
 
 #[test]
+fn en_passant_right_after_a_timeline_starts() {
+    // The timeline starts on White's T5 board, so the double step b2-b4 has no board one full
+    // turn earlier; the capture is still the move right after it on the same board.
+    let s = parse_g_line("G 1 size 8x8 odd fen [4k3/8/8/8/2p5/8/1P*6/4K3:0:5:w] moves (0T5)b2b4 submit").unwrap();
+    assert!(targets(&s, 0, 5, 2, 3).contains(&(0, 5, 1, 2)), "c4xb3 e.p. missing: {:?}", targets(&s, 0, 5, 2, 3));
+    let mut t = s.clone();
+    assert!(t.apply_move::<false>(kairos::core::action::FullMove::parse("(0T5)c4b3").unwrap()));
+    assert_eq!(t.board(0, 6, false).get_fen(false), "4k3/8/8/8/8/1p6/8/4K3");
+}
+
+#[test]
+fn no_en_passant_against_a_pawn_that_did_not_just_double_step() {
+    // Black's d7 pawn leaves its start square by capturing on c6; the d5 pawn was already
+    // standing next to e5, so e5xd6 is not en passant.
+    let s = parse_g_line("G 1 size 8x8 odd fen [4k3/3p*4/2N5/3pP3/8/8/8/4K3:0:1:w] moves (0T1)e1e2 submit (0T1)d7c6 submit")
+        .unwrap();
+    assert!(!targets(&s, 0, 2, 4, 4).contains(&(0, 2, 3, 5)), "false e.p.: {:?}", targets(&s, 0, 2, 4, 4));
+    // The real double step d7-d5 next to the e5 pawn does allow it.
+    let s = parse_g_line("G 1 size 8x8 odd fen [4k3/3p*4/8/4P3/8/8/8/4K3:0:1:w] moves (0T1)e1e2 submit (0T1)d7d5 submit").unwrap();
+    assert!(targets(&s, 0, 2, 4, 4).contains(&(0, 2, 3, 5)), "e.p. missing: {:?}", targets(&s, 0, 2, 4, 4));
+}
+
+#[test]
 fn castling_on_boards_narrower_than_eight_files() {
     // King d1, rooks a1 and g1 on a 7-file board: both castlings are available.
     let s = parse_g_line("G 1 size 7x7 odd fen [r*2k*2r*/p*p*p*p*p*p*p*/7/7/7/P*P*P*P*P*P*P*/R*2K*2R*:0:1:w]").unwrap();

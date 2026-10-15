@@ -340,6 +340,11 @@ impl Multiverse {
         }
         Some(&tl.boards[idx as usize])
     }
+    /// The board half a turn before (l, t, c) on the same timeline, if the timeline has it.
+    #[inline(always)]
+    pub fn previous_board(&self, l: i32, t: i32, c: bool) -> Option<&Board> {
+        if c { self.get_board_ptr(l, t, false) } else { self.get_board_ptr(l, t - 1, true) }
+    }
     /// Board that must exist (panics otherwise).
     #[inline(always)]
     pub fn board(&self, l: i32, t: i32, c: bool) -> &Board {
@@ -640,13 +645,14 @@ impl Multiverse {
                 let patt = white_pawn_attack(pos);
                 let mut a = (patt & hostile) | (shift_north(z) & empty);
                 let r = (shift_west(z) | shift_east(z)) & hostile & b.lpawn();
-                let s = shift_north(shift_north(r)) & empty;
-                if s != 0 {
-                    let q = p + Vec4::new(0, 2, -1, 0);
-                    if self.inbound(q, c) {
-                        let b1 = self.board(q.l(), q.t(), c);
-                        let j = s & b1.umove() & !friendly & b1.lpawn();
-                        a |= shift_south(j) & empty;
+                if r != 0 {
+                    if let Some(b1) = self.previous_board(p.l(), p.t(), c) {
+                        // En passant: the opponent's last move on this board was a double step
+                        // from an unmoved pawn's square, passing the target, to beside this pawn.
+                        let e1 = !b1.occupied();
+                        let origin = empty & b1.umove() & b1.lpawn() & b1.hostile(c);
+                        let v = r & e1 & shift_south(empty & e1) & shift_south(shift_south(origin));
+                        a |= shift_north(v);
                     }
                 }
                 if piece == PAWN_UW || piece == BRAWN_UW {
@@ -658,13 +664,12 @@ impl Multiverse {
                 let patt = black_pawn_attack(pos);
                 let mut a = (patt & hostile) | (shift_south(z) & empty);
                 let r = (shift_west(z) | shift_east(z)) & hostile & b.lpawn();
-                let s = shift_south(shift_south(r)) & empty;
-                if s != 0 {
-                    let q = p + Vec4::new(0, 2, -1, 0);
-                    if self.inbound(q, c) {
-                        let b1 = self.board(q.l(), q.t(), c);
-                        let j = s & b1.umove() & !friendly & b1.lpawn();
-                        a |= shift_north(j) & empty;
+                if r != 0 {
+                    if let Some(b1) = self.previous_board(p.l(), p.t(), c) {
+                        let e1 = !b1.occupied();
+                        let origin = empty & b1.umove() & b1.lpawn() & b1.hostile(c);
+                        let v = r & e1 & shift_north(empty & e1) & shift_north(shift_north(origin));
+                        a |= shift_south(v);
                     }
                 }
                 if piece == PAWN_UB || piece == BRAWN_UB {
