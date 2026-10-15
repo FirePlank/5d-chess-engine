@@ -9,7 +9,7 @@
 use super::hce;
 use super::{Limits, OptionValue};
 use crate::core::action::{Action, FullMove, MoveSeq};
-use crate::core::bitboard::{marked_pos, pmask};
+use crate::core::bitboard::pmask;
 use crate::core::board::Board;
 use crate::core::check_position::{BoardOverlay, CheckKind, CheckPosition};
 use crate::core::hypercuboid::{has_physical_check, BestFirstCursor, Entry, HcCursor, HcInfo};
@@ -206,22 +206,6 @@ fn mover_victim(s: &State, m: &FullMove) -> (Piece, Piece) {
     (mover, victim)
 }
 
-/// Material the moved piece stands to lose on its result board: all of it when attacked and
-/// undefended, otherwise what the cheapest attacker gains by taking it.
-#[inline]
-fn exchange_loss(b: &Board, to: i32, player: bool, mover_value: i32) -> i32 {
-    let att = b.attacks_to(to) & !pmask(to);
-    let enemy = att & b.hostile(player);
-    if enemy == 0 {
-        return 0;
-    }
-    if att & b.hostile(!player) == 0 {
-        return mover_value;
-    }
-    let least = marked_pos(enemy).map(|sq| piece_value(kind_at(b, sq))).min().unwrap_or(0);
-    (mover_value - least).max(0)
-}
-
 #[inline]
 fn history_index_of(mover: Piece, m: &FullMove) -> usize {
     let pc = mover as usize;
@@ -347,11 +331,9 @@ impl AlphaBeta {
         match info.entry(n, i) {
             Entry::Null => -5,
             Entry::Departing { .. } => 0,
-            Entry::Physical { m, b } | Entry::Arriving { m, b, .. } => {
+            Entry::Physical { m, .. } | Entry::Arriving { m, .. } => {
                 let (mover, victim) = mover_victim(s, m);
-                // Per-board exchange check on the result board: moves that hang the moved
-                // piece sink on their board, so best-first combinations avoid them.
-                let mut sc = -10 * exchange_loss(b, m.to.xy(), s.get_present().1, piece_value(mover));
+                let mut sc = 0;
                 if victim != NO_PIECE {
                     sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
                 } else {
