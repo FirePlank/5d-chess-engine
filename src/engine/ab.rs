@@ -9,6 +9,7 @@ use super::{Engine, Limits, OptionValue};
 use crate::core::action::{Action, FullMove, MoveSeq};
 use crate::core::board::Board;
 use crate::core::hypercuboid::{Entry, HcCursor, HcInfo, SearchMode};
+use crate::core::bitboard::*;
 use crate::core::piece::*;
 use crate::core::state::{Mark, State};
 use crate::misc::integer_set::Index;
@@ -108,6 +109,8 @@ pub struct AbParams {
     pub merge_branches: bool,
     /// Extend the search one ply when the side to move is in check.
     pub check_ext: bool,
+    /// Order time travels that land with check first and other travels last.
+    pub travel_checks: bool,
 }
 
 impl Default for AbParams {
@@ -125,6 +128,7 @@ impl Default for AbParams {
             q_fastpath: false,
             merge_branches: false,
             check_ext: false,
+            travel_checks: false,
         }
     }
 }
@@ -229,6 +233,30 @@ fn mover_victim(s: &State, m: &FullMove) -> (Piece, Piece) {
     (mover, victim)
 }
 
+/// Whether a superphysical move lands with the arriving piece attacking an enemy royal on its
+/// destination board (physical attack only).
+fn landing_check(s: &State, m: &FullMove) -> bool {
+    let player = s.get_present().1;
+    let src = s.board(m.from.l(), m.from.t(), player);
+    let dst = s.board(m.to.l(), m.to.t(), player);
+    let royals = dst.royal() & dst.hostile(player);
+    if royals == 0 {
+        return false;
+    }
+    let sq = m.to.xy();
+    let occ = dst.occupied() | pmask(sq);
+    let att = match kind_at(src, m.from.xy()) {
+        PAWN_W | BRAWN_W => if player { black_pawn_attack(sq) } else { white_pawn_attack(sq) },
+        KNIGHT_W => knight_attack(sq),
+        KING_W | COMMON_KING_W => king_attack(sq),
+        ROOK_W => rook_attack(sq, occ),
+        BISHOP_W => bishop_attack(sq, occ),
+        QUEEN_W | PRINCESS_W | ROYAL_QUEEN_W => queen_attack(sq, occ),
+        _ => 0,
+    };
+    att & royals != 0
+}
+
 #[inline]
 fn history_index_of(mover: Piece, m: &FullMove) -> usize {
     let pc = mover as usize;
@@ -315,6 +343,9 @@ impl AlphaBeta {
                 if m.from.tl() != m.to.tl() && victim == NO_PIECE {
                     sc -= 300;
                 }
+                if self.params.travel_checks && m.from.tl() != m.to.tl() {
+                    sc += if landing_check(s, m) { 12_000 } else { -2_000 };
+                }
                 if wm == KING_W || wm == COMMON_KING_W {
                     sc -= 200;
                 }
@@ -358,6 +389,9 @@ impl AlphaBeta {
             }
             if m.from.tl() != m.to.tl() && victim == NO_PIECE {
                 sc -= 300;
+            }
+            if self.params.travel_checks && m.from.tl() != m.to.tl() {
+                sc += if landing_check(s, m) { 12_000 } else { -2_000 };
             }
         }
         if ply <= MAX_PLY {
@@ -721,6 +755,7 @@ impl Engine for AlphaBeta {
             ("q_fastpath", _) => self.params.q_fastpath = !matches!(value, OptionValue::Bool(false)),
             ("merge_branches", _) => self.params.merge_branches = !matches!(value, OptionValue::Bool(false)),
             ("check_ext", _) => self.params.check_ext = !matches!(value, OptionValue::Bool(false)),
+            ("travel_checks", _) => self.params.travel_checks = !matches!(value, OptionValue::Bool(false)),
             ("batch", Some(x)) => self.params.batch = (x as usize).max(1),
             ("pv_cap_mult", Some(x)) => self.params.pv_cap_mult = x as usize,
             ("Hash", Some(x)) => {
