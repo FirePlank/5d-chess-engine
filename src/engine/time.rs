@@ -7,7 +7,7 @@ use super::Limits;
 const MOVE_OVERHEAD: u64 = 20;
 /// Own actions expected to remain. 5D games are short: self-play games end after a median of
 /// 38 actions (19 per side) and only one in ten lasts past 34 per side.
-const MOVES_TO_GO: u64 = 18;
+const MOVES_TO_GO: u64 = 24;
 /// Below this many increments on the clock, an action gets most of one increment.
 const LOW_CLOCK_INCS: u64 = 6;
 
