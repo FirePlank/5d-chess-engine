@@ -155,7 +155,7 @@ impl Default for AbParams {
             check_order: 0,
             check_bonus: 30_000,
             check_order_depth: 64,
-            best_first: false,
+            best_first: true,
         }
     }
 }
