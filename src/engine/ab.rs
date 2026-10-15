@@ -58,9 +58,6 @@ const RFP_MARGIN: i32 = 200;
 const NMP_MIN_DEPTH: i32 = 3;
 const NMP_R: i32 = 3;
 const NMP_DIV: i32 = 3;
-/// Internal iterative reduction: a node this deep without a TT action is searched one ply
-/// shallower (its ordering is a guess anyway).
-const IIR_MIN_DEPTH: i32 = 4;
 const DEFAULT_HASH_MB: usize = 64;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -660,7 +657,7 @@ impl AlphaBeta {
         v
     }
 
-    fn negamax(&mut self, s: &mut State, mut depth: i32, ply: usize, mut alpha: i32, beta: i32, pv: bool) -> i32 {
+    fn negamax(&mut self, s: &mut State, depth: i32, ply: usize, mut alpha: i32, beta: i32, pv: bool) -> i32 {
         if depth <= 0 {
             return self.qsearch(s, ply, alpha, beta, QDEPTH);
         }
@@ -687,10 +684,6 @@ impl AlphaBeta {
             if !e.action.is_empty() {
                 tt_action = Some(e.action.clone());
             }
-        }
-
-        if tt_action.is_none() && depth >= IIR_MIN_DEPTH {
-            depth -= 1;
         }
 
         if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !Self::in_check(s) {
