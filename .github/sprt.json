@@ -1,0 +1,12 @@
+{
+  "name": "future_dep_d3",
+  "old": "db34b9c40f6698dcf62de6a389a655b298c14581",
+  "games": 12000,
+  "shards": 40,
+  "tc": "movetime 100",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}
