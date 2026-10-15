@@ -42,7 +42,7 @@ pub fn naive_actions_budget(s: &State, limit: usize, budget: u64) -> Option<Vec<
     let mut out = Vec::new();
     let k = if player { lmax + 1 } else { lmin - 1 };
     let mut nodes = budget;
-    rec(s, &mut Vec::new(), k, false, player, &mut out, limit, &mut nodes);
+    rec(s, &mut MoveSeq::new(), k, false, player, &mut out, limit, &mut nodes);
     if nodes == 0 { None } else { Some(out) }
 }
 

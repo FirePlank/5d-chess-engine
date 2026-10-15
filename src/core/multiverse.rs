@@ -138,6 +138,8 @@ pub struct Timeline {
     /// First stored half-turn index, `i32::MAX` when empty.
     pub start: i32,
     pub boards: Vec<Board>,
+    /// `board_key` of each board (kept so undoing a move needs no rehash).
+    keys: Vec<u64>,
 }
 impl Timeline {
     #[inline(always)]
@@ -231,7 +233,7 @@ impl Multiverse {
         for (u, slot) in slots.into_iter().enumerate() {
             let first = slot.iter().position(|b| b.is_some());
             match first {
-                None => lines.push(Timeline { start: i32::MAX, boards: Vec::new() }),
+                None => lines.push(Timeline { start: i32::MAX, boards: Vec::new(), keys: Vec::new() }),
                 Some(s) => {
                     let mut bs = Vec::with_capacity(slot.len() - s);
                     for (k, b) in slot[s..].iter().enumerate() {
@@ -246,7 +248,7 @@ impl Multiverse {
                             }
                         }
                     }
-                    lines.push(Timeline { start: s as i32, boards: bs });
+                    lines.push(Timeline { start: s as i32, boards: bs, keys: Vec::new() });
                 }
             }
         }
@@ -268,9 +270,11 @@ impl Multiverse {
             hash: 0,
         };
         let mut h = 0u64;
-        for (u, tl) in m.lines.iter().enumerate() {
+        for (u, tl) in m.lines.iter_mut().enumerate() {
             for (k, b) in tl.boards.iter().enumerate() {
-                h ^= board_key(u_to_l(u as i32), tl.start + k as i32, b);
+                let key = board_key(u_to_l(u as i32), tl.start + k as i32, b);
+                tl.keys.push(key);
+                h ^= key;
             }
         }
         m.hash = h;
@@ -357,7 +361,9 @@ impl Multiverse {
     pub fn append_board(&mut self, l: i32, b: Board) {
         let u = l_to_u(l) as usize;
         let tl = &mut self.lines[u];
-        self.hash ^= board_key(l, tl.start + tl.boards.len() as i32, &b);
+        let key = board_key(l, tl.start + tl.boards.len() as i32, &b);
+        self.hash ^= key;
+        tl.keys.push(key);
         tl.boards.push(b);
     }
     #[inline(always)]
@@ -369,14 +375,16 @@ impl Multiverse {
         let u = l_to_u(l) as usize;
         let v = tc_to_v(t, c);
         if u >= self.lines.len() {
-            self.lines.resize(u + 1, Timeline { start: i32::MAX, boards: Vec::new() });
+            self.lines.resize(u + 1, Timeline { start: i32::MAX, boards: Vec::new(), keys: Vec::new() });
         }
         self.l_min = self.l_min.min(l);
         self.l_max = self.l_max.max(l);
         let tl = &mut self.lines[u];
         assert!(tl.boards.is_empty(), "insert_board on a populated timeline");
         tl.start = v;
-        self.hash ^= board_key(l, v, &b);
+        let key = board_key(l, v, &b);
+        self.hash ^= key;
+        tl.keys.push(key);
         tl.boards.push(b);
     }
 
@@ -403,21 +411,21 @@ impl Multiverse {
     /// Undo the most recent `insert_board` (used by make/unmake).
     pub fn remove_last_line(&mut self, l: i32, saved_ranges: (i32, i32, i32, i32)) {
         let u = l_to_u(l) as usize;
-        if let Some(b) = self.lines[u].boards.first() {
-            self.hash ^= board_key(l, self.lines[u].start, b);
+        let tl = &mut self.lines[u];
+        if let Some(&key) = tl.keys.first() {
+            self.hash ^= key;
         }
-        self.lines[u].boards.clear();
-        self.lines[u].start = i32::MAX;
-        if u + 1 == self.lines.len() {
-            self.lines.pop();
-        }
+        // The emptied timeline keeps its storage for the next branch.
+        tl.boards.clear();
+        tl.keys.clear();
+        tl.start = i32::MAX;
         (self.l_min, self.l_max, self.active_min, self.active_max) = saved_ranges;
     }
     pub fn pop_board(&mut self, l: i32) {
         let u = l_to_u(l) as usize;
         let tl = &mut self.lines[u];
-        if let Some(b) = tl.boards.pop() {
-            self.hash ^= board_key(l, tl.start + tl.boards.len() as i32, &b);
+        if tl.boards.pop().is_some() {
+            self.hash ^= tl.keys.pop().unwrap();
         }
     }
     #[inline(always)]
@@ -473,6 +481,19 @@ impl Multiverse {
         let tl = &self.lines[l_to_u(l) as usize];
         let v = tc_to_v(a.t(), color);
         tl.start <= v && v <= tl.end()
+    }
+
+    /// The board under `a` when `inbound(a, color)`.
+    #[inline(always)]
+    pub fn board_in(&self, a: Vec4, color: bool) -> Option<&Board> {
+        let l = a.l();
+        if a.outbound() || l < self.l_min || l > self.l_max {
+            return None;
+        }
+        let tl = &self.lines[l_to_u(l) as usize];
+        let v = tc_to_v(a.t(), color);
+        // An empty timeline has `start == i32::MAX`.
+        if v < tl.start { None } else { tl.boards.get((v - tl.start) as usize) }
     }
 
     #[inline(always)]
@@ -693,8 +714,8 @@ impl Multiverse {
         for &d in dirs {
             let mut remaining = z;
             let mut p1 = p0 + d;
-            while remaining != 0 && self.inbound(p1, c) {
-                let b1 = self.board(p1.l(), p1.t(), c);
+            while remaining != 0 {
+                let Some(b1) = self.board_in(p1, c) else { break };
                 remaining &= !b1.friendly(c);
                 if remaining != 0 {
                     emit(p1.tl(), remaining);
@@ -723,8 +744,7 @@ impl Multiverse {
             for n in 1..8 {
                 let cm = copy_mask_fn(pos, n);
                 q = q + d;
-                if self.inbound(q, c) {
-                    let b = self.board(q.l(), q.t(), c);
+                if let Some(b) = self.board_in(q, c) {
                     occ |= cm & b.occupied();
                     fri |= cm & b.friendly(c);
                 } else {
@@ -759,8 +779,7 @@ impl Multiverse {
             KING_W | KING_B | COMMON_KING_W | COMMON_KING_B | KING_UW | KING_UB => {
                 for d in BOTH_TL {
                     let q = p + d;
-                    if self.inbound(q, c) {
-                        let b = self.board(q.l(), q.t(), c);
+                    if let Some(b) = self.board_in(q, c) {
                         let bb = king_jump_attack(p.xy()) & !b.friendly(c);
                         if bb != 0 {
                             out.push((q.tl(), bb));
@@ -795,8 +814,7 @@ impl Multiverse {
                 let fl = if black { 1 } else { -1 };
                 for d in [Vec4::new(0, 0, 1, fl), Vec4::new(0, 0, -1, fl)] {
                     let q = p + d;
-                    if self.inbound(q, c) {
-                        let b = self.board(q.l(), q.t(), c);
+                    if let Some(b) = self.board_in(q, c) {
                         let bb = z & b.hostile(c);
                         if bb != 0 {
                             out.push((q.tl(), bb));
@@ -804,13 +822,11 @@ impl Multiverse {
                     }
                 }
                 let q = p + Vec4::new(0, 0, 0, fl);
-                if self.inbound(q, c) {
-                    let b = self.board(q.l(), q.t(), c);
+                if let Some(b) = self.board_in(q, c) {
                     let mut bb = z & !b.occupied();
                     if bb != 0 && unmoved {
                         let r = q + Vec4::new(0, 0, 0, fl);
-                        if self.inbound(r, c) {
-                            let b1 = self.board(r.l(), r.t(), c);
+                        if let Some(b1) = self.board_in(r, c) {
                             let bc = z & !b1.occupied();
                             if bc != 0 {
                                 out.push((r.tl(), bc));
@@ -828,8 +844,7 @@ impl Multiverse {
                 }
                 if brawn {
                     let q = p + Vec4::new(0, if black { -1 } else { 1 }, -1, 0);
-                    if self.inbound(q, c) {
-                        let b = self.board(q.l(), q.t(), c);
+                    if let Some(b) = self.board_in(q, c) {
                         let bb = pmask(q.xy()) & b.hostile(c);
                         if bb != 0 {
                             out.push((q.tl(), bb));
@@ -840,8 +855,7 @@ impl Multiverse {
             KNIGHT_W | KNIGHT_B => {
                 for delta in SP_KNIGHT {
                     let p1 = p + delta;
-                    if self.inbound(p1, c) {
-                        let b1 = self.board(p1.l(), p1.t(), c);
+                    if let Some(b1) = self.board_in(p1, c) {
                         let bb = z & !b1.friendly(c);
                         if bb != 0 {
                             out.push((p1.tl(), bb));
@@ -850,8 +864,7 @@ impl Multiverse {
                 }
                 for d in ORTHOGONAL_TL {
                     let q = p + d;
-                    if self.inbound(q, c) {
-                        let b = self.board(q.l(), q.t(), c);
+                    if let Some(b) = self.board_in(q, c) {
                         let bb = knight_jump1_attack(p.xy()) & !b.friendly(c);
                         if bb != 0 {
                             out.push((q.tl(), bb));
@@ -860,8 +873,7 @@ impl Multiverse {
                 }
                 for d in DOUBLE_ORTHOGONAL_TL {
                     let q = p + d;
-                    if self.inbound(q, c) {
-                        let b = self.board(q.l(), q.t(), c);
+                    if let Some(b) = self.board_in(q, c) {
                         let bb = knight_jump2_attack(p.xy()) & !b.friendly(c);
                         if bb != 0 {
                             out.push((q.tl(), bb));

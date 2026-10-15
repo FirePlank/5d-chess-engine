@@ -12,14 +12,14 @@ use super::{Limits, OptionValue};
 use crate::core::action::{Action, FullMove, MoveSeq};
 use crate::core::bitboard::{marked_pos, pmask};
 use crate::core::board::Board;
-use crate::core::check_position::{BoardOverlay, CheckKind, CheckPosition};
-use crate::core::hypercuboid::{has_physical_check, BestFirstCursor, Entry, HcCursor, HcInfo};
+use crate::core::check_position::{BoardOverlay, CheckBuf, CheckKind, CheckPosition, SpReach};
+use crate::core::hypercuboid::{has_physical_check, BestFirstCursor, Entry, HcCursor, HcInfo, NeedBranch};
 use crate::core::multiverse::next_turn;
 use crate::core::piece::*;
 use crate::core::state::{Mark, State};
 use crate::misc::geometry::SearchSpace;
-use crate::misc::integer_set::{Index, IntegerSet};
-use crate::misc::ordering::HcOrdering;
+use crate::misc::integer_set::Index;
+use crate::misc::ordering::{AxisOrders, HcOrdering};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -62,13 +62,16 @@ const NMP_DIV: i32 = 3;
 const DEFAULT_HASH_MB: usize = 64;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 enum Bound {
+    /// An unused slot.
+    Empty = 0,
     Exact,
     Lower,
     Upper,
 }
 
-#[derive(Clone)]
+/// All-zero bytes are an empty entry.
 struct TtEntry {
     key: u64,
     depth: i16,
@@ -77,11 +80,49 @@ struct TtEntry {
     action: MoveSeq,
 }
 
+/// The transposition table: zero-allocated, so creating or clearing it costs nothing until
+/// slots are used.
+struct TtTable {
+    entries: Vec<TtEntry>,
+    /// Some stored action spilled to the heap (entries then need dropping one by one).
+    spilled: bool,
+}
+
+impl TtTable {
+    fn new(mb: usize) -> Self {
+        Self::with_len(((mb << 20) / 64).next_power_of_two())
+    }
+
+    /// An empty table of `n` slots.
+    fn with_len(n: usize) -> Self {
+        let layout = std::alloc::Layout::array::<TtEntry>(n).expect("tt size");
+        // SAFETY: an all-zero `TtEntry` is valid (empty bound, empty inline action), and the
+        // block is allocated with the layout `Vec` uses for this capacity.
+        let entries = unsafe {
+            let p = std::alloc::alloc_zeroed(layout) as *mut TtEntry;
+            if p.is_null() {
+                std::alloc::handle_alloc_error(layout);
+            }
+            Vec::from_raw_parts(p, n, n)
+        };
+        TtTable { entries, spilled: false }
+    }
+}
+
+impl Drop for TtTable {
+    fn drop(&mut self) {
+        if !self.spilled {
+            // SAFETY: no entry owns heap memory, so nothing is leaked by skipping their drops.
+            unsafe { self.entries.set_len(0) };
+        }
+    }
+}
+
 pub struct AlphaBeta {
     hce: hce::Weights,
     /// Exchange values for the per-board capture search at quiescent leaves.
     local_vals: super::local::Values,
-    tt: Vec<Option<TtEntry>>,
+    tt: TtTable,
     history: Vec<i32>,
     killers: Vec<[Option<MoveSeq>; 2]>,
     nodes: u64,
@@ -92,6 +133,12 @@ pub struct AlphaBeta {
     /// The root is won or lost by enough (or by mate) that pruning which hides long mating
     /// lines is switched off (Stockfish's seekMate).
     seek_mate: bool,
+    /// Per-node buffers, reused down the recursion.
+    bufs: Vec<Box<NodeBufs>>,
+    /// Evaluation terms of recently seen boards.
+    terms: Box<hce::TermCache>,
+    /// Whether the position the next `negamax` call searches is in check, when known.
+    known_check: Option<bool>,
 }
 
 // The raw stop pointer is only dereferenced during `find_best_move`, while the borrow it
@@ -125,10 +172,6 @@ fn mate_from_tt(score: i32, ply: usize) -> i32 {
     }
 }
 
-fn tt_table(mb: usize) -> Vec<Option<TtEntry>> {
-    vec![None; ((mb << 20) / 64).next_power_of_two()]
-}
-
 /// Static piece values for capture ordering (MVV-LVA).
 #[inline]
 fn piece_value(pc: Piece) -> i32 {
@@ -148,64 +191,25 @@ fn piece_value(pc: Piece) -> i32 {
     }
 }
 
-/// White-normalized piece on `sq` (same as `to_white(piece_name(b.get_piece(sq)))`), decoded
-/// straight from the bitboards.
-#[inline(always)]
-pub(crate) fn kind_at(b: &Board, sq: i32) -> Piece {
-    let z = 1u64 << sq;
-    if b.occupied() & z == 0 {
-        return NO_PIECE;
-    }
-    if b.lpawn() & z != 0 {
-        return if b.lrawn() & z != 0 { BRAWN_W } else { PAWN_W };
-    }
-    if b.lknight() & z != 0 {
-        return KNIGHT_W;
-    }
-    if b.lking() & z != 0 {
-        return if b.royal() & z != 0 { KING_W } else { COMMON_KING_W };
-    }
-    let (r, bi, d) = (b.lrook() & z != 0, b.lbishop() & z != 0, b.ldragon() & z != 0);
-    if r && d {
-        return if b.royal() & z != 0 { ROYAL_QUEEN_W } else { QUEEN_W };
-    }
-    if r && bi {
-        return PRINCESS_W;
-    }
-    if r {
-        return ROOK_W;
-    }
-    if bi {
-        return BISHOP_W;
-    }
-    if b.lunicorn() & z != 0 {
-        return UNICORN_W;
-    }
-    if d {
-        return DRAGON_W;
-    }
-    WALL_PIECE
-}
-
 /// (moving piece, captured piece), white-normalized; matches `moved_piece`/`captured_piece`.
 #[inline]
 fn mover_victim(s: &State, m: &FullMove) -> (Piece, Piece) {
     let player = s.get_present().1;
     let src = s.board(m.from.l(), m.from.t(), player);
-    let mover = kind_at(src, m.from.xy());
+    let mover = src.kind(m.from.xy());
     let victim = if m.from.tl() == m.to.tl() {
         if mover == KING_W && (m.from.x() - m.to.x()).abs() > 1 {
             NO_PIECE
         } else {
-            let d = kind_at(src, m.to.xy());
+            let d = src.kind(m.to.xy());
             if d == NO_PIECE && (mover == PAWN_W || mover == BRAWN_W) && m.from.x() != m.to.x() {
-                kind_at(src, ppos(m.to.x(), m.from.y()))
+                src.kind(ppos(m.to.x(), m.from.y()))
             } else {
                 d
             }
         }
     } else {
-        kind_at(s.board(m.to.l(), m.to.t(), player), m.to.xy())
+        s.board(m.to.l(), m.to.t(), player).kind(m.to.xy())
     };
     (mover, victim)
 }
@@ -222,7 +226,7 @@ fn exchange_loss(b: &Board, to: i32, player: bool, mover_value: i32) -> i32 {
     if att & b.hostile(!player) == 0 {
         return mover_value;
     }
-    let least = marked_pos(enemy).map(|sq| piece_value(kind_at(b, sq))).min().unwrap_or(0);
+    let least = marked_pos(enemy).map(|sq| piece_value(b.kind(sq))).min().unwrap_or(0);
     (mover_value - least).max(0)
 }
 
@@ -245,11 +249,25 @@ struct CheckDetector<'a> {
     info: &'a HcInfo,
     s: &'a State,
     checks: Option<CheckPosition<'a>>,
+    buf: CheckBuf,
+    /// Superphysical reach from the next board of each line with physical moves.
+    reach: Vec<(i32, SpReach)>,
 }
 
 impl<'a> CheckDetector<'a> {
-    fn new(info: &'a HcInfo, s: &'a State) -> Self {
-        CheckDetector { info, s, checks: None }
+    fn new(info: &'a HcInfo, s: &'a State, scratch: &mut OrderScratch) -> Self {
+        let mut reach = std::mem::take(&mut scratch.reach);
+        reach.clear();
+        CheckDetector { info, s, checks: None, buf: std::mem::take(&mut scratch.checks), reach }
+    }
+
+    /// Give the buffers back to `scratch`.
+    fn finish(self, scratch: &mut OrderScratch) {
+        scratch.checks = match self.checks {
+            Some(c) => c.into_buf(),
+            None => self.buf,
+        };
+        scratch.reach = self.reach;
     }
 
     fn gives_check(&mut self, axis: usize, coord: Index) -> bool {
@@ -261,10 +279,26 @@ impl<'a> CheckDetector<'a> {
         {
             return true;
         }
-        let checks = self.checks.get_or_insert_with(|| CheckPosition::for_move_candidates(s));
+        if self.checks.is_none() {
+            self.checks = Some(CheckPosition::for_move_candidates_in(s, std::mem::take(&mut self.buf)));
+        }
+        let checks = self.checks.as_mut().unwrap();
         let player = s.get_present().1;
         let mv = mb.mv;
         let at = next_turn((mv.to.t(), player));
+        if mb.departure.is_none() {
+            // A physical move: only the moved piece's reach from its line's next board counts,
+            // and that board's surroundings are the same for every move on the line.
+            let l = mv.to.l();
+            let i = match self.reach.iter().position(|r| r.0 == l) {
+                Some(i) => i,
+                None => {
+                    self.reach.push((l, checks.sp_reach(l, 2 * at.0 + at.1 as i32 + 1)));
+                    self.reach.len() - 1
+                }
+            };
+            return self.reach[i].1.attacks(mb.result, mv.to.xy());
+        }
         let arrival = BoardOverlay { l: mv.new_position(s).l(), t: at.0, c: at.1, value: mb.result };
         let mask = pmask(mv.to.xy());
         let departure = mb.departure.map(|d| {
@@ -275,11 +309,37 @@ impl<'a> CheckDetector<'a> {
     }
 }
 
-/// Per-axis ordering of a node: axis orders (best first) and each coordinate's score
-/// (indexed by coordinate).
-struct NodeOrder {
-    order: HcOrdering,
-    scores: Vec<Vec<i32>>,
+/// Scratch of `node_ordering`.
+#[derive(Default)]
+struct OrderScratch {
+    sort: Vec<u64>,
+    checks: CheckBuf,
+    reach: Vec<(i32, SpReach)>,
+    /// History values of the branch coordinates, by coordinate, as they were when the
+    /// node was ordered (the branch axes may be scored later).
+    branch_history: Vec<i32>,
+}
+
+/// How `node_ordering` treats the branch axes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BranchOrder {
+    /// Score and order them now.
+    Now,
+    /// Only score the null coordinate and record the history values the rest need.
+    Defer,
+    /// Score and order them with the recorded history values.
+    Recorded,
+}
+
+/// Buffers of one search node, reused by later nodes at the same recursion depth.
+#[derive(Default)]
+struct NodeBufs {
+    info: HcInfo,
+    cursor: BestFirstCursor,
+    evasions: HcCursor,
+    order: OrderScratch,
+    /// Coordinate scores of the evasion ordering (unused by its cursor).
+    evasion_scores: Vec<Vec<i32>>,
 }
 
 impl AlphaBeta {
@@ -288,7 +348,7 @@ impl AlphaBeta {
         AlphaBeta {
             local_vals: super::local::values_from(&hce[hce::fi::MAT_A..hce::fi::MAT_A + 10]),
             hce,
-            tt: tt_table(DEFAULT_HASH_MB),
+            tt: TtTable::new(DEFAULT_HASH_MB),
             history: vec![0; 1 << 16],
             killers: vec![[None, None]; MAX_PLY + 1],
             nodes: 0,
@@ -297,13 +357,16 @@ impl AlphaBeta {
             aborted: false,
             stop_ptr: std::ptr::null(),
             seek_mate: false,
+            bufs: Vec::new(),
+            terms: Box::default(),
+            known_check: None,
         }
     }
 
     #[inline]
-    fn static_eval(&self, s: &State) -> i32 {
+    fn static_eval(&mut self, s: &State) -> i32 {
         let _p = crate::misc::prof::scope(9);
-        let sd = hce::sides(s);
+        let sd = hce::sides_with(s, &mut *self.terms);
         let f = hce::features_from(&sd, s, hce::needs_checks(&self.hce));
         let base = hce::score(&f, &self.hce, s.get_present().1);
         match super::evalnet::embedded() {
@@ -314,21 +377,24 @@ impl AlphaBeta {
 
     #[inline]
     fn tt_slot(&self, key: u64) -> usize {
-        (key as usize) & (self.tt.len() - 1)
+        (key as usize) & (self.tt.entries.len() - 1)
     }
 
     fn tt_probe(&self, key: u64) -> Option<&TtEntry> {
-        self.tt[self.tt_slot(key)].as_ref().filter(|e| e.key == key)
+        let e = &self.tt.entries[self.tt_slot(key)];
+        if e.bound != Bound::Empty && e.key == key { Some(e) } else { None }
     }
 
     fn tt_store(&mut self, key: u64, depth: i32, bound: Bound, score: i32, action: &MoveSeq) {
         let slot = self.tt_slot(key);
-        let replace = match &self.tt[slot] {
-            None => true,
-            Some(e) => e.key != key || depth as i16 >= e.depth - 1 || bound == Bound::Exact,
-        };
-        if replace {
-            self.tt[slot] = Some(TtEntry { key, depth: depth as i16, bound, score, action: action.clone() });
+        let e = &mut self.tt.entries[slot];
+        if e.bound == Bound::Empty || e.key != key || depth as i16 >= e.depth - 1 || bound == Bound::Exact {
+            e.key = key;
+            e.depth = depth as i16;
+            e.bound = bound;
+            e.score = score;
+            e.action.assign(action);
+            self.tt.spilled |= e.action.spilled();
         }
     }
 
@@ -348,19 +414,20 @@ impl AlphaBeta {
     }
 
     /// Ordering score of one HC coordinate.
-    fn coord_score(&self, s: &State, info: &HcInfo, n: usize, i: Index, checks: &mut Option<CheckDetector>) -> i32 {
+    /// Ordering score of one HC coordinate; `history` overrides the history table's value.
+    fn coord_score(&self, s: &State, info: &HcInfo, n: usize, i: Index, checks: &mut Option<CheckDetector>, history: Option<i32>) -> i32 {
         match info.entry(n, i) {
             Entry::Null => -5,
             Entry::Departing { .. } => 0,
-            Entry::Physical { m, b } | Entry::Arriving { m, b, .. } => {
-                let (mover, victim) = mover_victim(s, m);
+            Entry::Physical { m, b, mover, victim } | Entry::Arriving { m, b, mover, victim, .. } => {
+                let (mover, victim) = (*mover, *victim);
                 // Per-board exchange check on the result board: moves that hang the moved
                 // piece sink on their board, so best-first combinations avoid them.
                 let mut sc = -10 * exchange_loss(b, m.to.xy(), s.get_present().1, piece_value(mover));
                 if victim != NO_PIECE {
                     sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
                 } else {
-                    sc += self.history[history_index_of(mover, m)].clamp(-5000, 5000);
+                    sc += history.unwrap_or_else(|| self.history[history_index_of(mover, m)]).clamp(-5000, 5000);
                 }
                 if (mover == PAWN_W || mover == BRAWN_W) && (m.to.y() == 0 || m.to.y() == s.get_board_size().1 - 1) {
                     sc += 9000;
@@ -379,79 +446,127 @@ impl AlphaBeta {
         }
     }
 
-    /// Node ordering; checking semimoves are detected (and go first) when `checks`.
-    fn node_ordering(&self, s: &State, info: &HcInfo, checks: bool) -> NodeOrder {
+    /// Node ordering into `orders` (per axis, coordinates best first) and `scores` (per axis,
+    /// each coordinate's score) of the axes in `axes`; checking semimoves are detected (and go
+    /// first) when `checks`.
+    #[allow(clippy::too_many_arguments)]
+    fn node_ordering(
+        &self,
+        s: &State,
+        info: &HcInfo,
+        checks: bool,
+        scratch: &mut OrderScratch,
+        orders: &mut AxisOrders,
+        scores: &mut Vec<Vec<i32>>,
+        axes: std::ops::Range<usize>,
+        branch: BranchOrder,
+    ) {
         let _p = crate::misc::prof::scope(6);
         let u = info.get_universe();
-        let mut orders = Vec::with_capacity(u.dimension());
-        let mut scores: Vec<Vec<i32>> = Vec::with_capacity(u.dimension());
-        // Branch axes share entries; score them once.
-        let mut branch_cache: Option<(Vec<Index>, Vec<i32>)> = None;
-        let mut detector = if checks { Some(CheckDetector::new(info, s)) } else { None };
-        for n in 0..u.dimension() {
-            if n >= info.first_branch_axis() {
-                if let Some((o, sc)) = &branch_cache {
-                    orders.push(o.clone());
-                    scores.push(sc.clone());
-                    continue;
-                }
-            }
-            let mut v: Vec<(i32, Index)> = u[n].iter().map(|i| (self.coord_score(s, info, n, i, &mut detector), i)).collect();
-            let mut sc = vec![0i32; v.iter().map(|x| x.1 as usize + 1).max().unwrap_or(0)];
-            for &(score, i) in &v {
-                sc[i as usize] = score;
-            }
-            v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-            let o: Vec<Index> = v.into_iter().map(|x| x.1).collect();
-            if n >= info.first_branch_axis() {
-                branch_cache = Some((o.clone(), sc.clone()));
-            }
-            orders.push(o);
-            scores.push(sc);
+        // Branch axes share entries: they are scored once and share the first one's lists.
+        let fba = info.first_branch_axis();
+        let dim = u.dimension().min(fba + 1);
+        orders.shared = fba;
+        let orders = &mut orders.lists;
+        if orders.len() < dim {
+            orders.resize_with(dim, Vec::new);
         }
-        NodeOrder { order: HcOrdering::Precomputed(orders), scores }
+        if scores.len() < dim {
+            scores.resize_with(dim, Vec::new);
+        }
+        let mut detector = if checks { Some(CheckDetector::new(info, s, scratch)) } else { None };
+        for n in axes.start..axes.end.min(dim) {
+            let sc = &mut scores[n];
+            sc.clear();
+            if n == fba && branch == BranchOrder::Defer {
+                // Only the null coordinate is scored (all a branch axis restricted to it
+                // needs); the history values the others will need are recorded as of now.
+                let hist = &mut scratch.branch_history;
+                hist.clear();
+                hist.resize(u[n].max().map(|i| i as usize + 1).unwrap_or(0), 0);
+                for i in u[n].iter() {
+                    if let Some((m, mover)) = info.branch_arrival(i) {
+                        hist[i as usize] = self.history[history_index_of(mover, &m)];
+                    }
+                }
+                sc.push(self.coord_score(s, info, n, 0, &mut detector, None));
+                continue;
+            }
+            sc.resize(u[n].max().map(|i| i as usize + 1).unwrap_or(0), 0);
+            // Sort keys: score descending, then coordinate ascending.
+            let v = &mut scratch.sort;
+            v.clear();
+            for i in u[n].iter() {
+                let recorded = if n == fba && branch == BranchOrder::Recorded { Some(scratch.branch_history[i as usize]) } else { None };
+                let score = self.coord_score(s, info, n, i, &mut detector, recorded);
+                sc[i as usize] = score;
+                v.push(((!((score as u32) ^ 0x8000_0000) as u64) << 32) | i as u64);
+            }
+            v.sort_unstable();
+            let o = &mut orders[n];
+            o.clear();
+            o.extend(v.iter().map(|&k| k as u32 as Index));
+        }
+        if let Some(d) = detector {
+            d.finish(scratch);
+        }
     }
 
     /// Per-axis order of a node's coordinates (diagnostics).
     pub fn ordering(&self, s: &State, info: &HcInfo) -> HcOrdering {
-        self.node_ordering(s, info, true).order
+        let mut orders = AxisOrders::default();
+        self.node_ordering(s, info, true, &mut OrderScratch::default(), &mut orders, &mut Vec::new(), 0..usize::MAX, BranchOrder::Now);
+        HcOrdering::Precomputed(orders)
     }
 
     /// Moves on boards the side to move doesn't have to play (ahead of the present, or on
     /// inactive timelines) are left out: only the null coordinate stay on those axes.
-    fn without_future(s: &State, info: &HcInfo, ss: SearchSpace) -> SearchSpace {
+    fn without_future(s: &State, info: &HcInfo, ss: &SearchSpace) -> SearchSpace {
         let present = s.get_present();
         let (amin, amax) = s.get_active_range();
         let (lo, hi) = s.get_lines_range();
-        let mut allowed: Vec<(usize, IntegerSet)> = Vec::new();
-        for l in lo..=hi {
-            let Some(n) = info.line_to_axis(l) else { continue };
-            if l >= amin && l <= amax && s.get_timeline_end(l) == present {
-                continue;
-            }
-            let set = IntegerSet::singleton(0);
-            allowed.push((n, set));
-        }
-        if allowed.is_empty() {
-            return ss;
+        let optional = |l: i32| -> Option<usize> {
+            let n = info.line_to_axis(l)?;
+            if l >= amin && l <= amax && s.get_timeline_end(l) == present { None } else { Some(n) }
+        };
+        if !(lo..=hi).any(|l| optional(l).is_some()) {
+            return ss.clone();
         }
         let mut out = SearchSpace::default();
-        'hc: for mut hc in ss.hcs {
-            for (n, set) in &allowed {
-                hc[*n].and_assign(set);
-                if hc[*n].is_empty() {
-                    continue 'hc;
+        'hc: for hc in &ss.hcs {
+            for l in lo..=hi {
+                if let Some(n) = optional(l) {
+                    if !hc[n].contains(0) {
+                        continue 'hc;
+                    }
                 }
             }
-            out.hcs.push(hc);
+            let mut h = hc.clone();
+            for l in lo..=hi {
+                if let Some(n) = optional(l) {
+                    h[n].assign_singleton(0);
+                }
+            }
+            out.hcs.push(h);
         }
         out
     }
 
-    /// Action generator for an interior node or the root.
-    fn action_gen(&self, s: &State, info: &HcInfo, ss: SearchSpace) -> BestFirstCursor {
-        let no = self.node_ordering(s, info, true);
-        BestFirstCursor::new(ss, no.order, no.scores)
+    /// Order the node's coordinates into `cursor` and start it on `ss`.
+    /// Order the node's coordinates into `cursor` and start it on `ss`; with `defer`, the
+    /// branch axes are ordered once the cursor needs them (`next_with` and `branch_order`).
+    fn start_actions(&self, s: &State, info: &HcInfo, cursor: &mut BestFirstCursor, scratch: &mut OrderScratch, ss: SearchSpace, defer: bool) {
+        let (orders, scores) = cursor.ordering_mut();
+        let branch = if defer { BranchOrder::Defer } else { BranchOrder::Now };
+        self.node_ordering(s, info, true, scratch, orders, scores, 0..usize::MAX, branch);
+        cursor.set_branch_pending(defer && info.first_branch_axis() < info.dimension());
+        cursor.restart(info, ss);
+    }
+
+    /// The deferred branch-axis ordering of `start_actions`.
+    fn branch_order(&self, s: &State, info: &HcInfo, scratch: &mut OrderScratch, orders: &mut AxisOrders, scores: &mut Vec<Vec<i32>>) {
+        let fba = info.first_branch_axis();
+        self.node_ordering(s, info, true, scratch, orders, scores, fba..fba + 1, BranchOrder::Recorded);
     }
 
     fn action_score(&self, s: &State, act: &MoveSeq, ply: usize) -> i32 {
@@ -480,7 +595,8 @@ impl AlphaBeta {
     /// The first `cap` actions of `s` in the order an interior node would try them (diagnostics).
     pub fn node_order(&self, s: &State, cap: usize) -> Vec<MoveSeq> {
         let (info, ss) = HcInfo::build_hc(s);
-        let mut agen = self.action_gen(s, &info, ss);
+        let mut agen = BestFirstCursor::default();
+        self.start_actions(s, &info, &mut agen, &mut OrderScratch::default(), ss, false);
         let mut out = Vec::new();
         let mut exhausted = false;
         while out.len() < cap && !exhausted {
@@ -536,7 +652,7 @@ impl AlphaBeta {
                 break;
             }
         }
-        if ok && s.submit::<false>() && s.first_check(s.get_present().1).is_none() {
+        if ok && s.submit::<false>() && !s.royal_capturable(s.get_present().1) {
             return Some(mark);
         }
         s.unmake(mark);
@@ -583,13 +699,14 @@ impl AlphaBeta {
         if Self::in_check(s) { -(MATE - ply as i32) } else { 0 }
     }
 
-    fn qsearch(&mut self, s: &mut State, ply: usize, mut alpha: i32, beta: i32, qd: i32) -> i32 {
+    /// `known_check`: whether `s` is in check, when the caller already knows.
+    fn qsearch(&mut self, s: &mut State, ply: usize, mut alpha: i32, beta: i32, qd: i32, known_check: Option<bool>) -> i32 {
         self.nodes += 1;
         if self.check_abort() {
             return 0;
         }
         let stand = self.static_eval(s);
-        let in_check = Self::in_check(s);
+        let in_check = known_check.unwrap_or_else(|| Self::in_check(s));
         // Royal captures are threatened: standing pat is unsound, so search evasions.
         if !in_check {
             if stand >= beta {
@@ -615,37 +732,64 @@ impl AlphaBeta {
             }
             return stand + gain;
         }
-        let (info, ss) = HcInfo::build_hc(s);
         // In check: search the evasions.
-        let mut agen = HcCursor::new(ss, self.node_ordering(s, &info, false).order);
+        let mut nb = self.bufs.pop().unwrap_or_default();
+        {
+            let NodeBufs { info, evasions, order, evasion_scores, .. } = &mut *nb;
+            evasions.ss = info.rebuild(s, true);
+            // The branch axes are only ordered once some hypercuboid needs their order.
+            let fba = info.first_branch_axis();
+            self.node_ordering(s, info, false, order, evasions.order.axes_mut(), evasion_scores, 0..fba, BranchOrder::Now);
+            evasions.branch_pending = fba < info.dimension();
+        }
         let mut best = -INF;
         let mut any = false;
         let mut tried = 0;
-        while tried < QCAP {
-            if self.check_abort() {
-                return 0;
-            }
-            let Some(act) = agen.next(&info, s) else { break };
-            any = true;
-            tried += 1;
-            let mark = Self::make(s, &act);
-            let v = -self.qsearch(s, ply + 1, -beta, -alpha, qd - 1);
-            s.unmake(mark);
-            if self.aborted {
-                return 0;
-            }
-            if v > best {
-                best = v;
-                if v > alpha {
-                    alpha = v;
-                    if v >= beta {
-                        break;
+        let aborted = 'search: {
+            while tried < QCAP {
+                if self.check_abort() {
+                    break 'search true;
+                }
+                let NodeBufs { info, evasions, order, evasion_scores, .. } = &mut *nb;
+                let fba = info.first_branch_axis();
+                // (Quiescence leaves the history alone, so ordering later gives the same order.)
+                let next = evasions.next_with(info, s, &mut |o| self.node_ordering(s, info, false, order, o, evasion_scores, fba..fba + 1, BranchOrder::Now));
+                let Some(act) = (match next {
+                    Ok(a) => a,
+                    Err(NeedBranch) => {
+                        info.materialize_branch(s);
+                        continue;
+                    }
+                }) else {
+                    break;
+                };
+                any = true;
+                tried += 1;
+                let mark = Self::make(s, &act);
+                let v = -self.qsearch(s, ply + 1, -beta, -alpha, qd - 1, None);
+                s.unmake(mark);
+                if self.aborted {
+                    break 'search true;
+                }
+                if v > best {
+                    best = v;
+                    if v > alpha {
+                        alpha = v;
+                        if v >= beta {
+                            break;
+                        }
                     }
                 }
             }
+            false
+        };
+        self.bufs.push(nb);
+        if aborted {
+            return 0;
         }
         if !any {
-            return Self::terminal_score(s, ply);
+            // Only reached in check: mated.
+            return -(MATE - ply as i32);
         }
         best
     }
@@ -666,8 +810,9 @@ impl AlphaBeta {
     }
 
     fn negamax(&mut self, s: &mut State, depth: i32, ply: usize, mut alpha: i32, beta: i32, pv: bool) -> i32 {
+        let known_check = self.known_check.take();
         if depth <= 0 {
-            return self.qsearch(s, ply, alpha, beta, QDEPTH);
+            return self.qsearch(s, ply, alpha, beta, QDEPTH, known_check);
         }
         self.nodes += 1;
         if self.check_abort() {
@@ -694,7 +839,7 @@ impl AlphaBeta {
             }
         }
 
-        if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !Self::in_check(s) {
+        if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| Self::in_check(s)) {
             let e = self.static_eval(s);
             if depth <= RFP_DEPTH && e - RFP_MARGIN * depth >= beta {
                 return e;
@@ -714,7 +859,7 @@ impl AlphaBeta {
         }
 
         let mut best = -INF;
-        let mut best_action: MoveSeq = Vec::new();
+        let mut best_action = MoveSeq::new();
         let mut searched = 0usize;
         let cap = {
             let base = LMP[(depth as usize).min(LMP.len() - 1)];
@@ -757,80 +902,106 @@ impl AlphaBeta {
             pre_tried.push(act);
         }
 
-        let (info, ss) = HcInfo::build_hc(s);
-        let mut full = Some(ss.clone());
-        let mut agen = self.action_gen(s, &info, Self::without_future(s, &info, ss));
+        let mut nb = self.bufs.pop().unwrap_or_default();
+        let ss = nb.info.rebuild(s, true);
+        let first = Self::without_future(s, &nb.info, &ss);
+        let mut full = Some(ss);
+        {
+            let NodeBufs { info, cursor, order, .. } = &mut *nb;
+            self.start_actions(s, info, cursor, order, first, true);
+        }
         let mut generated = 0usize;
         let mut exhausted = false;
-        while searched < cap && !exhausted {
-            let mut batch: Vec<(i32, MoveSeq)> = Vec::with_capacity(BATCH);
-            while batch.len() < BATCH {
-                if self.check_abort() {
-                    return 0;
-                }
-                match agen.next(&info, s) {
-                    None => {
-                        // Every legal action may need a move on an optional board.
-                        if generated == 0 {
-                            if let Some(f) = full.take() {
-                                agen = self.action_gen(s, &info, f);
+        let outcome: Option<i32> = 'search: {
+            while searched < cap && !exhausted {
+                let mut batch: Vec<(i32, MoveSeq)> = Vec::with_capacity(BATCH);
+                while batch.len() < BATCH {
+                    if self.check_abort() {
+                        break 'search Some(0);
+                    }
+                    let next = {
+                        let NodeBufs { info, cursor, order, .. } = &mut *nb;
+                        cursor.next_with(info, s, &mut |o, sc| self.branch_order(s, info, order, o, sc))
+                    };
+                    match next {
+                        Err(NeedBranch) => nb.info.materialize_branch(s),
+                        Ok(None) => {
+                            // Every legal action may need a move on an optional board. (The
+                            // ordering is unchanged: nothing was searched since it was made.)
+                            if generated == 0 {
+                                if let Some(f) = full.take() {
+                                    nb.cursor.restart(&nb.info, f);
+                                    continue;
+                                }
+                            }
+                            exhausted = true;
+                            break;
+                        }
+                        Ok(Some(act)) => {
+                            generated += 1;
+                            if pre_tried.contains(&act) || tt_action.as_ref() == Some(&act) {
                                 continue;
                             }
+                            batch.push((self.action_score(s, &act, ply), act));
                         }
-                        exhausted = true;
+                    }
+                }
+                batch.sort_by(|a, b| b.0.cmp(&a.0));
+                for (sc, act) in batch {
+                    if searched >= cap {
                         break;
                     }
-                    Some(act) => {
-                        generated += 1;
-                        if pre_tried.contains(&act) || tt_action.as_ref() == Some(&act) {
-                            continue;
+                    let mark = Self::make(s, &act);
+                    let quiet = sc < 10_000;
+                    let mut r = 0;
+                    let mut child_check = None;
+                    // Checking actions are not reduced: mating lines run through them.
+                    if depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet {
+                        let ic = Self::in_check(s);
+                        child_check = Some(ic);
+                        if !ic {
+                            r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
                         }
-                        batch.push((self.action_score(s, &act, ply), act));
+                    }
+                    let mut v;
+                    self.known_check = child_check;
+                    if searched == 0 {
+                        v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, pv);
+                    } else {
+                        v = -self.negamax(s, depth - 1 - r, ply + 1, -alpha - 1, -alpha, false);
+                        if !self.aborted && v > alpha && r > 0 {
+                            self.known_check = child_check;
+                            v = -self.negamax(s, depth - 1, ply + 1, -alpha - 1, -alpha, false);
+                        }
+                        if !self.aborted && v > alpha && v < beta && pv {
+                            self.known_check = child_check;
+                            v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, true);
+                        }
+                    }
+                    s.unmake(mark);
+                    if self.aborted {
+                        break 'search Some(0);
+                    }
+                    searched += 1;
+                    if v > best {
+                        best = v;
+                        best_action = act.clone();
+                        if v > alpha {
+                            alpha = v;
+                        }
+                    }
+                    if alpha >= beta {
+                        self.on_cutoff(s, &act, depth, ply);
+                        self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), &best_action);
+                        break 'search Some(best);
                     }
                 }
             }
-            batch.sort_by(|a, b| b.0.cmp(&a.0));
-            for (sc, act) in batch {
-                if searched >= cap {
-                    break;
-                }
-                let mark = Self::make(s, &act);
-                let quiet = sc < 10_000;
-                let mut r = 0;
-                // Checking actions are not reduced: mating lines run through them.
-                if depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet && !Self::in_check(s) {
-                    r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
-                }
-                let mut v;
-                if searched == 0 {
-                    v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, pv);
-                } else {
-                    v = -self.negamax(s, depth - 1 - r, ply + 1, -alpha - 1, -alpha, false);
-                    if !self.aborted && v > alpha && r > 0 {
-                        v = -self.negamax(s, depth - 1, ply + 1, -alpha - 1, -alpha, false);
-                    }
-                    if !self.aborted && v > alpha && v < beta && pv {
-                        v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, true);
-                    }
-                }
-                s.unmake(mark);
-                if self.aborted {
-                    return 0;
-                }
-                searched += 1;
-                if v > best {
-                    best = v;
-                    best_action = act.clone();
-                    if v > alpha {
-                        alpha = v;
-                    }
-                }
-                if alpha >= beta {
-                    self.on_cutoff(s, &act, depth, ply);
-                    self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), &best_action);
-                    return best;
-                }
-            }
+            None
+        };
+        self.bufs.push(nb);
+        if let Some(v) = outcome {
+            return v;
         }
         if searched == 0 && generated == 0 && tt_action.is_none() {
             return Self::terminal_score(s, ply);
@@ -896,9 +1067,7 @@ fn action_text(s: &State, act: &MoveSeq) -> String {
 
 impl AlphaBeta {
     pub fn new_game(&mut self) {
-        for e in self.tt.iter_mut() {
-            *e = None;
-        }
+        self.tt = TtTable::with_len(self.tt.entries.len());
         for h in self.history.iter_mut() {
             *h = 0;
         }
@@ -908,7 +1077,7 @@ impl AlphaBeta {
     pub fn set_option(&mut self, key: &str, value: &OptionValue) -> bool {
         match (key, value.as_f64()) {
             ("Hash", Some(mb)) => {
-                self.tt = tt_table((mb as usize).max(1));
+                self.tt = TtTable::new((mb as usize).max(1));
                 true
             }
             _ => false,
@@ -932,8 +1101,9 @@ impl AlphaBeta {
 
         // Root actions (all of them, up to the root cap), ordered heuristically.
         let (hc, ss) = HcInfo::build_hc(root);
-        let mut full = Some(ss.clone());
-        let mut agen = self.action_gen(root, &hc, Self::without_future(root, &hc, ss));
+        let mut agen = BestFirstCursor::default();
+        self.start_actions(root, &hc, &mut agen, &mut OrderScratch::default(), Self::without_future(root, &hc, &ss), false);
+        let mut full = Some(ss);
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
         // Enumerating every root action can take seconds with many timelines: spend at most
         // a quarter of the budget on it (always keeping at least one action).
@@ -945,7 +1115,7 @@ impl AlphaBeta {
             }
             match agen.next(&hc, root) {
                 Some(a) => roots.push((self.action_score(root, &a, 0), a)),
-                None if roots.is_empty() && full.is_some() => agen = self.action_gen(root, &hc, full.take().unwrap()),
+                None if roots.is_empty() && full.is_some() => agen.restart(&hc, full.take().unwrap()),
                 None => {
                     complete = true;
                     break;
@@ -980,16 +1150,16 @@ impl AlphaBeta {
                     -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true)
                 } else {
                     // Late root actions are reduced, never pruned.
-                    let r = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX && !Self::in_check(&work) {
-                        (lmr(depth, k) - 1).clamp(0, depth - 2)
-                    } else {
-                        0
-                    };
+                    let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(Self::in_check(&work)) } else { None };
+                    let r = if child_check == Some(false) { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
+                    self.known_check = child_check;
                     let mut v = -self.negamax(&mut work, depth - 1 - r, 1, -alpha - 1, -alpha, false);
                     if !self.aborted && v > alpha && r > 0 {
+                        self.known_check = child_check;
                         v = -self.negamax(&mut work, depth - 1, 1, -alpha - 1, -alpha, false);
                     }
                     if !self.aborted && v > alpha {
+                        self.known_check = child_check;
                         v = -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true);
                     }
                     v

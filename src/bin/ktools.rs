@@ -358,7 +358,9 @@ fn main() {
                     let mut hc = ss.pop_back().unwrap();
                     let before = ss.clone();
                     let hc0 = hc.clone();
-                    let Some(pt) = w.take_point(&mut hc, &order) else {
+                    let mut psc = kairos::core::hypercuboid::PointScratch::default();
+                    let pt = if w.take_point(&mut hc, &order, &mut psc) { Some(psc.point) } else { None };
+                    let Some(pt) = pt else {
                         for (k, t) in targets.iter().enumerate() {
                             if alive[k] && hc0.contains(&t.1) && !before.contains(&t.1) { writeln!(out, "step {} take_point dropped {}", step, t.0).unwrap(); alive[k] = false; }
                         }
@@ -369,7 +371,7 @@ fn main() {
                     }
                     let (kind, prob) = if let Some(p) = w.jump_order_consistent(&s, &pt, &hc) { ("jump_order", Some(p)) }
                         else if let Some(p) = w.test_present(&s, &pt, &hc) { ("test_present", Some(p)) }
-                        else if let Some(p) = w.find_checks(&s, &pt, &hc) { ("find_checks", Some(p)) } else { ("ok", None) };
+                        else if let Some(p) = w.find_checks(&s, &pt, &hc, &mut Default::default()) { ("find_checks", Some(p)) } else { ("ok", None) };
                     match prob {
                         None => { yielded.insert(pt.clone()); ss.concat(hc.remove_point(&pt)); }
                         Some(problem) => {
@@ -638,7 +640,7 @@ fn main() {
                             problems.push(format!("ply {} mate {} before a played action", ply, mate_name(mate)));
                         }
                         if !is_legal_action(&before, &act) {
-                            problems.push(format!("ply {} action not legal: {}", ply, seq_string(&act)));
+                            problems.push(format!("ply {} action not legal: {}", ply, seq_string(&MoveSeq::from(&act[..]))));
                         }
                         if !s.submit::<false>() {
                             problems.push(format!("ply {} cannot submit", ply));
@@ -749,7 +751,7 @@ fn json_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     }
 }
 
-fn apply_seq(s: &State, a: &MoveSeq) -> Option<State> {
+fn apply_seq(s: &State, a: &[kairos::core::action::FullMove]) -> Option<State> {
     let mut c = s.clone();
     for fm in a {
         if !c.apply_move::<false>(*fm) {
@@ -932,7 +934,7 @@ fn shuffled_order(w: &HcInfo, seed: u64) -> kairos::misc::ordering::HcOrdering {
             v
         })
         .collect();
-    kairos::misc::ordering::HcOrdering::Precomputed(orders)
+    kairos::misc::ordering::HcOrdering::Precomputed(kairos::misc::ordering::AxisOrders::new(orders))
 }
 
 /// Mate puzzles: "# mate <n> <name>" comment lines, each followed by a G line. Reports the
