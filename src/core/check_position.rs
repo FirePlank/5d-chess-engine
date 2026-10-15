@@ -550,7 +550,11 @@ impl<'a> CheckPosition<'a> {
             let mut occupied_boards = [0u64; 8];
             let mut royal_boards = [0u64; 8];
             let mut count = 0usize;
-            let mut any_royal = 0u64;
+            // Royals some piece's projection reaches (`n` square steps on the `n`-th board),
+            // ignoring blockers: when none, nothing below can hit.
+            let mut reachable = 0u64;
+            let (mut on, mut os, mut oe, mut ow) = (orth, orth, orth, orth);
+            let (mut dne, mut dnw, mut dse, mut dsw) = (diag, diag, diag, diag);
             let mut q = p0 + direction;
             while count < 7 {
                 let b = match self.board_at(q, c) {
@@ -560,10 +564,18 @@ impl<'a> CheckPosition<'a> {
                 count += 1;
                 occupied_boards[count] = b.occupied();
                 royal_boards[count] = b.royal() & b.hostile(c);
-                any_royal |= royal_boards[count];
+                on = shift_north(on);
+                os = shift_south(os);
+                oe = shift_east(oe);
+                ow = shift_west(ow);
+                dne = shift_northeast(dne);
+                dnw = shift_northwest(dnw);
+                dse = shift_southeast(dse);
+                dsw = shift_southwest(dsw);
+                reachable |= royal_boards[count] & (on | os | oe | ow | dne | dnw | dse | dsw);
                 q = q + direction;
             }
-            if any_royal == 0 {
+            if reachable == 0 {
                 return false;
             }
             let project = |diagonal: bool, pieces: Bitboard, emit: &mut dyn FnMut(FullMove) -> bool| -> bool {
@@ -613,6 +625,50 @@ impl<'a> CheckPosition<'a> {
         false
     }
 
+    /// Whether some leap (king, knight, pawn or brawn step to another board) of `friendly`
+    /// pieces captures a royal: exactly when `scan_jumps` would emit something.
+    fn jump_threat(&self, c: bool, p0: Vec4, source: &Board, friendly: Bitboard) -> bool {
+        let royals_at = |d: Vec4| self.board_at(p0 + d, c).map(|b| b.royal() & b.hostile(c)).unwrap_or(0);
+        let kings = source.lking() & friendly;
+        let knights = source.lknight() & friendly;
+        if kings | knights != 0 {
+            for d in ORTHOGONAL_TL {
+                let r1 = royals_at(d);
+                if kings & king_spread(r1) != 0 {
+                    return true;
+                }
+                if knights != 0 {
+                    let jump1 = shift_north(shift_north(r1)) | shift_south(shift_south(r1)) | shift_east(shift_east(r1)) | shift_west(shift_west(r1));
+                    let r2 = royals_at(d * 2);
+                    let jump2 = shift_north(r2) | shift_south(r2) | shift_east(r2) | shift_west(r2);
+                    if knights & (jump1 | jump2) != 0 {
+                        return true;
+                    }
+                }
+            }
+        }
+        if kings != 0 && DIAGONAL_TL.iter().any(|&d| kings & king_spread(royals_at(d)) != 0) {
+            return true;
+        }
+        if knights != 0 && SP_KNIGHT.iter().any(|&d| knights & royals_at(d) != 0) {
+            return true;
+        }
+        let forward_l = if c { 1 } else { -1 };
+        let pawns = source.lpawn() & friendly;
+        if pawns != 0 && [-1, 1].iter().any(|&dt| pawns & royals_at(Vec4::new(0, 0, dt, forward_l)) != 0) {
+            return true;
+        }
+        let brawns = source.lrawn() & friendly;
+        if brawns != 0 {
+            let behind = |r: Bitboard| if c { shift_north(r) } else { shift_south(r) };
+            let rf = royals_at(Vec4::new(0, 0, 0, forward_l));
+            if brawns & (behind(rf) | shift_east(rf) | shift_west(rf) | behind(royals_at(Vec4::new(0, 0, -1, 0)))) != 0 {
+                return true;
+            }
+        }
+        false
+    }
+
     fn scan_jumps(
         &self,
         c: bool,
@@ -621,6 +677,9 @@ impl<'a> CheckPosition<'a> {
         friendly: Bitboard,
         emit: &mut dyn FnMut(FullMove) -> bool,
     ) -> bool {
+        if !self.jump_threat(c, p0, source, friendly) {
+            return false;
+        }
         let jump = |direction: Vec4,
                     pieces: Bitboard,
                     attack: &dyn Fn(i32) -> Bitboard,
