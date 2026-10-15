@@ -1,0 +1,12 @@
+{
+  "name": "check_order_3",
+  "old": "b08a8cfd187dde83aabfc5f482005102ac7c277f",
+  "games": 16000,
+  "shards": 40,
+  "tc": "movetime 100",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "ab",
+  "old_args": "ab",
+  "base": "self"
+}
