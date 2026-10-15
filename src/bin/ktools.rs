@@ -521,12 +521,16 @@ fn main() {
             // position, printing a "G" line for every position reached ("branchy" prefers, out
             // of a few random actions, one that time travels the most).
             use kairos::core::action::ExtMove;
-            use kairos::core::hypercuboid::{HcCursor, SearchMode};
-            use kairos::misc::ordering::HcOrdering;
-            use kairos::misc::rng::Mt19937;
+            use kairos::core::hypercuboid::HcCursor;
             let plies: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10);
             let games: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1);
-            let mut rng = Mt19937::new(args.get(4).and_then(|s| s.parse().ok()).unwrap_or(1));
+            let mut rng_state: u64 = args.get(4).and_then(|s| s.parse::<u64>().ok()).unwrap_or(1).wrapping_mul(0x9E3779B97F4A7C15) | 1;
+            let mut next_u32 = move || {
+                rng_state ^= rng_state << 13;
+                rng_state ^= rng_state >> 7;
+                rng_state ^= rng_state << 17;
+                (rng_state >> 32) as u32
+            };
             let branchy = args.get(5).map(|s| s.as_str()) == Some("branchy");
             for line in stdin.lock().lines() {
                 let line = line.unwrap();
@@ -539,8 +543,8 @@ fn main() {
                     for _ in 0..plies {
                         writeln!(out, "{}", hist).unwrap();
                         let (w, ss) = HcInfo::build_hc(&s);
-                        let order = HcOrdering::random(w.get_universe(), &mut rng);
-                        let mut cur = HcCursor::new(ss, order, SearchMode::Balanced);
+                        let order = shuffled_order(&w, next_u32() as u64);
+                        let mut cur = HcCursor::new(ss, order);
                         let a = if branchy {
                             // Up to 200 legal actions; pick at random among those that time travel.
                             let mut acts = Vec::new();
@@ -556,9 +560,9 @@ fn main() {
                                 break;
                             }
                             let i = if jumping.is_empty() {
-                                rng.next_u32() as usize % acts.len()
+                                next_u32() as usize % acts.len()
                             } else {
-                                jumping[rng.next_u32() as usize % jumping.len()]
+                                jumping[next_u32() as usize % jumping.len()]
                             };
                             acts.swap_remove(i)
                         } else {
