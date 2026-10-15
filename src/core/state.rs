@@ -229,6 +229,10 @@ impl State {
                 Some(n) if n == mv => {}
                 _ => return false,
             }
+            match self.m.get_board_ptr(p.l(), p.t(), player) {
+                Some(b) if b.hostile(!player) & pmask(p.xy()) != 0 => {}
+                _ => return false,
+            }
             let mut ml = MoveList::new();
             self.m.gen_moves(p, player, &mut ml);
             match ml.iter().find(|(tl, _)| *tl == q.tl()) {
