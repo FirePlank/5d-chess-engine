@@ -418,62 +418,23 @@ impl AlphaBeta {
         let present = s.get_present();
         let (amin, amax) = s.get_active_range();
         let (lo, hi) = s.get_lines_range();
-        let dim = info.dimension();
-        let fb = info.first_branch_axis();
-        let mut optional = vec![false; dim];
-        let mut mandatory = Vec::new();
+        let mut allowed: Vec<(usize, IntegerSet)> = Vec::new();
         for l in lo..=hi {
             let Some(n) = info.line_to_axis(l) else { continue };
             if l >= amin && l <= amax && s.get_timeline_end(l) == present {
-                mandatory.push(n);
-            } else {
-                optional[n] = true;
+                continue;
             }
+            let set = IntegerSet::singleton(0);
+            allowed.push((n, set));
         }
-        if !optional.iter().any(|&o| o) {
+        if allowed.is_empty() {
             return ss;
-        }
-        // A piece on an optional board may still travel onto a board the side must play now
-        // (bringing a defender back to the present); spatial moves there and travels that
-        // branch off a new timeline stay out.
-        let mut allowed: Vec<IntegerSet> = (0..dim).map(|_| IntegerSet::singleton(0)).collect();
-        let mut any_departure = false;
-        for &m in &mandatory {
-            for i in 0..info.axis_len(m) as Index {
-                if let Entry::Arriving { idx, fa, .. } = info.entry(m, i) {
-                    if optional[*fa as usize] {
-                        allowed[*fa as usize].insert(*idx);
-                        any_departure = true;
-                    }
-                }
-            }
-        }
-        let mut branch_keep: Option<IntegerSet> = None;
-        if any_departure && fb < dim {
-            let mut keep = IntegerSet::new();
-            for i in 0..info.axis_len(fb) as Index {
-                match info.entry(fb, i) {
-                    Entry::Arriving { fa, .. } if optional[*fa as usize] => {}
-                    _ => keep.insert(i),
-                }
-            }
-            branch_keep = Some(keep);
         }
         let mut out = SearchSpace::default();
         'hc: for mut hc in ss.hcs {
-            for n in 0..dim {
-                let set = if optional[n] {
-                    &allowed[n]
-                } else if n >= fb {
-                    match &branch_keep {
-                        Some(k) => k,
-                        None => continue,
-                    }
-                } else {
-                    continue;
-                };
-                hc[n].and_assign(set);
-                if hc[n].is_empty() {
+            for (n, set) in &allowed {
+                hc[*n].and_assign(set);
+                if hc[*n].is_empty() {
                     continue 'hc;
                 }
             }
