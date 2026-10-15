@@ -126,7 +126,7 @@ impl Default for AbParams {
         AbParams {
             lmp: vec![0, 16, 24, 32, 40],
             pv_cap_mult: 3,
-            root_cap: 4000,
+            root_cap: 150,
             batch: 12,
             qdepth: 3,
             qcap: 10,
