@@ -73,6 +73,221 @@ fn main() {
             args.get(3).and_then(|s| s.parse().ok()).unwrap_or(4),
             &mut out,
         ),
+        "naive" => {
+            use kairos::core::naive::{is_legal_action, naive_actions};
+            for line in stdin.lock().lines() {
+                let line = line.unwrap();
+                if !line.starts_with("G ") {
+                    continue;
+                }
+                let s = parse_g_line(&line).unwrap();
+                let naive: std::collections::BTreeSet<String> = naive_actions(&s, 1_000_000).iter().map(seq_string).collect();
+                let legal_naive = naive_actions(&s, 1_000_000).iter().filter(|a| is_legal_action(&s, a)).count();
+                let (w, ss) = HcInfo::build_hc(&s);
+                let hc: Vec<MoveSeq> = w.search(&s, ss).collect();
+                let hc_legal = hc.iter().filter(|a| is_legal_action(&s, a)).count();
+                let hcs: std::collections::BTreeSet<String> = hc.iter().map(seq_string).collect();
+                writeln!(out, "naive {} (validated legal {}) | hc {} (legal {}) | hc-only {} naive-only {}",
+                    naive.len(), legal_naive, hcs.len(), hc_legal, hcs.difference(&naive).count(), naive.difference(&hcs).count()).unwrap();
+                if std::env::var("SHOW").is_ok() {
+                    for a in naive.difference(&hcs).take(10) {
+                        writeln!(out, "  naive-only {}", a).unwrap();
+                    }
+                }
+            }
+        }
+        "slicecheck" => {
+            use kairos::core::hypercuboid::Entry;
+            use kairos::core::naive::naive_actions;
+            for line in stdin.lock().lines() {
+                let line = line.unwrap();
+                if !line.starts_with("G ") {
+                    continue;
+                }
+                let s = parse_g_line(&line).unwrap();
+                let (w, mut ss) = HcInfo::build_hc(&s);
+                let dim = w.dimension();
+                let nb = w.first_branch_axis();
+                // Map every legal action to its point.
+                let mut targets: Vec<(String, Vec<u32>)> = Vec::new();
+                for act in naive_actions(&s, 100000) {
+                    let mut pt = vec![0u32; dim];
+                    let mut ok = true;
+                    let mut branch_k = 0;
+                    for m in &act {
+                        let phys = m.from.tl() == m.to.tl();
+                        let nonbranch = !phys && s.get_timeline_end(m.to.l()) == (m.to.t(), s.get_present().1)
+                            && !act.iter().any(|o| o.from.l() == m.to.l() && o != m);
+                        let find = |n: usize, f: &dyn Fn(&Entry) -> bool| (0..w.axis_len(n) as u32).find(|&i| f(w.entry(n, i)));
+                        if phys {
+                            let n = w.line_to_axis(m.from.l()).unwrap();
+                            match find(n, &|e| matches!(e, Entry::Physical { m: x, .. } if x == m)) { Some(i) => pt[n] = i, None => ok = false }
+                        } else {
+                            let nf = w.line_to_axis(m.from.l()).unwrap();
+                            match find(nf, &|e| matches!(e, Entry::Departing { from, .. } if *from == m.from)) { Some(i) => pt[nf] = i, None => ok = false }
+                            let na = if nonbranch { w.line_to_axis(m.to.l()).unwrap() } else { branch_k += 1; nb + branch_k - 1 };
+                            match find(na, &|e| matches!(e, Entry::Arriving { m: x, .. } if x == m)) { Some(i) => pt[na] = i, None => ok = false }
+                        }
+                    }
+                    if ok { targets.push((seq_string(&act), pt)); } else { writeln!(out, "unmapped {}", seq_string(&act)).unwrap(); }
+                }
+                writeln!(out, "{} targets mapped, dim {} new_axis {}", targets.len(), dim, nb).unwrap();
+                let order = kairos::misc::ordering::HcOrdering::Natural;
+                let mut yielded = std::collections::HashSet::new();
+                let mut alive: Vec<bool> = targets.iter().map(|t| ss.contains(&t.1)).collect();
+                writeln!(out, "initially contained: {}", alive.iter().filter(|&&a| a).count()).unwrap();
+                let mut step = 0;
+                while !ss.is_empty() && step < 100000 {
+                    step += 1;
+                    let mut hc = ss.pop_back().unwrap();
+                    let before = ss.clone();
+                    let hc0 = hc.clone();
+                    let Some(pt) = w.take_point(&mut hc, &order) else {
+                        for (k, t) in targets.iter().enumerate() {
+                            if alive[k] && hc0.contains(&t.1) && !before.contains(&t.1) { writeln!(out, "step {} take_point dropped {}", step, t.0).unwrap(); alive[k] = false; }
+                        }
+                        continue;
+                    };
+                    for (k, t) in targets.iter().enumerate() {
+                        if alive[k] && hc0.contains(&t.1) && !hc.contains(&t.1) && !before.contains(&t.1) { writeln!(out, "step {} take_point pruning dropped {}", step, t.0).unwrap(); alive[k] = false; }
+                    }
+                    let (kind, prob) = if let Some(p) = w.jump_order_consistent(&s, &pt, &hc) { ("jump_order", Some(p)) }
+                        else if let Some(p) = w.test_present(&s, &pt, &hc) { ("test_present", Some(p)) }
+                        else if let Some(p) = w.find_checks(&s, &pt, &hc) { ("find_checks", Some(p)) } else { ("ok", None) };
+                    match prob {
+                        None => { yielded.insert(pt.clone()); ss.concat(hc.remove_point(&pt)); }
+                        Some(problem) => {
+                            ss.push_back(hc.clone());
+                            ss.remove_slice_backwards(&problem, true, 10, 1);
+                            for (k, t) in targets.iter().enumerate() {
+                                if alive[k] && !ss.contains(&t.1) && !yielded.contains(&t.1) && problem.contains(&t.1) {
+                                    writeln!(out, "step {} {} slice dropped {} (point {:?}; slice {:?})", step, kind, t.0, pt, problem.fixed).unwrap();
+                                    alive[k] = false;
+                                }
+                            }
+                        }
+                    }
+                    for (k, t) in targets.iter().enumerate() {
+                        if alive[k] && !ss.contains(&t.1) && !yielded.contains(&t.1) { writeln!(out, "step {} lost (other) {}", step, t.0).unwrap(); alive[k] = false; }
+                    }
+                }
+                writeln!(out, "yielded {} points in {} steps", yielded.len(), step).unwrap();
+            }
+        }
+        "explain" => {
+            // explain <action moves...> : timeline geometry before/after an action
+            let act: Vec<kairos::core::action::FullMove> =
+                args[2..].iter().map(|t| kairos::core::action::FullMove::parse(t).unwrap()).collect();
+            for line in stdin.lock().lines() {
+                let line = line.unwrap();
+                if !line.starts_with("G ") {
+                    continue;
+                }
+                let s = parse_g_line(&line).unwrap();
+                let show = |s: &kairos::core::state::State, out: &mut dyn Write| {
+                    let (a, b) = s.get_lines_range();
+                    writeln!(out, "  present {:?} apparent {:?} lines {}..{} active {:?}", s.get_present(), s.apparent_present(), a, b, s.get_active_range()).unwrap();
+                    for l in a..=b {
+                        writeln!(out, "    L{} start {:?} end {:?}", l, s.get_timeline_start(l), s.get_timeline_end(l)).unwrap();
+                    }
+                };
+                show(&s, &mut out);
+                let ts = s.get_timeline_status();
+                writeln!(out, "  mandatory {:?} optional {:?} unplayable {:?}", ts.mandatory, ts.optional, ts.unplayable).unwrap();
+                let mut c = s.clone();
+                for &m in &act {
+                    let ok = c.apply_move::<false>(m);
+                    writeln!(out, "  apply {} -> {} ; present {:?} apparent {:?} active {:?}", m, ok, c.get_present(), c.apparent_present(), c.get_active_range()).unwrap();
+                }
+                let sub = c.submit::<false>();
+                writeln!(out, "  submit {} ; check {:?}", sub, c.first_check(c.get_present().1)).unwrap();
+                show(&c, &mut out);
+            }
+        }
+        "validate" => {
+            // HC search (several orderings/modes) vs exhaustive naive search.
+            use kairos::core::hypercuboid::{HcCursor, SearchMode};
+            use kairos::core::naive::naive_actions_budget;
+            let limit: usize = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(20000);
+            let (mut checked, mut skipped, mut bad) = (0, 0, 0);
+            for (idx, line) in stdin.lock().lines().enumerate() {
+                let line = line.unwrap();
+                if !line.starts_with("G ") {
+                    continue;
+                }
+                let s = parse_g_line(&line).unwrap();
+                let Some(naive) = naive_actions_budget(&s, limit + 1, 200_000) else {
+                    skipped += 1;
+                    continue;
+                };
+                if naive.len() > limit {
+                    skipped += 1;
+                    continue;
+                }
+                let want: std::collections::BTreeSet<String> = naive.iter().map(seq_string).collect();
+                checked += 1;
+                let mut results = Vec::new();
+                for variant in 0..5u32 {
+                    let (w, ss) = HcInfo::build_hc(&s);
+                    let (order, mode) = match variant {
+                        0 => (kairos::misc::ordering::HcOrdering::Natural, SearchMode::Balanced),
+                        1 => (kairos::engine::ab::AlphaBeta::new(Default::default(), Default::default()).ordering(&s, &w), SearchMode::Balanced),
+                        v => (kairos::misc::ordering::HcOrdering::random(w.get_universe(), &mut kairos::misc::rng::Mt19937::new(v)),
+                              if v == 3 { SearchMode::Iterative } else { SearchMode::Balanced }),
+                    };
+                    let mut cur = HcCursor::new(ss, order, mode);
+                    let mut got = std::collections::BTreeSet::new();
+                    while let Some(a) = cur.next(&w, &s) {
+                        got.insert(seq_string(&a));
+                        if got.len() > limit * 2 { break; }
+                    }
+                    results.push(got);
+                }
+                if results.iter().any(|g| *g != want) {
+                    bad += 1;
+                    let counts: Vec<usize> = results.iter().map(|g| g.len()).collect();
+                    let extra: Vec<usize> = results.iter().map(|g| g.difference(&want).count()).collect();
+                    writeln!(out, "MISMATCH pos {} naive {} hc {:?} extra {:?}
+{}", idx, want.len(), counts, extra, line).unwrap();
+                    out.flush().unwrap();
+                }
+            }
+            writeln!(out, "checked {} skipped {} mismatched {}", checked, skipped, bad).unwrap();
+        }
+        "ordercheck" => {
+            use kairos::core::hypercuboid::{HcCursor, SearchMode};
+            for line in stdin.lock().lines() {
+                let line = line.unwrap();
+                if !line.starts_with("G ") {
+                    continue;
+                }
+                let s = parse_g_line(&line).unwrap();
+                let (w, ss) = HcInfo::build_hc(&s);
+                let natural = w.search(&s, ss.clone()).count();
+                let ab = kairos::engine::ab::AlphaBeta::new(Default::default(), Default::default());
+                let mut cur = HcCursor::new(ss, ab.ordering(&s, &w), SearchMode::Balanced);
+                let mut n = 0;
+                while cur.next(&w, &s).is_some() {
+                    n += 1;
+                }
+                writeln!(out, "natural {} scored {} dim {} new_axis {}", natural, n, w.dimension(), w.first_branch_axis()).unwrap();
+                for mode in [SearchMode::Balanced, SearchMode::Iterative, SearchMode::Stable] {
+                    let mut counts = Vec::new();
+                    for seed in 1..=6u32 {
+                        let mut rng = kairos::misc::rng::Mt19937::new(seed);
+                        let (w2, ss2) = HcInfo::build_hc(&s);
+                        let order = kairos::misc::ordering::HcOrdering::random(w2.get_universe(), &mut rng);
+                        let mut cur = HcCursor::new(ss2, order, mode);
+                        let mut k = 0;
+                        while cur.next(&w2, &s).is_some() {
+                            k += 1;
+                        }
+                        counts.push(k);
+                    }
+                    writeln!(out, "  random {:?}: {:?}", mode, counts).unwrap();
+                }
+            }
+        }
         "bench" => bench(args.get(2).map(|s| s.as_str()).unwrap_or("data/bench.g"), &mut out),
         _ => {
             eprintln!("usage: ktools dump [cap] < positions.g | ktools perft <depth> [cap] < positions.g");
@@ -160,7 +375,8 @@ fn abbench(path: &str, depth: u32, out: &mut impl Write) {
     let mut total_nodes = 0u64;
     for (k, s) in positions.iter().enumerate() {
         let mut e = AlphaBeta::new(Default::default(), Default::default());
-        let limits = Limits { depth: Some(depth), ..Default::default() };
+        let node_cap = std::env::var("AB_NODES").ok().and_then(|v| v.parse().ok());
+        let limits = Limits { depth: Some(depth), nodes: node_cap, ..Default::default() };
         let mut last = String::new();
         let t = Instant::now();
         let best = e.find_best_move(s, &limits, &stop, &mut |m| last = m);

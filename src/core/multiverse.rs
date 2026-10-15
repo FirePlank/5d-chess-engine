@@ -10,6 +10,14 @@ use super::vec4::Vec4;
 
 pub type Turn = (i32, bool);
 
+/// Active timelines for a given timeline span: each side may lead by at most one line.
+pub fn active_range_for(layout: TimelineLayout, l_min: i32, l_max: i32) -> (i32, i32) {
+    let left_extent = layout.mirror(l_min);
+    let common_extent = left_extent.min(l_max);
+    let radius = common_extent + (common_extent < left_extent.max(l_max)) as i32;
+    (l_min.max(layout.mirror(radius)), l_max.min(radius))
+}
+
 #[inline(always)]
 pub fn next_turn(t: Turn) -> Turn {
     let v = (t.0 << 1 | t.1 as i32) + 1;
@@ -417,10 +425,7 @@ impl Multiverse {
     }
 
     fn calculate_active_range(&self) -> (i32, i32) {
-        let left_extent = self.layout.mirror(self.l_min);
-        let common_extent = left_extent.min(self.l_max);
-        let radius = common_extent + (common_extent < left_extent.max(self.l_max)) as i32;
-        (self.l_min.max(self.layout.mirror(radius)), self.l_max.min(radius))
+        active_range_for(self.layout, self.l_min, self.l_max)
     }
 
     /// (l, t, c, fen) for every board, timelines in u order.

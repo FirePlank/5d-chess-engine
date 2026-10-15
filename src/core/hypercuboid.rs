@@ -78,7 +78,6 @@ pub struct HcInfo {
     dim: usize,
     universe: Hc,
     new_axis: usize,
-    mandatory_lines: Vec<i32>,
     /// Coordinate groups per axis (index `new_axis` is shared by all branch axes).
     groups: Vec<AxisGroups>,
 }
@@ -389,7 +388,6 @@ impl HcInfo {
                 dim: dimension,
                 universe,
                 new_axis,
-                mandatory_lines: ts.mandatory,
             },
             ss,
         )
@@ -557,89 +555,77 @@ impl HcInfo {
         None
     }
 
-    pub fn test_present(&self, st: &State, p: &Point, hc: &Hc) -> Option<Slice> {
-        let (old_present, c) = st.get_present();
-        let (l0_min, l0_max) = st.get_initial_lines_range();
+    /// Whether the point moves the present; if not, a slice of points that fail for the same
+    /// reason. The new present is computed exactly: moved timelines advance one half-turn, new
+    /// timelines start after their arrival, and the active range is recomputed from the final
+    /// timeline span (which can reactivate old timelines).
+    pub fn test_present(&self, st: &State, p: &Point, _hc: &Hc) -> Option<Slice> {
+        let (_, c) = st.get_present();
         let (l_min, l_max) = st.get_lines_range();
-        let (mut l1_min, mut l1_max) = (l_min, l_max);
-        let (mut active_min, mut active_max) = st.get_active_range();
-        let mut mint = old_present;
-        let mut pass_coord: Option<(usize, Index)> = None;
-        for &l in &self.mandatory_lines {
-            let n = self.line_axes[&l];
-            if self.entry(n, p[n]).is_null() {
-                pass_coord = Some((n, p[n]));
+        // New timelines in creation order (the branch axes form a prefix).
+        let mut new_ends: Vec<i32> = Vec::new();
+        let mut k = 0;
+        for n in self.new_axis..self.dim {
+            match self.entry(n, p[n]) {
+                Entry::Arriving { m, .. } => new_ends.push(2 * m.to.t() + c as i32 + 1),
+                _ => break,
+            }
+            k += 1;
+        }
+        let (l1_min, l1_max) = if c { (l_min - k as i32, l_max) } else { (l_min, l_max + k as i32) };
+        let (amin, amax) = super::multiverse::active_range_for(st.multiverse().layout(), l1_min, l1_max);
+        let end_after = |l: i32| -> i32 {
+            if l < l_min || l > l_max {
+                let j = if c { l_min - 1 - l } else { l - l_max - 1 };
+                return new_ends[j as usize];
+            }
+            let v = st.multiverse().timeline_end_v(l);
+            match self.line_axes.get(&l) {
+                Some(&n) if !self.entry(n, p[n]).is_null() => v + 1,
+                _ => v,
+            }
+        };
+        let mut wit: Option<(i32, i32)> = None;
+        for l in amin..=amax {
+            let v = end_after(l);
+            if wit.map(|w| v < w.1).unwrap_or(true) {
+                wit = Some((l, v));
             }
         }
-        for n in self.new_axis..self.dimension() {
-            let loc = self.entry(n, p[n]);
-            if loc.is_null() {
-                break;
-            }
-            let mut reactivated = None;
-            let l_new;
-            if !c {
-                l1_max += 1;
-                l_new = l1_max;
-            } else {
-                l1_min -= 1;
-                l_new = l1_min;
-            }
-            let whites = l1_max - l0_max;
-            let blacks = l0_min - l1_min;
-            if l_new > l0_max && whites <= blacks + 1 && l_new > active_max {
-                active_max += 1;
-                if l1_min < active_min {
-                    active_min -= 1;
-                    reactivated = Some(active_min);
-                }
-            } else if l_new < l0_min && blacks <= whites + 1 && l_new < active_min {
-                active_min -= 1;
-                if l1_max > active_max {
-                    active_max += 1;
-                    reactivated = Some(active_max);
-                }
-            }
-            let (t, _) = loc.tl();
-            if t < mint && active_min <= l_new && l_new <= active_max {
-                mint = t;
-                pass_coord = None;
-            }
-            if let Some(r) = reactivated {
-                let (nt, nc) = st.get_timeline_end(r);
-                if nt <= mint && nc == c {
-                    mint = nt;
-                    let n1 = self.line_axes[&r];
-                    if self.entry(n1, p[n1]).is_null() {
-                        pass_coord = Some((n1, p[n1]));
-                    }
-                }
-            }
+        let (w_line, w_v) = wit?;
+        if (w_v & 1 != 0) != c {
+            return None;
         }
-        let (pass_n, pass_i) = pass_coord?;
+        // Every point below keeps the witness timeline unmoved and active and adds no active
+        // timeline that ends (on the opponent's turn) before it.
         let mut problem = Slice::new();
-        problem.fix_axis(pass_n, IntegerSet::singleton(pass_i));
-        let whites = l_max - l0_max;
-        let blacks = l0_min - l_min;
-        let adv = if c { whites - blacks } else { blacks - whites };
-        let hi = (adv + self.new_axis as i32).min(self.dimension() as i32 - 1);
-        let mut n = self.new_axis as i32;
-        while n <= hi {
-            let nn = n as usize;
+        let w_axis = self.line_axes[&w_line];
+        problem.fix_axis(w_axis, IntegerSet::singleton(0));
+        for (&l, &n) in &self.line_axes {
+            if n >= self.new_axis || n == w_axis || l < amin || l > amax {
+                continue;
+            }
+            if st.multiverse().timeline_end_v(l) + 1 < w_v {
+                problem.fix_axis(n, IntegerSet::singleton(0));
+            }
+        }
+        let t_w = w_v >> 1;
+        for (j, n) in (self.new_axis..self.dim).enumerate() {
             let mut s = IntegerSet::new();
-            for i in hc[nn].iter() {
-                match self.entry(nn, i) {
-                    Entry::Null => s.insert(i),
-                    Entry::Arriving { m, .. } => {
-                        if m.to.t() >= mint {
+            if j < k {
+                let line = if c { l_min - 1 - j as i32 } else { l_max + 1 + j as i32 };
+                let active = line >= amin && line <= amax;
+                for i in self.universe[n].iter() {
+                    if let Entry::Arriving { m, .. } = self.entry(n, i) {
+                        if !active || m.to.t() >= t_w {
                             s.insert(i);
                         }
                     }
-                    _ => unreachable!(),
                 }
+            } else {
+                s.insert(0);
             }
-            problem.fix_axis(nn, s);
-            n += 1;
+            problem.fix_axis(n, s);
         }
         debug_assert!(problem.contains(p));
         Some(problem)

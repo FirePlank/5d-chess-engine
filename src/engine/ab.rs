@@ -195,7 +195,8 @@ impl AlphaBeta {
         }
     }
 
-    fn ordering(&self, s: &State, info: &HcInfo) -> HcOrdering {
+    pub fn ordering(&self, s: &State, info: &HcInfo) -> HcOrdering {
+        let _p = crate::misc::prof::scope(6);
         let u = info.get_universe();
         let mut orders = Vec::with_capacity(u.dimension());
         // Branch axes share entries; score them once.
@@ -254,6 +255,7 @@ impl AlphaBeta {
 
     /// Apply an action that was generated as legal for `s`.
     fn child(s: &State, act: &MoveSeq) -> State {
+        let _p = crate::misc::prof::scope(7);
         let mut c = s.clone();
         for &m in act {
             c.apply_move::<true>(m);
@@ -264,6 +266,7 @@ impl AlphaBeta {
 
     /// Validate a remembered action (TT/killer) in `s`.
     fn legal_child(s: &State, act: &MoveSeq) -> Option<State> {
+        let _p = crate::misc::prof::scope(11);
         let player = s.get_present().1;
         let mut c = s.clone();
         for &m in act {
@@ -281,6 +284,7 @@ impl AlphaBeta {
     }
 
     fn in_check(s: &State) -> bool {
+        let _p = crate::misc::prof::scope(10);
         s.has_phantom_check()
     }
 
