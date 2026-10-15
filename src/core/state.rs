@@ -251,6 +251,10 @@ impl State {
                 Some(b) if b.hostile(!player) & pmask(p.xy()) != 0 => {}
                 _ => return false,
             }
+            // Only the latest board of a timeline (where it is the mover's turn) is playable.
+            if self.m.get_timeline_end(p.l()) != (p.t(), player) {
+                return false;
+            }
             let mut ml = MoveList::new();
             self.m.gen_moves(p, player, &mut ml);
             match ml.iter().find(|(tl, _)| *tl == q.tl()) {

@@ -54,6 +54,16 @@ fn check_on_an_untouchable_opponent_board_is_mate() {
 }
 
 #[test]
+fn moves_only_from_playable_boards() {
+    // After e2e4 the T1 board is no longer playable: a second move from it is rejected.
+    let s = parse_g_line("G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w]").unwrap();
+    let mut t = s.clone();
+    assert!(t.apply_move::<false>(kairos::core::action::FullMove::parse("(0T1)e2e4").unwrap()));
+    assert!(!t.apply_move::<false>(kairos::core::action::FullMove::parse("(0T1)d2d4").unwrap()));
+    assert!(parse_g_line("G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w] moves (0T1)e2e4 (0T1)d2d4 submit").is_err());
+}
+
+#[test]
 fn castling_on_boards_narrower_than_eight_files() {
     // King d1, rooks a1 and g1 on a 7-file board: both castlings are available.
     let s = parse_g_line("G 1 size 7x7 odd fen [r*2k*2r*/p*p*p*p*p*p*p*/7/7/7/P*P*P*P*P*P*P*/R*2K*2R*:0:1:w]").unwrap();
