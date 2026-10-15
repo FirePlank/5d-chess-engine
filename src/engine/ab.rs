@@ -17,7 +17,7 @@ use crate::core::multiverse::next_turn;
 use crate::core::piece::*;
 use crate::core::state::{Mark, State};
 use crate::misc::geometry::SearchSpace;
-use crate::misc::integer_set::{Index, IntegerSet};
+use crate::misc::integer_set::Index;
 use crate::misc::ordering::HcOrdering;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -380,37 +380,6 @@ impl AlphaBeta {
         self.node_ordering(s, info, true).order
     }
 
-    /// Moves on boards the side to move doesn't have to play (ahead of the present, or on
-    /// inactive timelines) are left out: only the null coordinate stay on those axes.
-    fn without_future(s: &State, info: &HcInfo, ss: SearchSpace) -> SearchSpace {
-        let present = s.get_present();
-        let (amin, amax) = s.get_active_range();
-        let (lo, hi) = s.get_lines_range();
-        let mut allowed: Vec<(usize, IntegerSet)> = Vec::new();
-        for l in lo..=hi {
-            let Some(n) = info.line_to_axis(l) else { continue };
-            if l >= amin && l <= amax && s.get_timeline_end(l) == present {
-                continue;
-            }
-            let set = IntegerSet::singleton(0);
-            allowed.push((n, set));
-        }
-        if allowed.is_empty() {
-            return ss;
-        }
-        let mut out = SearchSpace::default();
-        'hc: for mut hc in ss.hcs {
-            for (n, set) in &allowed {
-                hc[*n].and_assign(set);
-                if hc[*n].is_empty() {
-                    continue 'hc;
-                }
-            }
-            out.hcs.push(hc);
-        }
-        out
-    }
-
     /// Action generator for an interior node or the root.
     fn action_gen(&self, s: &State, info: &HcInfo, ss: SearchSpace) -> BestFirstCursor {
         let no = self.node_ordering(s, info, true);
@@ -545,14 +514,14 @@ impl AlphaBeta {
         if !in_check {
             // Moves on different boards don't interact (barring jumps between boards), so
             // the pending captures resolve board by board and their gains add up.
-            let present = s.get_present();
+            let stm = s.get_present().1;
             let height = s.get_board_size().1;
-            let (amin, amax) = s.get_active_range();
+            let (l_min, l_max) = s.get_lines_range();
             let mut gain = 0;
-            for l in amin..=amax {
+            for l in l_min..=l_max {
                 let (t, c) = s.get_timeline_end(l);
-                if (t, c) == present {
-                    gain += super::local::capture_gain(s.board(l, t, c), c, height, &self.local_vals);
+                if c == stm {
+                    gain += super::local::capture_gain(s.board(l, t, c), stm, height, &self.local_vals);
                 }
             }
             return stand + gain;
@@ -688,8 +657,7 @@ impl AlphaBeta {
         }
 
         let (info, ss) = HcInfo::build_hc(s);
-        let mut full = Some(ss.clone());
-        let mut agen = self.action_gen(s, &info, Self::without_future(s, &info, ss));
+        let mut agen = self.action_gen(s, &info, ss);
         let mut generated = 0usize;
         let mut exhausted = false;
         while searched < cap && !exhausted {
@@ -700,13 +668,6 @@ impl AlphaBeta {
                 }
                 match agen.next(&info, s) {
                     None => {
-                        // Every legal action may need a move on an optional board.
-                        if generated == 0 {
-                            if let Some(f) = full.take() {
-                                agen = self.action_gen(s, &info, f);
-                                continue;
-                            }
-                        }
                         exhausted = true;
                         break;
                     }
@@ -866,8 +827,7 @@ impl AlphaBeta {
 
         // Root actions (all of them, up to the root cap), ordered heuristically.
         let (hc, ss) = HcInfo::build_hc(root);
-        let mut full = Some(ss.clone());
-        let mut agen = self.action_gen(root, &hc, Self::without_future(root, &hc, ss));
+        let mut agen = self.action_gen(root, &hc, ss);
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
         // Enumerating every root action can take seconds with many timelines: spend at most
         // a quarter of the budget on it (always keeping at least one action).
@@ -878,7 +838,6 @@ impl AlphaBeta {
             }
             match agen.next(&hc, root) {
                 Some(a) => roots.push((self.action_score(root, &a, 0), a)),
-                None if roots.is_empty() && full.is_some() => agen = self.action_gen(root, &hc, full.take().unwrap()),
                 None => break,
             }
         }
