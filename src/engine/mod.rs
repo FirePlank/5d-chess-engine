@@ -1,5 +1,6 @@
 pub mod ab;
 pub mod eval;
+pub mod evalnet;
 pub mod features;
 pub mod finetree;
 pub mod hce;

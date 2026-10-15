@@ -3,9 +3,10 @@
 
 use crate::core::bitboard::*;
 use crate::core::board::Board;
+use crate::core::check_position::CheckPosition;
 use crate::core::state::State;
 
-pub const NF: usize = 45;
+pub const NF: usize = 48;
 
 /// Feature indices.
 pub mod fi {
@@ -44,6 +45,13 @@ pub mod fi {
     pub const TEMPO: usize = 43;
     /// Number of active timelines (scales nothing by itself; lets other terms be normalized).
     pub const ACTIVE_LINES: usize = 44;
+    /// Royal captures the opponent would have if the side to move passed (5D, any board),
+    /// signed like the king-safety terms: white's danger minus black's.
+    pub const CHECKS_5D: usize = 45;
+    /// The superphysical ones among them.
+    pub const SP_CHECKS: usize = 46;
+    /// Boards the side to move must play on (+ for white, - for black).
+    pub const MANDATORY: usize = 47;
 }
 
 pub const FEATURE_NAMES: [&str; NF] = [
@@ -53,6 +61,7 @@ pub const FEATURE_NAMES: [&str; NF] = [
     "cent_bishop", "cent_rook", "cent_queen", "cent_other", "pawn_adv", "pawn_near", "king_cent", "tl_slots",
     "tl_slots_heavy", "k_holes", "k_knights", "k_open_orth", "k_open_diag", "k_shield", "k_zone_att", "mob_knight",
     "mob_bishop", "mob_rook", "mob_queen", "mob_king", "hanging", "royal_att", "tempo", "active_lines",
+    "checks_5d", "sp_checks", "mandatory",
 ];
 
 pub type Features = [i32; NF];
@@ -80,11 +89,57 @@ pub fn default_weights() -> Weights {
 
 /// Weights used by the alpha-beta search with `use_hce` (Texel-tuned, see bin/tune.rs).
 pub fn tuned_weights() -> Weights {
-    default_weights()
+    weights_by_name(&[
+        ("mat_a_pawn", 143.7),
+        ("mat_a_brawn", 150.0),
+        ("mat_a_knight", -206.1),
+        ("mat_a_bishop", 414.5),
+        ("mat_a_rook", 372.7),
+        ("mat_a_queen", 1250.0),
+        ("mat_a_princess", 900.0),
+        ("mat_a_unicorn", 250.0),
+        ("mat_a_dragon", 150.0),
+        ("mat_a_cking", 300.0),
+        ("mat_i_pawn", -134.1),
+        ("mat_i_brawn", 75.0),
+        ("mat_i_knight", 14.2),
+        ("mat_i_bishop", 275.1),
+        ("mat_i_rook", -34.9),
+        ("mat_i_queen", 1276.4),
+        ("mat_i_princess", 450.0),
+        ("mat_i_unicorn", 125.0),
+        ("mat_i_dragon", 75.0),
+        ("mat_i_cking", 150.0),
+        ("cent_knight", 77.4),
+        ("cent_bishop", 106.1),
+        ("cent_rook", -10.3),
+        ("cent_queen", -32.2),
+        ("cent_other", 2.0),
+        ("pawn_adv", 11.1),
+        ("pawn_near", -265.5),
+        ("king_cent", -308.8),
+        ("tl_slots", 1915.8),
+        ("tl_slots_heavy", 37.5),
+        ("k_holes", 157.4),
+        ("k_knights", 2511.5),
+        ("k_open_orth", -323.7),
+        ("k_open_diag", -3.4),
+        ("k_shield", 832.8),
+        ("k_zone_att", -337.9),
+        ("mob_knight", 72.4),
+        ("mob_bishop", 51.7),
+        ("mob_rook", -1.5),
+        ("mob_queen", 155.9),
+        ("mob_king", -299.6),
+        ("hanging", -24.1),
+        ("royal_att", -2985.0),
+        ("tempo", 734.8),
+        ("active_lines", 75.5),
+    ])
 }
 
 #[inline(always)]
-fn centrality(sq: i32, w: i32, h: i32) -> i32 {
+pub(crate) fn centrality(sq: i32, w: i32, h: i32) -> i32 {
     let x = sq & 7;
     let y = sq >> 3;
     let dx = (2 * x - (w - 1)).abs();
@@ -92,11 +147,11 @@ fn centrality(sq: i32, w: i32, h: i32) -> i32 {
     ((w + h - 2) - dx - dy).max(0) / 2
 }
 
-const ORTH: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
-const DIAG: [(i32, i32); 4] = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
+pub(crate) const ORTH: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+pub(crate) const DIAG: [(i32, i32); 4] = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
 
 /// Rays from `sq` that leave the board without meeting a piece of `own`.
-fn open_rays(sq: i32, own: Bitboard, dirs: &[(i32, i32)], w: i32, h: i32) -> i32 {
+pub(crate) fn open_rays(sq: i32, own: Bitboard, dirs: &[(i32, i32)], w: i32, h: i32) -> i32 {
     let (x0, y0) = (sq & 7, sq >> 3);
     let mut n = 0;
     for &(dx, dy) in dirs {
@@ -115,7 +170,7 @@ fn open_rays(sq: i32, own: Bitboard, dirs: &[(i32, i32)], w: i32, h: i32) -> i32
     n
 }
 
-fn kind_value10(b: &Board, sq: i32) -> i32 {
+pub(crate) fn kind_value10(b: &Board, sq: i32) -> i32 {
     let z = pmask(sq);
     if b.lpawn() & z != 0 {
         10
@@ -141,12 +196,12 @@ fn kind_value10(b: &Board, sq: i32) -> i32 {
 }
 
 /// Attack map of one color's pieces on a board, with per-kind mobility counts.
-struct Side {
-    attacks: Bitboard,
-    mob: [i32; 5],
+pub(crate) struct Side {
+    pub(crate) attacks: Bitboard,
+    pub(crate) mob: [i32; 5],
 }
 
-fn side_attacks(b: &Board, c: bool) -> Side {
+pub(crate) fn side_attacks(b: &Board, c: bool) -> Side {
     let own = b.friendly(c);
     let mine = b.hostile(!c);
     let occ = b.occupied();
@@ -264,6 +319,11 @@ fn board_features(b: &Board, f: &mut Features, active: bool, w: i32, h: i32) {
 }
 
 pub fn features(s: &State) -> Features {
+    features_with(s, true)
+}
+
+/// Features; the 5D check scan (`CHECKS_5D`, `SP_CHECKS`) only when `checks`.
+pub fn features_with(s: &State, checks: bool) -> Features {
     let mut f = [0i32; NF];
     let (l_min, l_max) = s.get_lines_range();
     let (amin, amax) = s.get_active_range();
@@ -290,12 +350,32 @@ pub fn features(s: &State) -> Features {
     f[fi::TL_SLOTS_HEAVY] = slots * 8 * heavy.min(full) / full;
     f[fi::TEMPO] = if s.get_present().1 { -1 } else { 1 };
     f[fi::ACTIVE_LINES] = active_boards;
+    let stm = s.get_present().1;
+    let sign = if stm { -1 } else { 1 };
+    if checks {
+        let checks = CheckPosition::for_phantom(s).checks(!stm, true);
+        f[fi::CHECKS_5D] = sign * checks.len().min(8) as i32;
+        f[fi::SP_CHECKS] = sign * checks.iter().filter(|m| m.from.tl() != m.to.tl()).count().min(8) as i32;
+    }
+    let present = s.get_present();
+    f[fi::MANDATORY] = sign * (amin..=amax).filter(|&l| s.get_timeline_end(l) == present).count() as i32;
     f
+}
+
+/// Weights from (feature name, value) pairs; unnamed features get zero.
+pub fn weights_by_name(pairs: &[(&str, f32)]) -> Weights {
+    let mut w = [0f32; NF];
+    for (n, v) in pairs {
+        if let Some(i) = FEATURE_NAMES.iter().position(|x| x == n) {
+            w[i] = *v;
+        }
+    }
+    w
 }
 
 /// Evaluation in centipawns from the side to move's perspective.
 pub fn evaluate(s: &State, w: &Weights) -> i32 {
-    let f = features(s);
+    let f = features_with(s, w[fi::CHECKS_5D] != 0.0 || w[fi::SP_CHECKS] != 0.0);
     let mut acc = 0f32;
     for i in 0..NF {
         acc += w[i] * f[i] as f32;
