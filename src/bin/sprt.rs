@@ -22,7 +22,7 @@ use kairos::core::state::{MateType, State};
 use kairos::core::variants::{apply_uci_moves, position_from_uci};
 use kairos::engine::ab::AlphaBeta;
 use kairos::engine::{Limits, OptionValue};
-use kairos::misc::ordering::HcOrdering;
+use kairos::misc::ordering::{AxisOrders, HcOrdering};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -393,8 +393,8 @@ fn shuffled_order(w: &HcInfo, mut st: u64) -> HcOrdering {
             }
             v
         })
-        .collect();
-    HcOrdering::Precomputed(orders)
+        .collect::<Vec<_>>();
+    HcOrdering::Precomputed(AxisOrders::new(orders))
 }
 
 /// The opening of pair `pair`, deterministic in (seed, pair).
