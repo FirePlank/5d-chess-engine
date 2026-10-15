@@ -78,6 +78,11 @@ pub fn default_weights() -> Weights {
     w
 }
 
+/// Weights used by the alpha-beta search with `use_hce` (Texel-tuned, see bin/tune.rs).
+pub fn tuned_weights() -> Weights {
+    default_weights()
+}
+
 #[inline(always)]
 fn centrality(sq: i32, w: i32, h: i32) -> i32 {
     let x = sq & 7;

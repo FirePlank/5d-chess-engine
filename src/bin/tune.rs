@@ -37,6 +37,19 @@ fn field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
 }
 
 /// Quiet positions of one game, labelled with the game result from white's side.
+/// No capture or promotion available to the side to move anywhere.
+fn quiet(s: &State) -> bool {
+    let player = s.get_present().1;
+    let mut scratch = kairos::core::multiverse::MoveList::new();
+    let (l_min, l_max) = s.get_lines_range();
+    (l_min..=l_max).all(|l| {
+        let (t, c) = s.get_timeline_end(l);
+        c != player || !s.multiverse().has_tactical_move(l, t, player, &mut scratch)
+    })
+}
+
+static QUIET_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn game_samples(line: &str, out: &mut Vec<Sample>) -> Option<()> {
     let position = field(line, "position")?;
     let moves = field(line, "moves")?;
@@ -100,6 +113,9 @@ fn game_samples(line: &str, out: &mut Vec<Sample>) -> Option<()> {
         if st.has_phantom_check() {
             continue;
         }
+        if QUIET_ONLY.load(std::sync::atomic::Ordering::Relaxed) && !quiet(&st) {
+            continue;
+        }
         out.push(Sample { f: hce::features(&st), r: white_result });
     }
     Some(())
@@ -128,6 +144,7 @@ fn main() {
     let lr: f64 = arg(&args, "--lr", 2.0);
     let threads: usize = arg(&args, "--threads", 14);
     let out_path: String = arg(&args, "--out", "games/tuned_weights.txt".to_string());
+    QUIET_ONLY.store(args.iter().any(|a| a == "--quiet"), std::sync::atomic::Ordering::Relaxed);
     let files: Vec<String> = args[1..]
         .iter()
         .enumerate()
@@ -173,6 +190,40 @@ fn main() {
     eprintln!("{} positions ({} train, {} holdout) in {:.1}s", all.len(), train.len(), valid.len(), t0.elapsed().as_secs_f64());
 
     let mut w = hce::default_weights();
+    if args.iter().any(|a| a == "--featdiag") {
+        // Per-feature correlation with the result and mean result by sign.
+        let n = all.len() as f64;
+        let mr = all.iter().map(|s| s.r as f64).sum::<f64>() / n;
+        for i in 0..NF {
+            let mf = all.iter().map(|s| s.f[i] as f64).sum::<f64>() / n;
+            let (mut cov, mut vf, mut vr) = (0.0, 0.0, 0.0);
+            let (mut pos, mut np, mut neg, mut nn) = (0.0, 0usize, 0.0, 0usize);
+            for s in all.iter() {
+                let (df, dr) = (s.f[i] as f64 - mf, s.r as f64 - mr);
+                cov += df * dr;
+                vf += df * df;
+                vr += dr * dr;
+                if s.f[i] > 0 {
+                    pos += s.r as f64;
+                    np += 1;
+                } else if s.f[i] < 0 {
+                    neg += s.r as f64;
+                    nn += 1;
+                }
+            }
+            let corr = cov / (vf.sqrt() * vr.sqrt()).max(1e-12);
+            eprintln!(
+                "{:<16} corr {:+.4}  f>0: {:.3} (n {:7})  f<0: {:.3} (n {:7})",
+                hce::FEATURE_NAMES[i],
+                corr,
+                pos / np.max(1) as f64,
+                np,
+                neg / nn.max(1) as f64,
+                nn
+            );
+        }
+        return;
+    }
     if args.iter().any(|a| a == "--diag") {
         // Mean result by default-eval bucket (white's view), to check labels and scale.
         let mut bk: std::collections::BTreeMap<i32, (f64, usize)> = Default::default();
