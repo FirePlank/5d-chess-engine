@@ -180,7 +180,7 @@ impl Default for AbParams {
             use_hce: true,
             root_static: false,
             q_restrict: true,
-            killers_first: false,
+            killers_first: true,
             q_checks: 0,
             use_net: false,
         }
@@ -344,18 +344,23 @@ impl AlphaBeta {
 
     #[inline]
     fn static_eval(&self, s: &State) -> i32 {
-        let base = if self.params.use_hce {
-            let _p = crate::misc::prof::scope(9);
-            super::hce::evaluate(s, &self.hce)
-        } else {
-            evaluate(s, &self.eval)
-        };
-        if self.params.use_net {
-            if let Some(net) = super::evalnet::embedded() {
-                return base + net.residual(&super::evalnet::inputs(s, base));
-            }
+        let _p = crate::misc::prof::scope(9);
+        let net = if self.params.use_net { super::evalnet::embedded() } else { None };
+        if self.params.use_hce {
+            use super::hce;
+            let sd = hce::sides(s);
+            let f = hce::features_from(&sd, s, hce::needs_checks(&self.hce));
+            let base = hce::score(&f, &self.hce, s.get_present().1);
+            return match net {
+                Some(net) => base + net.residual(&super::evalnet::inputs_from(&sd, s, base)),
+                None => base,
+            };
         }
-        base
+        let base = evaluate(s, &self.eval);
+        match net {
+            Some(net) => base + net.residual(&super::evalnet::inputs(s, base)),
+            None => base,
+        }
     }
 
     #[inline]
