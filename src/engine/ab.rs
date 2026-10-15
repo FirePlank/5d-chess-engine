@@ -563,7 +563,7 @@ impl AlphaBeta {
     fn start_actions(&self, s: &State, info: &HcInfo, cursor: &mut BestFirstCursor, scratch: &mut OrderScratch, ss: SearchSpace) {
         let (orders, scores) = cursor.ordering_mut();
         self.node_ordering(s, info, true, scratch, orders, scores);
-        cursor.restart(ss);
+        cursor.restart(info, ss);
     }
 
     fn action_score(&self, s: &State, act: &MoveSeq, ply: usize) -> i32 {
@@ -904,7 +904,7 @@ impl AlphaBeta {
                             // ordering is unchanged: nothing was searched since it was made.)
                             if generated == 0 {
                                 if let Some(f) = full.take() {
-                                    nb.cursor.restart(f);
+                                    nb.cursor.restart(&nb.info, f);
                                     continue;
                                 }
                             }
@@ -1081,7 +1081,7 @@ impl AlphaBeta {
             }
             match agen.next(&hc, root) {
                 Some(a) => roots.push((self.action_score(root, &a, 0), a)),
-                None if roots.is_empty() && full.is_some() => agen.restart(full.take().unwrap()),
+                None if roots.is_empty() && full.is_some() => agen.restart(&hc, full.take().unwrap()),
                 None => {
                     complete = true;
                     break;

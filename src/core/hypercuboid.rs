@@ -95,6 +95,8 @@ struct BuildScratch {
     departures: Vec<Vec<Vec4>>,
     /// (destination line, move) of every jump, stably sorted by line.
     arrivals: Vec<(i32, FullMove)>,
+    sorted: Vec<(i32, FullMove)>,
+    line_counts: Vec<u32>,
     ml: MoveList,
     /// Departure coordinate of each source square, per axis.
     jump_tab: Vec<[Index; 64]>,
@@ -115,19 +117,35 @@ impl AxisGroups {
         self.nonjump = IntegerSet::new();
         self.by_dep.clear();
         self.by_from.clear();
+        // Arrivals of one piece mostly come in runs: try the group used last first.
+        let (mut last_dep, mut last_from) = (0usize, 0usize);
         for (i, e) in entries.iter().enumerate() {
             let i = i as Index;
             match e {
                 Entry::Physical { .. } | Entry::Null => self.nonjump.insert(i),
                 Entry::Arriving { idx, fa, .. } if *idx != INVALID => {
-                    match self.by_dep.iter_mut().find(|d| d.0 == *fa && d.1 == *idx) {
-                        Some(d) => d.2.insert(i),
-                        None => self.by_dep.push((*fa, *idx, IntegerSet::singleton(i))),
+                    let (fa, idx) = (*fa, *idx);
+                    let hit = |d: &(u32, Index, IntegerSet)| d.0 == fa && d.1 == idx;
+                    if !self.by_dep.get(last_dep).is_some_and(hit) {
+                        last_dep = match self.by_dep.iter().position(hit) {
+                            Some(k) => k,
+                            None => {
+                                self.by_dep.push((fa, idx, IntegerSet::new()));
+                                self.by_dep.len() - 1
+                            }
+                        };
                     }
-                    match self.by_from.iter_mut().find(|d| d.0 == *fa) {
-                        Some(d) => d.1.insert(i),
-                        None => self.by_from.push((*fa, IntegerSet::singleton(i))),
+                    self.by_dep[last_dep].2.insert(i);
+                    if !self.by_from.get(last_from).is_some_and(|d| d.0 == fa) {
+                        last_from = match self.by_from.iter().position(|d| d.0 == fa) {
+                            Some(k) => k,
+                            None => {
+                                self.by_from.push((fa, IntegerSet::new()));
+                                self.by_from.len() - 1
+                            }
+                        };
                     }
+                    self.by_from[last_from].1.insert(i);
                 }
                 _ => {}
             }
@@ -235,7 +253,7 @@ impl HcInfo {
         let st_scope = crate::misc::prof::scope(15);
         let HcInfo { player: info_player, line_axes, axis_lo, axis_of, axis_coords, branch_entries, dim, universe, new_axis, groups, scratch } =
             self;
-        let BuildScratch { playable, stays, departures, arrivals, ml, jump_tab, safety } = scratch;
+        let BuildScratch { playable, stays, departures, arrivals, sorted, line_counts, ml, jump_tab, safety } = scratch;
         let present = s.get_present();
         let player = present.1;
         let (lines_lo, lines_hi) = s.get_lines_range();
@@ -299,7 +317,24 @@ impl HcInfo {
             }
         }
         drop(gen_scope);
-        arrivals.sort_by_key(|a| a.0);
+        // Stable bucket sort by destination line.
+        let nl = (lines_hi - lines_lo + 1) as usize;
+        line_counts.clear();
+        line_counts.resize(nl + 1, 0);
+        for a in arrivals.iter() {
+            line_counts[(a.0 - lines_lo) as usize + 1] += 1;
+        }
+        for k in 1..=nl {
+            line_counts[k] += line_counts[k - 1];
+        }
+        sorted.clear();
+        sorted.resize(arrivals.len(), (0, FullMove::default()));
+        for &a in arrivals.iter() {
+            let k = &mut line_counts[(a.0 - lines_lo) as usize];
+            sorted[*k as usize] = a;
+            *k += 1;
+        }
+        std::mem::swap(arrivals, sorted);
         let max_branch = departures[..np].iter().filter(|d| !d.is_empty()).count();
         jump_tab.clear();
         jump_tab.resize(np, [INVALID; 64]);
@@ -935,14 +970,16 @@ impl HcCursor {
 /// Subspaces of the initial search space keep their precedence (later ones first).
 pub struct BestFirstCursor {
     heap: BfHeap,
-    order: HcOrdering,
     sc: PointScratch,
     checks: CheckBuf,
 }
 
 struct BfHeap {
     heap: std::collections::BinaryHeap<BfItem>,
+    order: HcOrdering,
     scores: Vec<Vec<i32>>,
+    /// The coordinates the orders list (the context's universe).
+    universe: Hc,
     seq: u64,
 }
 
@@ -952,7 +989,15 @@ impl BfHeap {
         let mut bound = 0i64;
         for n in 0..hc.dimension() {
             let sc = &self.scores[n];
-            let best = hc[n].iter().map(|i| sc.get(i as usize).copied().unwrap_or(0)).max();
+            let set = &hc[n];
+            let best = match &self.order {
+                // An order lists its axis' universe best first, so the first member of the
+                // set has the set's best score.
+                HcOrdering::Precomputed(o) if set.is_subset_of(&self.universe[n]) => {
+                    o[n].iter().find(|&&i| set.contains(i)).map(|&i| sc[i as usize])
+                }
+                _ => set.iter().map(|i| sc.get(i as usize).copied().unwrap_or(0)).max(),
+            };
             match best {
                 Some(b) => bound += b as i64,
                 None => return,
@@ -987,8 +1032,13 @@ impl Ord for BfItem {
 impl Default for BestFirstCursor {
     fn default() -> Self {
         BestFirstCursor {
-            heap: BfHeap { heap: std::collections::BinaryHeap::new(), scores: Vec::new(), seq: 0 },
-            order: HcOrdering::Precomputed(Vec::new()),
+            heap: BfHeap {
+                heap: std::collections::BinaryHeap::new(),
+                order: HcOrdering::Precomputed(Vec::new()),
+                scores: Vec::new(),
+                universe: Hc::default(),
+                seq: 0,
+            },
             sc: PointScratch::default(),
             checks: CheckBuf::default(),
         }
@@ -996,23 +1046,17 @@ impl Default for BestFirstCursor {
 }
 
 impl BestFirstCursor {
-    pub fn new(ss: SearchSpace, order: HcOrdering, scores: Vec<Vec<i32>>) -> Self {
-        let mut c = BestFirstCursor { order, ..Default::default() };
-        c.heap.scores = scores;
-        c.restart(ss);
-        c
-    }
-
-    /// The per-axis orders and coordinate scores, to fill before `restart` (their storage
-    /// is kept between uses).
+    /// The per-axis orders (each listing its axis' universe coordinates, best first) and
+    /// coordinate scores, to fill before `restart` (their storage is kept between uses).
     pub fn ordering_mut(&mut self) -> (&mut Vec<Vec<Index>>, &mut Vec<Vec<i32>>) {
-        (self.order.axes_mut(), &mut self.heap.scores)
+        (self.heap.order.axes_mut(), &mut self.heap.scores)
     }
 
-    /// Enumerate `ss` from the start under the current ordering.
-    pub fn restart(&mut self, ss: SearchSpace) {
+    /// Enumerate `ss` (of the context `info`) from the start under the current ordering.
+    pub fn restart(&mut self, info: &HcInfo, ss: SearchSpace) {
         self.heap.heap.clear();
         self.heap.seq = 0;
+        self.heap.universe.clone_from(info.get_universe());
         let n = ss.hcs.len();
         for (k, hc) in ss.hcs.into_iter().enumerate() {
             self.heap.push(hc, (n - 1 - k) as i32);
@@ -1022,7 +1066,7 @@ impl BestFirstCursor {
     pub fn next(&mut self, info: &HcInfo, s: &State) -> Option<MoveSeq> {
         while let Some(BfItem { key, mut hc }) = self.heap.heap.pop() {
             let class = -key.0;
-            if !info.take_point(&mut hc, &self.order, &mut self.sc) {
+            if !info.take_point(&mut hc, &self.heap.order, &mut self.sc) {
                 continue;
             }
             let pt = &self.sc.point;

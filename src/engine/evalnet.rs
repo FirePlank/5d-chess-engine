@@ -122,6 +122,45 @@ impl Net {
 
     /// Residual in centipawns (side to move).
     pub fn residual(&self, x: &[f32; NI]) -> i32 {
+        let out = match (self.h1, self.h2) {
+            (64, 32) => self.forward_fixed::<64, 32>(x),
+            _ => self.forward(x),
+        };
+        (out * self.scale).clamp(-self.cap, self.cap) as i32
+    }
+
+    /// `forward` with the layer sizes known at compile time (same operations, same order).
+    #[inline]
+    fn forward_fixed<const H1: usize, const H2: usize>(&self, x: &[f32; NI]) -> f32 {
+        let mut a1: [f32; H1] = self.b1[..H1].try_into().unwrap();
+        for i in 0..NI {
+            let xi = x[i];
+            if xi != 0.0 {
+                let row: &[f32; H1] = self.w1t[i * H1..(i + 1) * H1].try_into().unwrap();
+                for j in 0..H1 {
+                    a1[j] += row[j] * xi;
+                }
+            }
+        }
+        let mut a2: [f32; H2] = self.b2[..H2].try_into().unwrap();
+        for j in 0..H1 {
+            let aj = a1[j].clamp(0.0, 1.0);
+            if aj != 0.0 {
+                let row: &[f32; H2] = self.w2t[j * H2..(j + 1) * H2].try_into().unwrap();
+                for k in 0..H2 {
+                    a2[k] += row[k] * aj;
+                }
+            }
+        }
+        let mut out = self.b3;
+        for k in 0..H2 {
+            out += self.w3[k] * a2[k].clamp(0.0, 1.0);
+        }
+        out
+    }
+
+    /// Output before scaling, for any layer sizes.
+    fn forward(&self, x: &[f32; NI]) -> f32 {
         let (h1, h2) = (self.h1, self.h2);
         let mut a1 = [0f32; MAX_H];
         a1[..h1].copy_from_slice(&self.b1);
@@ -149,7 +188,7 @@ impl Net {
         for k in 0..h2 {
             out += self.w3[k] * a2[k].clamp(0.0, 1.0);
         }
-        (out * self.scale).clamp(-self.cap, self.cap) as i32
+        out
     }
 }
 
