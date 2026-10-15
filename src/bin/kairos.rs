@@ -25,6 +25,7 @@ fn main() {
     let mut rmax = DEFAULT_ROLLOUT_MAX_ACTIONS;
     let mut temp = DEFAULT_TEMPERATURE;
     let (mut pwc, mut pwa) = (2.0f64, 0.5f64);
+    let mut opts: Vec<(String, String)> = Vec::new();
     let mut i = 2;
     while i < args.len() {
         let v = args.get(i + 1).cloned().unwrap_or_else(|| usage());
@@ -34,6 +35,10 @@ fn main() {
             "-wt" | "--weight-temperature" => temp = v.parse().unwrap_or_else(|_| usage()),
             "--pw-constant" => pwc = v.parse().unwrap_or_else(|_| usage()),
             "--pw-alpha" => pwa = v.parse().unwrap_or_else(|_| usage()),
+            "--opt" => {
+                let (k, val) = v.split_once('=').unwrap_or_else(|| usage());
+                opts.push((k.to_string(), val.to_string()));
+            }
             _ => usage(),
         }
         i += 2;
@@ -63,5 +68,12 @@ fn main() {
         "ab" => Box::new(kairos::engine::ab::AlphaBeta::new(Default::default(), Default::default())),
         _ => usage(),
     };
+    let mut engine = engine;
+    for (k, v) in &opts {
+        if !engine.set_option(k, &kairos::engine::OptionValue::parse(v)) {
+            eprintln!("unknown option {}", k);
+            std::process::exit(2);
+        }
+    }
     uci::run(engine);
 }
