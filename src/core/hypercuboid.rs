@@ -541,7 +541,7 @@ impl HcInfo {
         line_axes.sort_unstable_by_key(|e| e.0);
         let dimension = np + max_branch;
         let n_branch = branch_entries.len();
-        *universe = Hc::ranges(dimension, |n| if n < np { axis_coords[n].len() } else { n_branch });
+        universe.set_ranges(dimension, |n| if n < np { axis_coords[n].len() } else { n_branch });
         // Branch arrivals were only admitted with a live departure; existing-axis arrivals
         // lose their coordinate when their departure was filtered out.
         for n in 0..np {
@@ -576,11 +576,15 @@ impl HcInfo {
                 hc_n_lines[n].assign_singleton(0);
             }
         }
-        let mut ss = SearchSpace::from_vec(vec![hc_n_lines.clone()]);
+        // [all branch axes non-null, ..., the first one non-null, none]
+        let mut hcs = Vec::with_capacity(dimension - np + 1);
         for n in np..dimension {
+            hcs.push(hc_n_lines.clone());
             hc_n_lines[n].assign(&non_null);
-            ss.push_front(hc_n_lines.clone());
         }
+        hcs.push(hc_n_lines);
+        hcs.reverse();
+        let ss = SearchSpace::from_vec(hcs);
         if groups.len() < np + 1 {
             groups.resize_with(np + 1, AxisGroups::default);
         }
