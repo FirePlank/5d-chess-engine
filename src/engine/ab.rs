@@ -24,21 +24,26 @@ struct ActionGen {
     cursors: Vec<HcCursor>,
     heads: Vec<Option<(i32, MoveSeq)>>,
     filled: Vec<bool>,
+    tail: HcCursor,
 }
 
 impl ActionGen {
     fn new(ss: SearchSpace, order: HcOrdering, merge: bool) -> Self {
         let order = std::rc::Rc::new(order);
-        let cursors: Vec<HcCursor> = if merge {
-            ss.hcs
-                .into_iter()
-                .map(|h| HcCursor::with_shared(SearchSpace::from_vec(vec![h]), order.clone(), SearchMode::Balanced))
-                .collect()
-        } else {
-            vec![HcCursor::with_shared(ss, order, SearchMode::Balanced)]
-        };
-        let n = cursors.len();
-        ActionGen { cursors, heads: vec![None; n], filled: vec![false; n] }
+        // Subspaces are ordered [k branches, ..., 1 branch, 0 branches]. Only the 0- and
+        // 1-branch ones are merged; finding a first legal action with several simultaneous
+        // branches can be very expensive, so those come last, in one tail cursor.
+        let mut tail = ss.hcs;
+        let mut merged: Vec<HcCursor> = Vec::new();
+        if merge && tail.len() >= 2 {
+            let h0 = tail.pop().unwrap();
+            let h1 = tail.pop().unwrap();
+            merged.push(HcCursor::with_shared(SearchSpace::from_vec(vec![h1]), order.clone(), SearchMode::Balanced));
+            merged.push(HcCursor::with_shared(SearchSpace::from_vec(vec![h0]), order.clone(), SearchMode::Balanced));
+        }
+        let tail_cursor = HcCursor::with_shared(SearchSpace::from_vec(tail), order, SearchMode::Balanced);
+        let n = merged.len();
+        ActionGen { cursors: merged, heads: vec![None; n], filled: vec![false; n], tail: tail_cursor }
     }
 
     fn next(&mut self, info: &HcInfo, s: &State, score: &mut dyn FnMut(&MoveSeq) -> i32) -> Option<(i32, MoveSeq)> {
@@ -55,9 +60,13 @@ impl ActionGen {
                 }
             }
         }
-        let k = best?;
-        self.filled[k] = false;
-        self.heads[k].take()
+        match best {
+            Some(k) => {
+                self.filled[k] = false;
+                self.heads[k].take()
+            }
+            None => self.tail.next(info, s).map(|a| (score(&a), a)),
+        }
     }
 }
 
