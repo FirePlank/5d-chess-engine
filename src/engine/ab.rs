@@ -88,6 +88,9 @@ pub struct AlphaBeta {
     node_limit: Option<u64>,
     aborted: bool,
     stop_ptr: *const AtomicBool,
+    /// The root is won or lost by enough (or by mate) that pruning which hides long mating
+    /// lines is switched off (Stockfish's seekMate).
+    seek_mate: bool,
 }
 
 // The raw stop pointer is only dereferenced during `find_best_move`, while the borrow it
@@ -276,6 +279,7 @@ impl AlphaBeta {
             node_limit: None,
             aborted: false,
             stop_ptr: std::ptr::null(),
+            seek_mate: false,
         }
     }
 
@@ -669,7 +673,7 @@ impl AlphaBeta {
             if depth <= RFP_DEPTH && e - RFP_MARGIN * depth >= beta {
                 return e;
             }
-            if depth >= NMP_MIN_DEPTH && e >= beta && Self::has_null_material(s) {
+            if depth >= NMP_MIN_DEPTH && e >= beta && !self.seek_mate && Self::has_null_material(s) {
                 let r = NMP_R + depth / NMP_DIV;
                 let mark = s.make_null();
                 let v = -self.negamax(s, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
@@ -925,8 +929,11 @@ impl AlphaBeta {
         }
         roots.sort_by(|a, b| b.0.cmp(&a.0));
         let mut best: MoveSeq = roots[0].1.clone();
-        let mut best_score = 0;
+        let mut best_score: i32 = 0;
+        self.seek_mate = false;
         for depth in 1..=max_depth {
+            // seekMate bar: 3000 + 100000 / depth^2 (Stockfish's form, in our units).
+            self.seek_mate = depth > 1 && best_score.abs() >= 3000 + 100_000 / (depth * depth);
             let mut alpha = -INF;
             let beta = INF;
             let mut iter_best: Option<(i32, MoveSeq)> = None;
@@ -961,10 +968,17 @@ impl AlphaBeta {
                     iter_best = Some((v, act.clone()));
                 }
             }
+            // A partially searched iteration still improves on the previous best, except that a
+            // mate an earlier depth proved survives a depth that comes back longer, not mating
+            // or interrupted, and an interrupted depth's loss is not trusted (Stockfish's
+            // forgottenMate and abortedLossSearch).
+            let mut kept = false;
             if let Some((v, act)) = iter_best {
-                // A partially searched iteration still improves on the previous best.
-                best = act;
-                best_score = v;
+                kept = depth > 1 && ((best_score > MATE - 1000 && v < best_score) || (self.aborted && v < -(MATE - 1000)));
+                if !kept {
+                    best = act;
+                    best_score = v;
+                }
             }
             let elapsed = start.elapsed().as_secs_f64();
             if !self.aborted {
@@ -972,6 +986,12 @@ impl AlphaBeta {
                 let mut idx: Vec<usize> = (0..roots.len()).collect();
                 idx.sort_by(|&a, &b| scores.get(b).copied().unwrap_or(-INF).cmp(&scores.get(a).copied().unwrap_or(-INF)));
                 roots = idx.into_iter().map(|i| roots[i].clone()).collect();
+                if kept {
+                    // The kept mate is searched first at the next depth.
+                    if let Some(i) = roots.iter().position(|r| r.1 == best) {
+                        roots[..=i].rotate_right(1);
+                    }
+                }
                 let pv = self.pv_line(root, &best, depth as usize);
                 let score_txt = if best_score > MATE - 1000 {
                     format!("mate {}", (MATE - best_score + 1) / 2)
@@ -997,7 +1017,12 @@ impl AlphaBeta {
                     pv_txt.join(" ")
                 ));
             }
-            if self.aborted || best_score.abs() > MATE - 1000 {
+            if self.aborted {
+                break;
+            }
+            // Keep searching after a mate (pruning can report false or long mates) until the
+            // mate is well inside the searched depth.
+            if best_score.abs() > MATE - 1000 && depth >= 2 * (MATE - best_score.abs()) + 2 {
                 break;
             }
             if let Some(d) = self.deadline {
