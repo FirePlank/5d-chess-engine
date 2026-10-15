@@ -74,8 +74,6 @@ struct TtEntry {
     bound: Bound,
     score: i32,
     action: MoveSeq,
-    /// Searched with every reply of mated nodes tried: its mate scores are bounds.
-    sound: bool,
 }
 
 pub struct AlphaBeta {
@@ -329,7 +327,7 @@ impl AlphaBeta {
             Some(e) => e.key != key || depth as i16 >= e.depth - 1 || bound == Bound::Exact,
         };
         if replace {
-            self.tt[slot] = Some(TtEntry { key, depth: depth as i16, bound, score, action: action.clone(), sound: self.seek_mate });
+            self.tt[slot] = Some(TtEntry { key, depth: depth as i16, bound, score, action: action.clone() });
         }
     }
 
@@ -420,7 +418,7 @@ impl AlphaBeta {
 
     /// Moves on boards the side to move doesn't have to play (ahead of the present, or on
     /// inactive timelines) are left out: only the null coordinate stay on those axes.
-    fn without_future(s: &State, info: &HcInfo, ss: SearchSpace, departures: bool) -> SearchSpace {
+    fn without_future(s: &State, info: &HcInfo, ss: SearchSpace) -> SearchSpace {
         let present = s.get_present();
         let (amin, amax) = s.get_active_range();
         let (lo, hi) = s.get_lines_range();
@@ -430,14 +428,7 @@ impl AlphaBeta {
             if l >= amin && l <= amax && s.get_timeline_end(l) == present {
                 continue;
             }
-            let mut set = IntegerSet::singleton(0);
-            if departures {
-                for i in 0..info.axis_len(n) as Index {
-                    if matches!(info.entry(n, i), Entry::Departing { .. }) {
-                        set.insert(i);
-                    }
-                }
-            }
+            let set = IntegerSet::singleton(0);
             allowed.push((n, set));
         }
         if allowed.is_empty() {
@@ -682,9 +673,7 @@ impl AlphaBeta {
         let mut tt_action: Option<MoveSeq> = None;
         if let Some(e) = self.tt_probe(key) {
             let sc = mate_from_tt(e.score, ply);
-            // In sound mode, mate scores from searches that pruned defences are not reused.
-            let trusted = !self.seek_mate || e.sound || sc.abs() < MATE - 1000;
-            if !pv && e.depth as i32 >= depth && trusted {
+            if !pv && e.depth as i32 >= depth {
                 match e.bound {
                     Bound::Exact => return sc,
                     Bound::Lower if sc >= beta => return sc,
@@ -761,22 +750,11 @@ impl AlphaBeta {
         }
 
         let (info, ss) = HcInfo::build_hc(s);
-        // When every action tried gets mated, pieces may also travel back from optional boards
-        // (a spatial move there cannot escape a mate on the boards that must be played); the
-        // full space is only for positions with no legal action otherwise.
         let mut full = Some(ss.clone());
-        let mut with_departures = Some(Self::without_future(s, &info, ss.clone(), true));
-        let mut agen = self.action_gen(s, &info, Self::without_future(s, &info, ss, false));
+        let mut agen = self.action_gen(s, &info, Self::without_future(s, &info, ss));
         let mut generated = 0usize;
         let mut exhausted = false;
-        // In sound mode (a mate is in play) pruning may only stop once some action is known
-        // not to lose to mate: while every action tried so far gets mated, the rest (and
-        // travels from optional boards) are searched too, so a mate score is an upper bound on
-        // the mate's length.
-        let sound = self.seek_mate;
-        let mated = |best: i32| sound && best <= -(MATE - 1000);
-        let mut tried: Vec<MoveSeq> = Vec::new();
-        while !exhausted && (searched < cap || mated(best)) {
+        while searched < cap && !exhausted {
             let mut batch: Vec<(i32, MoveSeq)> = Vec::with_capacity(BATCH);
             while batch.len() < BATCH {
                 if self.check_abort() {
@@ -784,26 +762,19 @@ impl AlphaBeta {
                 }
                 match agen.next(&info, s) {
                     None => {
-                        // No legal action without an optional-board move, or all of them
-                        // get mated: the full space.
-                        let next = if generated == 0 {
-                            with_departures = None;
-                            full.take()
-                        } else if mated(best) {
-                            with_departures.take()
-                        } else {
-                            None
-                        };
-                        if let Some(f) = next {
-                            agen = self.action_gen(s, &info, f);
-                            continue;
+                        // Every legal action may need a move on an optional board.
+                        if generated == 0 {
+                            if let Some(f) = full.take() {
+                                agen = self.action_gen(s, &info, f);
+                                continue;
+                            }
                         }
                         exhausted = true;
                         break;
                     }
                     Some(act) => {
                         generated += 1;
-                        if pre_tried.contains(&act) || tt_action.as_ref() == Some(&act) || tried.contains(&act) {
+                        if pre_tried.contains(&act) || tt_action.as_ref() == Some(&act) {
                             continue;
                         }
                         batch.push((self.action_score(s, &act, ply), act));
@@ -812,7 +783,7 @@ impl AlphaBeta {
             }
             batch.sort_by(|a, b| b.0.cmp(&a.0));
             for (sc, act) in batch {
-                if searched >= cap && !mated(best) {
+                if searched >= cap {
                     break;
                 }
                 let mark = Self::make(s, &act);
@@ -845,9 +816,6 @@ impl AlphaBeta {
                     if v > alpha {
                         alpha = v;
                     }
-                }
-                if mated(best) {
-                    tried.push(act.clone());
                 }
                 if alpha >= beta {
                     self.on_cutoff(s, &act, depth, ply);
@@ -959,7 +927,7 @@ impl AlphaBeta {
         // Root actions (all of them, up to the root cap), ordered heuristically.
         let (hc, ss) = HcInfo::build_hc(root);
         let mut full = Some(ss.clone());
-        let mut agen = self.action_gen(root, &hc, Self::without_future(root, &hc, ss, false));
+        let mut agen = self.action_gen(root, &hc, Self::without_future(root, &hc, ss));
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
         // Enumerating every root action can take seconds with many timelines: spend at most
         // a quarter of the budget on it (always keeping at least one action).
@@ -981,13 +949,9 @@ impl AlphaBeta {
         let mut best: MoveSeq = roots[0].1.clone();
         let mut best_score: i32 = 0;
         self.seek_mate = false;
-        let mut best_sound = false;
-        let mut verify = false;
-        let mut depth = 1;
-        while depth <= max_depth {
-            // seekMate bar: 3000 + 100000 / depth^2 (Stockfish's form, in our units). Sound mode
-            // goes with it, and with re-searching a depth that found an unverified mate.
-            self.seek_mate = verify || (depth > 1 && best_score.abs() >= 3000 + 100_000 / (depth * depth));
+        for depth in 1..=max_depth {
+            // seekMate bar: 3000 + 100000 / depth^2 (Stockfish's form, in our units).
+            self.seek_mate = depth > 1 && best_score.abs() >= 3000 + 100_000 / (depth * depth);
             let mut alpha = -INF;
             let beta = INF;
             let mut iter_best: Option<(i32, MoveSeq)> = None;
@@ -1028,17 +992,12 @@ impl AlphaBeta {
             // forgottenMate and abortedLossSearch).
             let mut kept = false;
             if let Some((v, act)) = iter_best {
-                kept = depth > 1
-                    && ((best_score > MATE - 1000 && best_sound && v < best_score) || (self.aborted && v < -(MATE - 1000)));
+                kept = depth > 1 && ((best_score > MATE - 1000 && v < best_score) || (self.aborted && v < -(MATE - 1000)));
                 if !kept {
                     best = act;
                     best_score = v;
-                    best_sound = self.seek_mate;
                 }
             }
-            // A mate found outside sound mode is re-searched at this depth in sound mode before
-            // it is reported: pruned defences could have made it look shorter than it is.
-            let unverified = !self.aborted && best_score.abs() > MATE - 1000 && !best_sound;
             let elapsed = start.elapsed().as_secs_f64();
             if !self.aborted {
                 // Reorder roots: best first, rest by this iteration's scores.
@@ -1051,8 +1010,6 @@ impl AlphaBeta {
                         roots[..=i].rotate_right(1);
                     }
                 }
-            }
-            if !self.aborted && !unverified {
                 let pv = self.pv_line(root, &best, depth as usize);
                 let score_txt = if best_score > MATE - 1000 {
                     format!("mate {}", (MATE - best_score + 1) / 2)
@@ -1081,11 +1038,6 @@ impl AlphaBeta {
             if self.aborted {
                 break;
             }
-            if unverified {
-                verify = true;
-                continue;
-            }
-            verify = false;
             // Keep searching after a mate (pruning can report false or long mates) until the
             // mate is well inside the searched depth.
             if best_score.abs() > MATE - 1000 && depth >= 2 * (MATE - best_score.abs()) + 2 {
@@ -1099,7 +1051,6 @@ impl AlphaBeta {
                     break;
                 }
             }
-            depth += 1;
         }
         Some(Action::from_moveseq(&best, root))
     }
