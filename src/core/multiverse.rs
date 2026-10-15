@@ -138,6 +138,8 @@ pub struct Timeline {
     /// First stored half-turn index, `i32::MAX` when empty.
     pub start: i32,
     pub boards: Vec<Board>,
+    /// `board_key` of each board (kept so undoing a move needs no rehash).
+    keys: Vec<u64>,
 }
 impl Timeline {
     #[inline(always)]
@@ -231,7 +233,7 @@ impl Multiverse {
         for (u, slot) in slots.into_iter().enumerate() {
             let first = slot.iter().position(|b| b.is_some());
             match first {
-                None => lines.push(Timeline { start: i32::MAX, boards: Vec::new() }),
+                None => lines.push(Timeline { start: i32::MAX, boards: Vec::new(), keys: Vec::new() }),
                 Some(s) => {
                     let mut bs = Vec::with_capacity(slot.len() - s);
                     for (k, b) in slot[s..].iter().enumerate() {
@@ -246,7 +248,7 @@ impl Multiverse {
                             }
                         }
                     }
-                    lines.push(Timeline { start: s as i32, boards: bs });
+                    lines.push(Timeline { start: s as i32, boards: bs, keys: Vec::new() });
                 }
             }
         }
@@ -268,9 +270,11 @@ impl Multiverse {
             hash: 0,
         };
         let mut h = 0u64;
-        for (u, tl) in m.lines.iter().enumerate() {
+        for (u, tl) in m.lines.iter_mut().enumerate() {
             for (k, b) in tl.boards.iter().enumerate() {
-                h ^= board_key(u_to_l(u as i32), tl.start + k as i32, b);
+                let key = board_key(u_to_l(u as i32), tl.start + k as i32, b);
+                tl.keys.push(key);
+                h ^= key;
             }
         }
         m.hash = h;
@@ -357,7 +361,9 @@ impl Multiverse {
     pub fn append_board(&mut self, l: i32, b: Board) {
         let u = l_to_u(l) as usize;
         let tl = &mut self.lines[u];
-        self.hash ^= board_key(l, tl.start + tl.boards.len() as i32, &b);
+        let key = board_key(l, tl.start + tl.boards.len() as i32, &b);
+        self.hash ^= key;
+        tl.keys.push(key);
         tl.boards.push(b);
     }
     #[inline(always)]
@@ -369,14 +375,16 @@ impl Multiverse {
         let u = l_to_u(l) as usize;
         let v = tc_to_v(t, c);
         if u >= self.lines.len() {
-            self.lines.resize(u + 1, Timeline { start: i32::MAX, boards: Vec::new() });
+            self.lines.resize(u + 1, Timeline { start: i32::MAX, boards: Vec::new(), keys: Vec::new() });
         }
         self.l_min = self.l_min.min(l);
         self.l_max = self.l_max.max(l);
         let tl = &mut self.lines[u];
         assert!(tl.boards.is_empty(), "insert_board on a populated timeline");
         tl.start = v;
-        self.hash ^= board_key(l, v, &b);
+        let key = board_key(l, v, &b);
+        self.hash ^= key;
+        tl.keys.push(key);
         tl.boards.push(b);
     }
 
@@ -403,21 +411,21 @@ impl Multiverse {
     /// Undo the most recent `insert_board` (used by make/unmake).
     pub fn remove_last_line(&mut self, l: i32, saved_ranges: (i32, i32, i32, i32)) {
         let u = l_to_u(l) as usize;
-        if let Some(b) = self.lines[u].boards.first() {
-            self.hash ^= board_key(l, self.lines[u].start, b);
+        let tl = &mut self.lines[u];
+        if let Some(&key) = tl.keys.first() {
+            self.hash ^= key;
         }
-        self.lines[u].boards.clear();
-        self.lines[u].start = i32::MAX;
-        if u + 1 == self.lines.len() {
-            self.lines.pop();
-        }
+        // The emptied timeline keeps its storage for the next branch.
+        tl.boards.clear();
+        tl.keys.clear();
+        tl.start = i32::MAX;
         (self.l_min, self.l_max, self.active_min, self.active_max) = saved_ranges;
     }
     pub fn pop_board(&mut self, l: i32) {
         let u = l_to_u(l) as usize;
         let tl = &mut self.lines[u];
-        if let Some(b) = tl.boards.pop() {
-            self.hash ^= board_key(l, tl.start + tl.boards.len() as i32, &b);
+        if tl.boards.pop().is_some() {
+            self.hash ^= tl.keys.pop().unwrap();
         }
     }
     #[inline(always)]

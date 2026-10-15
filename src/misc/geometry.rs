@@ -4,11 +4,48 @@ use super::integer_set::{Bits, Index, IntegerSet};
 
 pub type Point = Vec<Index>;
 
-/// A product of per-axis coordinate sets, stored flat: every axis gets `k` words.
-#[derive(Clone, Default, PartialEq, Eq)]
+/// A product of per-axis coordinate sets, stored flat: every axis gets `k` words. Word
+/// buffers are recycled through a per-thread pool.
+#[derive(Default, PartialEq, Eq)]
 pub struct Hc {
     k: usize,
     w: Vec<u64>,
+}
+
+thread_local! {
+    static HC_POOL: std::cell::RefCell<Vec<Vec<u64>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+const HC_POOL_MAX: usize = 1 << 12;
+
+/// A word buffer holding a copy of `src` (from the pool when one is free).
+#[inline]
+fn pooled_copy(src: &[u64]) -> Vec<u64> {
+    let mut w = HC_POOL.with(|p| p.borrow_mut().pop()).unwrap_or_default();
+    w.clear();
+    w.extend_from_slice(src);
+    w
+}
+
+impl Clone for Hc {
+    #[inline]
+    fn clone(&self) -> Self {
+        Hc { k: self.k, w: pooled_copy(&self.w) }
+    }
+}
+
+impl Drop for Hc {
+    #[inline]
+    fn drop(&mut self) {
+        if self.w.capacity() != 0 {
+            let w = std::mem::take(&mut self.w);
+            HC_POOL.with(|p| {
+                let mut p = p.borrow_mut();
+                if p.len() < HC_POOL_MAX {
+                    p.push(w);
+                }
+            });
+        }
+    }
 }
 
 impl std::ops::Index<usize> for Hc {
