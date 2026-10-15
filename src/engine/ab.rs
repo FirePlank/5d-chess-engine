@@ -146,6 +146,13 @@ pub struct AbParams {
     /// Quiescence enumerates only captures/promotions plus one quiet filler per board,
     /// best-first, so different captures are tried instead of one capture with many fillers.
     pub q_restrict: bool,
+    /// Try the killer actions (validated by replay) before building the action space.
+    pub killers_first: bool,
+    /// At the first quiescence ply, also search up to this many checking actions (found
+    /// among the first 4x as many check-ordered actions), so depth 1 sees mates in one.
+    pub q_checks: usize,
+    /// Add the eval net's residual (`evalnet::embedded`) to the handcrafted evaluation.
+    pub use_net: bool,
 }
 
 impl Default for AbParams {
@@ -170,9 +177,12 @@ impl Default for AbParams {
             best_first: true,
             rfp_depth: 0,
             rfp_margin: 200,
-            use_hce: false,
+            use_hce: true,
             root_static: false,
-            q_restrict: false,
+            q_restrict: true,
+            killers_first: false,
+            q_checks: 0,
+            use_net: false,
         }
     }
 }
@@ -334,12 +344,18 @@ impl AlphaBeta {
 
     #[inline]
     fn static_eval(&self, s: &State) -> i32 {
-        if self.params.use_hce {
+        let base = if self.params.use_hce {
             let _p = crate::misc::prof::scope(9);
             super::hce::evaluate(s, &self.hce)
         } else {
             evaluate(s, &self.eval)
+        };
+        if self.params.use_net {
+            if let Some(net) = super::evalnet::embedded() {
+                return base + net.residual(&super::evalnet::inputs(s, base));
+            }
         }
+        base
     }
 
     #[inline]
@@ -380,7 +396,8 @@ impl AlphaBeta {
     }
 
     /// Ordering score of one HC coordinate.
-    fn coord_score(&self, s: &State, info: &HcInfo, n: usize, i: Index, checks: &mut Option<MoveEvaluator>) -> i32 {
+    /// Ordering score of one HC coordinate, and whether it captures or promotes.
+    fn coord_score(&self, s: &State, info: &HcInfo, n: usize, i: Index, checks: &mut Option<MoveEvaluator>) -> (i32, bool) {
         let check = |checks: &mut Option<MoveEvaluator>| match checks {
             Some(ev) => {
                 match self.params.check_order {
@@ -392,10 +409,11 @@ impl AlphaBeta {
             None => false,
         };
         match info.entry(n, i) {
-            Entry::Null => -5,
-            Entry::Departing { .. } => 0,
+            Entry::Null => (-5, false),
+            Entry::Departing { .. } => (0, false),
             Entry::Physical { m, .. } | Entry::Arriving { m, .. } => {
                 let (mover, victim) = mover_victim(s, m);
+                let mut tactical = victim != NO_PIECE;
                 let mut sc = 0;
                 if victim != NO_PIECE {
                     sc += 10_000 + 10 * piece_value(victim, &self.eval) - piece_value(mover, &self.eval) / 10;
@@ -405,6 +423,7 @@ impl AlphaBeta {
                 let wm = mover;
                 if (wm == PAWN_W || wm == BRAWN_W) && (m.to.y() == 0 || m.to.y() == s.get_board_size().1 - 1) {
                     sc += 9000;
+                    tactical = true;
                 }
                 if m.from.tl() != m.to.tl() && victim == NO_PIECE {
                     sc -= 300;
@@ -418,7 +437,7 @@ impl AlphaBeta {
                 if check(checks) {
                     sc += self.params.check_bonus;
                 }
-                sc
+                (sc, tactical)
             }
         }
     }
@@ -427,24 +446,42 @@ impl AlphaBeta {
         self.ordering_scores(s, info, checks).0
     }
 
-    /// Per-axis order (best first) and each coordinate's score, indexed by coordinate.
     fn ordering_scores(&self, s: &State, info: &HcInfo, checks: bool) -> (HcOrdering, Vec<Vec<i32>>) {
+        let (o, sc, _) = self.ordering_full(s, info, checks);
+        (o, sc)
+    }
+
+    /// Per-axis order (best first), each coordinate's score (indexed by coordinate), and
+    /// the captures/promotions of each axis.
+    fn ordering_full(&self, s: &State, info: &HcInfo, checks: bool) -> (HcOrdering, Vec<Vec<i32>>, Vec<IntegerSet>) {
         let _p = crate::misc::prof::scope(6);
         let u = info.get_universe();
         let mut orders = Vec::with_capacity(u.dimension());
         let mut scores: Vec<Vec<i32>> = Vec::with_capacity(u.dimension());
+        let mut tactical: Vec<IntegerSet> = Vec::with_capacity(u.dimension());
         // Branch axes share entries; score them once.
-        let mut branch_cache: Option<(Vec<Index>, Vec<i32>)> = None;
+        let mut branch_cache: Option<(Vec<Index>, Vec<i32>, IntegerSet)> = None;
         let mut checks = if checks && self.params.check_order > 0 { Some(MoveEvaluator::new(info, s, MoveWeights([0.0; 12]))) } else { None };
         for n in 0..u.dimension() {
             if n >= info.first_branch_axis() {
-                if let Some((o, sc)) = &branch_cache {
+                if let Some((o, sc, tac)) = &branch_cache {
                     orders.push(o.clone());
                     scores.push(sc.clone());
+                    tactical.push(tac.clone());
                     continue;
                 }
             }
-            let mut v: Vec<(i32, Index)> = u[n].iter().map(|i| (self.coord_score(s, info, n, i, &mut checks), i)).collect();
+            let mut tac = IntegerSet::new();
+            let mut v: Vec<(i32, Index)> = u[n]
+                .iter()
+                .map(|i| {
+                    let (score, t) = self.coord_score(s, info, n, i, &mut checks);
+                    if t {
+                        tac.insert(i);
+                    }
+                    (score, i)
+                })
+                .collect();
             let mut sc = vec![0i32; v.iter().map(|x| x.1 as usize + 1).max().unwrap_or(0)];
             for &(score, i) in &v {
                 sc[i as usize] = score;
@@ -452,19 +489,19 @@ impl AlphaBeta {
             v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
             let o: Vec<Index> = v.into_iter().map(|x| x.1).collect();
             if n >= info.first_branch_axis() {
-                branch_cache = Some((o.clone(), sc.clone()));
+                branch_cache = Some((o.clone(), sc.clone(), tac.clone()));
             }
             orders.push(o);
             scores.push(sc);
+            tactical.push(tac);
         }
-        (HcOrdering::Precomputed(orders), scores)
+        (HcOrdering::Precomputed(orders), scores, tactical)
     }
 
     /// Quiescence search space: per axis the captures and promotions, departures (for
     /// capturing travels), nulls, and the best quiet coordinate as filler.
-    fn q_space(&self, s: &State, info: &HcInfo, ss: SearchSpace, order: &HcOrdering) -> SearchSpace {
+    fn q_space(info: &HcInfo, ss: SearchSpace, order: &HcOrdering, tactical: &[IntegerSet]) -> SearchSpace {
         let u = info.get_universe();
-        let h = s.get_board_size().1;
         let mut allowed: Vec<IntegerSet> = Vec::with_capacity(u.dimension());
         for n in 0..u.dimension() {
             if n > info.first_branch_axis() {
@@ -476,11 +513,10 @@ impl AlphaBeta {
             let mut filler = false;
             order.for_each(n, &u[n], |i| match info.entry(n, i) {
                 Entry::Null | Entry::Departing { .. } => set.insert(i),
-                Entry::Physical { m, .. } | Entry::Arriving { m, .. } => {
-                    let (pc, victim) = mover_victim(s, m);
-                    let promo = (pc == PAWN_W || pc == BRAWN_W) && (m.to.y() == 0 || m.to.y() == h - 1);
-                    if victim != NO_PIECE || promo || !filler {
-                        filler |= victim == NO_PIECE && !promo;
+                Entry::Physical { .. } | Entry::Arriving { .. } => {
+                    let t = tactical[n].contains(i);
+                    if t || !filler {
+                        filler |= !t;
                         set.insert(i);
                     }
                 }
@@ -673,21 +709,59 @@ impl AlphaBeta {
         if qd <= 0 || ply >= MAX_PLY {
             return if in_check { stand } else { alpha };
         }
+        let q_checks = if !in_check && qd == self.params.qdepth { self.params.q_checks } else { 0 };
         // Nothing to capture or promote anywhere: skip building the action space.
-        if !in_check && self.params.q_fastpath && !Self::any_tactical(s) {
+        if q_checks == 0 && !in_check && self.params.q_fastpath && !Self::any_tactical(s) {
             return stand;
         }
         let (info, ss) = HcInfo::build_hc(s);
+        let mut best = if in_check { -INF } else { stand };
+        let mut any = false;
+        if q_checks > 0 {
+            // Quiet checking actions first: a mate in one is invisible to captures-only search.
+            let (order, scores) = self.ordering_scores(s, &info, true);
+            let mut cgen = ActionGen::with_scores(ss.clone(), order, Some(scores), false);
+            let (mut found, mut scanned) = (0, 0);
+            while found < q_checks && scanned < 4 * q_checks {
+                if self.check_abort() {
+                    return 0;
+                }
+                let Some((_, act)) = cgen.next(&info, s, &mut |_| 0) else { break };
+                any = true;
+                scanned += 1;
+                if Self::is_tactical(s, &act) {
+                    continue;
+                }
+                let mark = Self::make(s, &act);
+                if !Self::in_check(s) {
+                    s.unmake(mark);
+                    continue;
+                }
+                found += 1;
+                let v = -self.qsearch(s, ply + 1, -beta, -alpha, qd - 1);
+                s.unmake(mark);
+                if self.aborted {
+                    return 0;
+                }
+                if v > best {
+                    best = v;
+                    if v > alpha {
+                        alpha = v;
+                        if v >= beta {
+                            return best;
+                        }
+                    }
+                }
+            }
+        }
         let mut agen = if self.params.q_restrict && !in_check {
-            let (order, scores) = self.ordering_scores(s, &info, false);
-            let qs = self.q_space(s, &info, ss, &order);
+            let (order, scores, tactical) = self.ordering_full(s, &info, false);
+            let qs = Self::q_space(&info, ss, &order, &tactical);
             ActionGen::with_scores(qs, order, Some(scores), false)
         } else {
             ActionGen::new(ss, self.ordering(s, &info, false), self.params.merge_branches)
         };
-        let mut best = if in_check { -INF } else { stand };
         let mut tried = 0;
-        let mut any = false;
         while tried < self.params.qcap {
             if self.check_abort() {
                 return 0;
@@ -791,6 +865,43 @@ impl AlphaBeta {
             }
         }
 
+        // Killers next, still before paying for the action space.
+        let mut pre_tried: Vec<MoveSeq> = Vec::new();
+        if self.params.killers_first && ply <= MAX_PLY {
+            let ks: Vec<MoveSeq> =
+                self.killers[ply].iter().flatten().filter(|k| tt_action.as_ref() != Some(*k)).cloned().collect();
+            for act in ks {
+                let Some(mark) = Self::make_checked(s, &act) else { continue };
+                let v = if searched == 0 {
+                    -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, pv)
+                } else {
+                    let mut v = -self.negamax(s, depth - 1, ply + 1, -alpha - 1, -alpha, false);
+                    if !self.aborted && v > alpha && v < beta && pv {
+                        v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, true);
+                    }
+                    v
+                };
+                s.unmake(mark);
+                if self.aborted {
+                    return 0;
+                }
+                searched += 1;
+                if v > best {
+                    best = v;
+                    best_action = act.clone();
+                    if v > alpha {
+                        alpha = v;
+                    }
+                }
+                if alpha >= beta {
+                    self.on_cutoff(s, &act, depth, ply);
+                    self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), &best_action);
+                    return best;
+                }
+                pre_tried.push(act);
+            }
+        }
+
         let (info, ss) = HcInfo::build_hc(s);
         let mut agen = self.action_gen(s, &info, ss, depth <= self.params.check_order_depth);
         let mut generated = 0usize;
@@ -808,7 +919,7 @@ impl AlphaBeta {
                     }
                     Some((sc, act)) => {
                         generated += 1;
-                        if tt_action.as_ref() == Some(&act) {
+                        if tt_action.as_ref() == Some(&act) || pre_tried.contains(&act) {
                             continue;
                         }
                         batch.push((sc, act));
@@ -952,6 +1063,20 @@ impl Engine for AlphaBeta {
             ("check_order_depth", Some(x)) => self.params.check_order_depth = x as i32,
             ("rfp_depth", Some(x)) => self.params.rfp_depth = x as i32,
             ("rfp_margin", Some(x)) => self.params.rfp_margin = x as i32,
+            ("hce_scale", Some(x)) => {
+                for w in self.hce.iter_mut() {
+                    *w *= x as f32;
+                }
+            }
+            (k, Some(x)) if k.starts_with("hce.") => {
+                match super::hce::FEATURE_NAMES.iter().position(|n| *n == &k[4..]) {
+                    Some(i) => self.hce[i] = x as f32,
+                    None => return false,
+                }
+            }
+            ("use_net", _) => self.params.use_net = !matches!(value, OptionValue::Bool(false)),
+            ("q_checks", Some(x)) => self.params.q_checks = x as usize,
+            ("killers_first", _) => self.params.killers_first = !matches!(value, OptionValue::Bool(false)),
             ("q_restrict", _) => self.params.q_restrict = !matches!(value, OptionValue::Bool(false)),
             ("root_static", _) => self.params.root_static = !matches!(value, OptionValue::Bool(false)),
             ("use_hce", _) => self.params.use_hce = !matches!(value, OptionValue::Bool(false)),

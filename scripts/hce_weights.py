@@ -16,8 +16,8 @@ frozen = set()
 if '--frozen-log' in args:
     log = args[args.index('--frozen-log') + 1]
     frozen = {line.split()[1] for line in open(log) if line.startswith('frozen ')}
-rows = [f'        {(v if n in frozen else v * scale):.1f}, // {n}' for n, v in w]
-code = 'pub fn tuned_weights() -> Weights {\n    [\n' + '\n'.join(rows) + '\n    ]\n}'
+rows = [f'        ("{n}", {(v if n in frozen else v * scale):.1f}),' for n, v in w]
+code = 'pub fn tuned_weights() -> Weights {\n    weights_by_name(&[\n' + '\n'.join(rows) + '\n    ])\n}'
 p = 'src/engine/hce.rs'
 s = open(p).read()
 s = re.sub(r'pub fn tuned_weights\(\) -> Weights \{.*?\n\}', lambda _: code, s, count=1, flags=re.S)
