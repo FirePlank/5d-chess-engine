@@ -220,6 +220,45 @@ impl Board {
         if white { w } else { to_black(w) }
     }
 
+    /// White-normalized piece on `sq` (same as `to_white(piece_name(get_piece(sq)))`),
+    /// decoded straight from the bitboards.
+    #[inline(always)]
+    pub fn kind(&self, sq: i32) -> Piece {
+        let z = 1u64 << sq;
+        if self.occupied() & z == 0 {
+            return NO_PIECE;
+        }
+        if self.lpawn() & z != 0 {
+            return if self.lrawn() & z != 0 { BRAWN_W } else { PAWN_W };
+        }
+        if self.lknight() & z != 0 {
+            return KNIGHT_W;
+        }
+        if self.lking() & z != 0 {
+            return if self.royal() & z != 0 { KING_W } else { COMMON_KING_W };
+        }
+        let (r, bi, d) = (self.lrook() & z != 0, self.lbishop() & z != 0, self.ldragon() & z != 0);
+        if r && d {
+            return if self.royal() & z != 0 { ROYAL_QUEEN_W } else { QUEEN_W };
+        }
+        if r && bi {
+            return PRINCESS_W;
+        }
+        if r {
+            return ROOK_W;
+        }
+        if bi {
+            return BISHOP_W;
+        }
+        if self.lunicorn() & z != 0 {
+            return UNICORN_W;
+        }
+        if d {
+            return DRAGON_W;
+        }
+        WALL_PIECE
+    }
+
     pub fn set_piece(&mut self, pos: i32, p: Piece) {
         let z = pmask(pos);
         self.umove_mask &= !z;

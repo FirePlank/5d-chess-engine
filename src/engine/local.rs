@@ -7,7 +7,6 @@
 //! board at a few bitboard operations per board, instead of enumerating whole multi-board
 //! turns.
 
-use super::ab::kind_at;
 use crate::core::bitboard::*;
 use crate::core::board::Board;
 use crate::core::hypercuboid::has_physical_check;
@@ -40,7 +39,7 @@ fn search(b: &Board, c: bool, alpha: i32, beta: i32, depth: i32, height: i32, va
     let mut n = 0;
     for from in marked_pos(mine) {
         let z = pmask(from);
-        let mover = kind_at(b, from);
+        let mover = b.kind(from);
         let pawn = b.lpawn() & z != 0;
         let mut att = 0;
         if pawn {
@@ -70,7 +69,7 @@ fn search(b: &Board, c: bool, alpha: i32, beta: i32, depth: i32, height: i32, va
             if n == moves.len() {
                 break;
             }
-            let victim = if b.royal() & pmask(to) != 0 { ROYAL_VALUE } else { vals[kind_at(b, to) as usize] };
+            let victim = if b.royal() & pmask(to) != 0 { ROYAL_VALUE } else { vals[b.kind(to) as usize] };
             if victim == ROYAL_VALUE {
                 // The opponent left a royal en prise on this board.
                 return ROYAL_VALUE;

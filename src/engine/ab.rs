@@ -191,64 +191,25 @@ fn piece_value(pc: Piece) -> i32 {
     }
 }
 
-/// White-normalized piece on `sq` (same as `to_white(piece_name(b.get_piece(sq)))`), decoded
-/// straight from the bitboards.
-#[inline(always)]
-pub(crate) fn kind_at(b: &Board, sq: i32) -> Piece {
-    let z = 1u64 << sq;
-    if b.occupied() & z == 0 {
-        return NO_PIECE;
-    }
-    if b.lpawn() & z != 0 {
-        return if b.lrawn() & z != 0 { BRAWN_W } else { PAWN_W };
-    }
-    if b.lknight() & z != 0 {
-        return KNIGHT_W;
-    }
-    if b.lking() & z != 0 {
-        return if b.royal() & z != 0 { KING_W } else { COMMON_KING_W };
-    }
-    let (r, bi, d) = (b.lrook() & z != 0, b.lbishop() & z != 0, b.ldragon() & z != 0);
-    if r && d {
-        return if b.royal() & z != 0 { ROYAL_QUEEN_W } else { QUEEN_W };
-    }
-    if r && bi {
-        return PRINCESS_W;
-    }
-    if r {
-        return ROOK_W;
-    }
-    if bi {
-        return BISHOP_W;
-    }
-    if b.lunicorn() & z != 0 {
-        return UNICORN_W;
-    }
-    if d {
-        return DRAGON_W;
-    }
-    WALL_PIECE
-}
-
 /// (moving piece, captured piece), white-normalized; matches `moved_piece`/`captured_piece`.
 #[inline]
 fn mover_victim(s: &State, m: &FullMove) -> (Piece, Piece) {
     let player = s.get_present().1;
     let src = s.board(m.from.l(), m.from.t(), player);
-    let mover = kind_at(src, m.from.xy());
+    let mover = src.kind(m.from.xy());
     let victim = if m.from.tl() == m.to.tl() {
         if mover == KING_W && (m.from.x() - m.to.x()).abs() > 1 {
             NO_PIECE
         } else {
-            let d = kind_at(src, m.to.xy());
+            let d = src.kind(m.to.xy());
             if d == NO_PIECE && (mover == PAWN_W || mover == BRAWN_W) && m.from.x() != m.to.x() {
-                kind_at(src, ppos(m.to.x(), m.from.y()))
+                src.kind(ppos(m.to.x(), m.from.y()))
             } else {
                 d
             }
         }
     } else {
-        kind_at(s.board(m.to.l(), m.to.t(), player), m.to.xy())
+        s.board(m.to.l(), m.to.t(), player).kind(m.to.xy())
     };
     (mover, victim)
 }
@@ -265,7 +226,7 @@ fn exchange_loss(b: &Board, to: i32, player: bool, mover_value: i32) -> i32 {
     if att & b.hostile(!player) == 0 {
         return mover_value;
     }
-    let least = marked_pos(enemy).map(|sq| piece_value(kind_at(b, sq))).min().unwrap_or(0);
+    let least = marked_pos(enemy).map(|sq| piece_value(b.kind(sq))).min().unwrap_or(0);
     (mover_value - least).max(0)
 }
 
@@ -351,7 +312,7 @@ impl<'a> CheckDetector<'a> {
 /// Scratch of `node_ordering`.
 #[derive(Default)]
 struct OrderScratch {
-    sort: Vec<(i32, Index)>,
+    sort: Vec<u64>,
     checks: CheckBuf,
     reach: Vec<(i32, SpReach)>,
 }
@@ -443,8 +404,8 @@ impl AlphaBeta {
         match info.entry(n, i) {
             Entry::Null => -5,
             Entry::Departing { .. } => 0,
-            Entry::Physical { m, b } | Entry::Arriving { m, b, .. } => {
-                let (mover, victim) = mover_victim(s, m);
+            Entry::Physical { m, b, mover, victim } | Entry::Arriving { m, b, mover, victim, .. } => {
+                let (mover, victim) = (*mover, *victim);
                 // Per-board exchange check on the result board: moves that hang the moved
                 // piece sink on their board, so best-first combinations avoid them.
                 let mut sc = -10 * exchange_loss(b, m.to.xy(), s.get_present().1, piece_value(mover));
@@ -496,21 +457,21 @@ impl AlphaBeta {
         }
         let mut detector = if checks { Some(CheckDetector::new(info, s, scratch)) } else { None };
         for n in 0..dim {
+            let sc = &mut scores[n];
+            sc.clear();
+            sc.resize(u[n].max().map(|i| i as usize + 1).unwrap_or(0), 0);
+            // Sort keys: score descending, then coordinate ascending.
             let v = &mut scratch.sort;
             v.clear();
             for i in u[n].iter() {
-                v.push((self.coord_score(s, info, n, i, &mut detector), i));
-            }
-            let sc = &mut scores[n];
-            sc.clear();
-            sc.resize(v.last().map(|x| x.1 as usize + 1).unwrap_or(0), 0);
-            for &(score, i) in v.iter() {
+                let score = self.coord_score(s, info, n, i, &mut detector);
                 sc[i as usize] = score;
+                v.push(((!((score as u32) ^ 0x8000_0000) as u64) << 32) | i as u64);
             }
-            v.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+            v.sort_unstable();
             let o = &mut orders[n];
             o.clear();
-            o.extend(v.iter().map(|x| x.1));
+            o.extend(v.iter().map(|&k| k as u32 as Index));
         }
         if let Some(d) = detector {
             d.finish(scratch);

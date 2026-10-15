@@ -132,6 +132,20 @@ impl Bits {
     pub fn first(&self) -> Option<Index> {
         self.iter().next()
     }
+    /// The element, when there is exactly one.
+    #[inline]
+    pub fn single(&self) -> Option<Index> {
+        let mut found = None;
+        for (bi, &w) in self.0.iter().enumerate() {
+            if w != 0 {
+                if found.is_some() || w & (w - 1) != 0 {
+                    return None;
+                }
+                found = Some(((bi as u32) << 6) | w.trailing_zeros());
+            }
+        }
+        found
+    }
     pub fn max(&self) -> Option<Index> {
         for bi in (0..self.0.len()).rev() {
             let b = self.0[bi];

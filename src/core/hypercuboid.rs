@@ -17,10 +17,11 @@ use crate::misc::ordering::{AxisOrders, HcOrdering};
 const INVALID: Index = Index::MAX;
 
 #[derive(Clone, Debug)]
+/// Moves carry their white-normalized moving and captured piece kinds.
 pub enum Entry {
-    Physical { m: FullMove, b: Board },
+    Physical { m: FullMove, b: Board, mover: Piece, victim: Piece },
     /// `idx` is the paired departure coordinate on axis `fa`.
-    Arriving { m: FullMove, b: Board, idx: Index, fa: u32 },
+    Arriving { m: FullMove, b: Board, idx: Index, fa: u32, mover: Piece, victim: Piece },
     Departing { from: Vec4, b: Board },
     Null,
 }
@@ -254,7 +255,7 @@ impl HcInfo {
 
     pub fn get_move_boards(&self, axis: usize, coord: Index) -> Option<MoveBoards<'_>> {
         match self.entry(axis, coord) {
-            Entry::Physical { m, b } => Some(MoveBoards { mv: *m, result: b, departure: None }),
+            Entry::Physical { m, b, .. } => Some(MoveBoards { mv: *m, result: b, departure: None }),
             Entry::Arriving { m, b, idx, .. } => {
                 let src = self.line_to_axis(m.from.l()).expect("departure axis");
                 let dep = match self.entry(src, *idx) {
@@ -425,7 +426,14 @@ impl HcInfo {
                     }
                 }
                 if !needs_test || !has_physical_check(&nb, player) {
-                    locs.push(Entry::Physical { m, b: nb });
+                    let mover = source.kind(p.xy());
+                    let victim = if mover == KING_W && d.x().abs() > 1 {
+                        NO_PIECE
+                    } else {
+                        let v = source.kind(q.xy());
+                        if v == NO_PIECE && (mover == PAWN_W || mover == BRAWN_W) && d.x() != 0 { source.kind(ppos(q.x(), p.y())) } else { v }
+                    };
+                    locs.push(Entry::Physical { m, b: nb, mover, victim });
                 }
             }
             for &p in &departures[axis] {
@@ -446,6 +454,7 @@ impl HcInfo {
                     let (p, q) = (m.from, m.to);
                     let src = s.board(p.l(), p.t(), player);
                     let mut nb = *s.board(q.l(), q.t(), player);
+                    let victim = nb.kind(q.xy());
                     let zp = pmask(p.xy());
                     let royal = src.royal() & zp != 0;
                     if src.lrawn() & zp != 0 && (q.y() == 0 || q.y() == size_y - 1) && promo_piece(m) != NO_PIECE {
@@ -457,7 +466,7 @@ impl HcInfo {
                     let needs_test = royal || safety(q.l(), q.t()).in_check;
                     if !needs_test || !has_physical_check(&nb, player) {
                         let fa = axis_of_line(axis_of, m.from.l()) as u32;
-                        locs.push(Entry::Arriving { m, b: nb, idx: INVALID, fa });
+                        locs.push(Entry::Arriving { m, b: nb, idx: INVALID, fa, mover: src.kind(p.xy()), victim });
                     }
                 }
             }
@@ -472,6 +481,7 @@ impl HcInfo {
             if let Some(dep) = find_jump(jump_tab, axis_of, m.from) {
                 let src = s.board(p.l(), p.t(), player);
                 let mut nb = *s.board(q.l(), q.t(), player);
+                let victim = nb.kind(q.xy());
                 let zp = pmask(p.xy());
                 let royal = src.royal() & zp != 0;
                 if src.lrawn() & zp != 0 && (q.y() == 0 || q.y() == size_y - 1) && promo_piece(m) != NO_PIECE {
@@ -483,7 +493,7 @@ impl HcInfo {
                 let needs_test = royal || safety(q.l(), q.t()).in_check;
                 if !needs_test || !has_physical_check(&nb, player) {
                     let fa = axis_of_line(axis_of, m.from.l()) as u32;
-                    branch_entries.push(Entry::Arriving { m, b: nb, idx: dep, fa });
+                    branch_entries.push(Entry::Arriving { m, b: nb, idx: dep, fa, mover: src.kind(p.xy()), victim });
                 }
             }
         }
@@ -646,13 +656,22 @@ impl HcInfo {
                         }
                     }
                 }
-                HcOrdering::Precomputed(o) => {
-                    for &i in o.axis(n) {
-                        if live.contains(i) && visit(i) {
-                            break;
+                HcOrdering::Precomputed(o) => match live.single() {
+                    // Orders list the universe: a lone live coordinate is the only one the
+                    // scan below would visit.
+                    Some(i) => {
+                        if self.universe[n].contains(i) {
+                            visit(i);
                         }
                     }
-                }
+                    None => {
+                        for &i in o.axis(n) {
+                            if live.contains(i) && visit(i) {
+                                break;
+                            }
+                        }
+                    }
+                },
             }
             if !need_nonjump {
                 must_include.push(n as Index);
