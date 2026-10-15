@@ -1,0 +1,12 @@
+{
+  "name": "root_cap_40",
+  "old": "5197eee467f18bc6d514f695f9cf299426e89813",
+  "games": 16000,
+  "shards": 40,
+  "tc": "movetime 100",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "ab",
+  "old_args": "ab",
+  "base": "self"
+}
