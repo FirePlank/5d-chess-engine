@@ -127,7 +127,7 @@ impl Default for AbParams {
             tt_mb: 64,
             q_fastpath: true,
             merge_branches: false,
-            check_ext: true,
+            check_ext: false,
             travel_checks: false,
         }
     }
