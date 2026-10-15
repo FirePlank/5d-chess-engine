@@ -432,7 +432,9 @@ impl AlphaBeta {
     }
 
     /// Node ordering into `orders` (per axis, coordinates best first) and `scores` (per axis,
-    /// each coordinate's score); checking semimoves are detected (and go first) when `checks`.
+    /// each coordinate's score) of the axes in `axes`; checking semimoves are detected (and go
+    /// first) when `checks`.
+    #[allow(clippy::too_many_arguments)]
     fn node_ordering(
         &self,
         s: &State,
@@ -441,6 +443,7 @@ impl AlphaBeta {
         scratch: &mut OrderScratch,
         orders: &mut AxisOrders,
         scores: &mut Vec<Vec<i32>>,
+        axes: std::ops::Range<usize>,
     ) {
         let _p = crate::misc::prof::scope(6);
         let u = info.get_universe();
@@ -456,7 +459,7 @@ impl AlphaBeta {
             scores.resize_with(dim, Vec::new);
         }
         let mut detector = if checks { Some(CheckDetector::new(info, s, scratch)) } else { None };
-        for n in 0..dim {
+        for n in axes.start..axes.end.min(dim) {
             let sc = &mut scores[n];
             sc.clear();
             sc.resize(u[n].max().map(|i| i as usize + 1).unwrap_or(0), 0);
@@ -481,7 +484,7 @@ impl AlphaBeta {
     /// Per-axis order of a node's coordinates (diagnostics).
     pub fn ordering(&self, s: &State, info: &HcInfo) -> HcOrdering {
         let mut orders = AxisOrders::default();
-        self.node_ordering(s, info, true, &mut OrderScratch::default(), &mut orders, &mut Vec::new());
+        self.node_ordering(s, info, true, &mut OrderScratch::default(), &mut orders, &mut Vec::new(), 0..usize::MAX);
         HcOrdering::Precomputed(orders)
     }
 
@@ -521,7 +524,7 @@ impl AlphaBeta {
     /// Order the node's coordinates into `cursor` and start it on `ss`.
     fn start_actions(&self, s: &State, info: &HcInfo, cursor: &mut BestFirstCursor, scratch: &mut OrderScratch, ss: SearchSpace) {
         let (orders, scores) = cursor.ordering_mut();
-        self.node_ordering(s, info, true, scratch, orders, scores);
+        self.node_ordering(s, info, true, scratch, orders, scores, 0..usize::MAX);
         cursor.restart(info, ss);
     }
 
@@ -693,7 +696,10 @@ impl AlphaBeta {
         {
             let NodeBufs { info, evasions, order, evasion_scores, .. } = &mut *nb;
             evasions.ss = info.rebuild(s);
-            self.node_ordering(s, info, false, order, evasions.order.axes_mut(), evasion_scores);
+            // The branch axes are only ordered once some hypercuboid needs their order.
+            let fba = info.first_branch_axis();
+            self.node_ordering(s, info, false, order, evasions.order.axes_mut(), evasion_scores, 0..fba);
+            evasions.branch_pending = fba < info.dimension();
         }
         let mut best = -INF;
         let mut any = false;
@@ -703,7 +709,10 @@ impl AlphaBeta {
                 if self.check_abort() {
                     break 'search true;
                 }
-                let Some(act) = nb.evasions.next(&nb.info, s) else { break };
+                let NodeBufs { info, evasions, order, evasion_scores, .. } = &mut *nb;
+                let fba = info.first_branch_axis();
+                let next = evasions.next_with(info, s, &mut |o| self.node_ordering(s, info, false, order, o, evasion_scores, fba..fba + 1));
+                let Some(act) = next else { break };
                 any = true;
                 tried += 1;
                 let mark = Self::make(s, &act);

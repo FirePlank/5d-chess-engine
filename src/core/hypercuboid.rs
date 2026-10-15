@@ -1052,6 +1052,8 @@ fn get_move_path(s: &CheckPosition<'_>, fm: FullMove, c: bool) -> (Vec<Vec4>, i3
 pub struct HcCursor {
     pub ss: SearchSpace,
     pub order: HcOrdering,
+    /// The branch axes' shared order is still to be filled (see `next_with`).
+    pub branch_pending: bool,
     sc: PointScratch,
     checks: CheckBuf,
 }
@@ -1064,12 +1066,25 @@ impl Default for HcCursor {
 
 impl HcCursor {
     pub fn new(ss: SearchSpace, order: HcOrdering) -> Self {
-        HcCursor { ss, order, sc: PointScratch::default(), checks: CheckBuf::default() }
+        HcCursor { ss, order, branch_pending: false, sc: PointScratch::default(), checks: CheckBuf::default() }
     }
 
     pub fn next(&mut self, info: &HcInfo, s: &State) -> Option<MoveSeq> {
+        self.next_with(info, s, &mut |_| {})
+    }
+
+    /// `next`, filling the branch axes' order with `fill_branch` when `branch_pending` and a
+    /// hypercuboid first leaves several coordinates on a branch axis (only then can taking a
+    /// point look at that order).
+    pub fn next_with(&mut self, info: &HcInfo, s: &State, fill_branch: &mut dyn FnMut(&mut AxisOrders)) -> Option<MoveSeq> {
         while !self.ss.is_empty() {
             let mut hc = self.ss.pop_back().unwrap();
+            if self.branch_pending
+                && (info.first_branch_axis()..hc.dimension()).any(|n| !hc[n].is_empty() && hc[n].single().is_none())
+            {
+                fill_branch(self.order.axes_mut());
+                self.branch_pending = false;
+            }
             if !info.take_point(&mut hc, &self.order, &mut self.sc) {
                 continue;
             }
