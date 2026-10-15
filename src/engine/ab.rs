@@ -125,7 +125,7 @@ impl Default for AbParams {
             lmr_min_depth: 3,
             lmr_min_index: 4,
             tt_mb: 64,
-            q_fastpath: false,
+            q_fastpath: true,
             merge_branches: false,
             check_ext: false,
             travel_checks: false,
