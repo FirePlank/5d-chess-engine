@@ -443,7 +443,14 @@ impl Board {
     }
 
     /// Whether a piece hostile to `color` attacks `pos`.
+    #[inline]
     pub fn is_under_attack(&self, pos: i32, color: bool) -> bool {
+        self.is_attacked_through(pos, color, self.occupied())
+    }
+
+    /// `is_under_attack` with sliders blocked by `all` instead of this board's occupancy.
+    #[inline]
+    pub fn is_attacked_through(&self, pos: i32, color: bool, all: Bitboard) -> bool {
         let hostile = if color { self.white() } else { self.black() };
         let pawns = self.lpawn();
         if !color && white_pawn_attack(pos) & pawns & hostile != 0 {
@@ -458,7 +465,6 @@ impl Board {
         if knight_attack(pos) & self.lknight() & hostile != 0 {
             return true;
         }
-        let all = self.white() | self.black();
         if bishop_attack(pos, all) & self.lbishop() & hostile != 0 {
             return true;
         }

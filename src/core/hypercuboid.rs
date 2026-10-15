@@ -113,8 +113,54 @@ struct BuildScratch {
     /// Departure coordinate of each source square, per axis.
     jump_tab: Vec<[Index; 64]>,
     /// (build stamp, per-board royal safety table).
-    safety: (u32, Vec<(u32, RoyalSafety)>),
+    safety: (u32, Vec<(u32, bool, bool, RoyalSafety)>),
+    /// Per arrival (in `arrivals` order): whether its result is safe for the mover.
+    arrival_ok: Vec<u8>,
     group_slots: GroupSlots,
+}
+
+/// Royal safety of the mover's boards, memoized by (line, turn) for one build (entries
+/// stamped with it).
+struct SafetyMemo<'a> {
+    s: &'a State,
+    player: bool,
+    lines_lo: i32,
+    nt: usize,
+    stamp: u32,
+    /// (stamp, in-check known, pins known, safety).
+    tab: &'a mut Vec<(u32, bool, bool, RoyalSafety)>,
+}
+
+impl SafetyMemo<'_> {
+    #[inline]
+    fn slot(&mut self, l: i32, t: i32) -> &mut (u32, bool, bool, RoyalSafety) {
+        let e = &mut self.tab[(l - self.lines_lo) as usize * self.nt + t as usize];
+        if e.0 != self.stamp {
+            *e = (self.stamp, false, false, RoyalSafety { in_check: false, pinned: 0 });
+        }
+        e
+    }
+    /// Whether a royal of the mover is attacked on its board (l, t).
+    #[inline]
+    fn in_check(&mut self, l: i32, t: i32) -> bool {
+        let (s, player) = (self.s, self.player);
+        let e = self.slot(l, t);
+        if !e.1 {
+            e.1 = true;
+            e.3.in_check = has_physical_check(s.board(l, t, player), player);
+        }
+        e.3.in_check
+    }
+    #[inline]
+    fn get(&mut self, l: i32, t: i32) -> RoyalSafety {
+        let (s, player) = (self.s, self.player);
+        let e = self.slot(l, t);
+        if !e.2 {
+            (e.1, e.2) = (true, true);
+            e.3 = s.board(l, t, player).royal_safety(player);
+        }
+        e.3
+    }
 }
 
 #[derive(Default)]
@@ -363,7 +409,7 @@ impl HcInfo {
             all_lines_mine,
             lone_checks,
         } = self;
-        let BuildScratch { playable, stays, departures, arrivals, sorted, line_counts, ml, jump_tab, safety, group_slots } = scratch;
+        let BuildScratch { playable, stays, departures, arrivals, sorted, line_counts, ml, jump_tab, safety, arrival_ok, group_slots } = scratch;
         let present = s.get_present();
         let player = present.1;
         let (lines_lo, lines_hi) = s.get_lines_range();
@@ -464,7 +510,7 @@ impl HcInfo {
         let nt = (lines_lo..=lines_hi).map(|l| s.get_timeline_end(l).0).max().unwrap_or(0) as usize + 1;
         let need = (lines_hi - lines_lo + 1) as usize * nt;
         if safety.1.len() < need {
-            safety.1.resize(need, (0, RoyalSafety { in_check: false, pinned: 0 }));
+            safety.1.resize(need, (0, false, false, RoyalSafety { in_check: false, pinned: 0 }));
         }
         safety.0 = safety.0.wrapping_add(1);
         if safety.0 == 0 {
@@ -472,12 +518,26 @@ impl HcInfo {
             safety.0 = 1;
         }
         let stamp = safety.0;
-        let mut safety = |l: i32, t: i32| -> RoyalSafety {
-            let e = &mut safety.1[(l - lines_lo) as usize * nt + t as usize];
-            if e.0 != stamp {
-                *e = (stamp, s.board(l, t, player).royal_safety(player));
+        let mut memo = SafetyMemo { s, player, lines_lo, nt, stamp, tab: &mut safety.1 };
+        // Whether an arrival leaves the mover's royals unattacked (memoized per arrival:
+        // 0 unknown, 1 safe, 2 not).
+        arrival_ok.clear();
+        arrival_ok.resize(arrivals.len(), 0);
+        let arrival_safe = |k: usize, m: FullMove, royal: bool, arrival_ok: &mut [u8], memo: &mut SafetyMemo| -> bool {
+            if arrival_ok[k] == 0 {
+                let q = m.to;
+                let ok = if memo.in_check(q.l(), q.t()) {
+                    !has_physical_check(&arrival_board(s, m), player)
+                } else if royal {
+                    // The target's own royals stay covered (the destination stays occupied):
+                    // only the arriving royal can be attacked.
+                    !s.board(q.l(), q.t(), player).is_under_attack(q.xy(), player)
+                } else {
+                    true
+                };
+                arrival_ok[k] = if ok { 1 } else { 2 };
             }
-            e.1
+            arrival_ok[k] == 1
         };
         let ent_scope = crate::misc::prof::scope(12);
         if axis_coords.len() < np {
@@ -491,7 +551,7 @@ impl HcInfo {
             locs.clear();
             locs.push(Entry::Null);
             let board_t = s.get_timeline_end(l).0;
-            let rs = safety(l, board_t);
+            let rs = memo.get(l, board_t);
             for &m in &stays[axis] {
                 let (p, q) = (m.from, m.to);
                 let d = q - p;
@@ -499,6 +559,9 @@ impl HcInfo {
                 let mut nb = *source;
                 let z = pmask(p.xy());
                 let mut needs_test = rs.in_check || (source.royal() | rs.pinned) & z != 0;
+                // The mover's only royal moving (not castling): only its destination can be
+                // attacked, with its origin vacated.
+                let lone_step = source.royal() & source.hostile(!player) == z && !(source.king() & z != 0 && d.x().abs() > 1);
                 if source.lpawn() & z != 0 && d.x() != 0 && source.occupied() & pmask(q.xy()) == 0 {
                     nb.clear_square(ppos(q.x(), p.y()));
                     nb.transfer(p.xy(), q.xy());
@@ -517,7 +580,14 @@ impl HcInfo {
                         nb.set_piece(q.xy(), if player { to_black(promotion) } else { promotion });
                     }
                 }
-                if !needs_test || !has_physical_check(&nb, player) {
+                let safe = if !needs_test {
+                    true
+                } else if lone_step {
+                    !source.is_attacked_through(q.xy(), player, source.occupied() & !z)
+                } else {
+                    !has_physical_check(&nb, player)
+                };
+                if safe {
                     let mover = source.kind(p.xy());
                     let victim = if mover == KING_W && d.x().abs() > 1 {
                         NO_PIECE
@@ -540,18 +610,17 @@ impl HcInfo {
                     jump_tab[axis][p.xy() as usize] = idx;
                 }
             }
-            for &(_, m) in &arrivals[lo..hi] {
+            for k in lo..hi {
+                let m = arrivals[k].1;
                 let (last_t, last_c) = s.get_timeline_end(m.to.l());
                 if m.to.t() == last_t && player == last_c {
                     let (p, q) = (m.from, m.to);
                     let src = s.board(p.l(), p.t(), player);
-                    let victim = s.board(q.l(), q.t(), player).kind(q.xy());
                     let royal = src.royal() & pmask(p.xy()) != 0;
-                    let nb = arrival_board(s, m);
-                    let needs_test = royal || safety(q.l(), q.t()).in_check;
-                    if !needs_test || !has_physical_check(&nb, player) {
+                    if arrival_safe(k, m, royal, arrival_ok, &mut memo) {
+                        let victim = s.board(q.l(), q.t(), player).kind(q.xy());
                         let fa = axis_of_line(axis_of, m.from.l()) as u32;
-                        locs.push(Entry::Arriving { m, b: nb, idx: INVALID, fa, mover: src.kind(p.xy()), victim });
+                        locs.push(Entry::Arriving { m, b: arrival_board(s, m), idx: INVALID, fa, mover: src.kind(p.xy()), victim });
                     }
                 }
             }
@@ -562,13 +631,12 @@ impl HcInfo {
         // The branch arrivals: only the ones whose result needs a check test get their board
         // here; the entries are built by `materialize_branch`.
         branch_moves.clear();
-        for &(_, m) in arrivals.iter() {
-            let (p, q) = (m.from, m.to);
+        for (k, &(_, m)) in arrivals.iter().enumerate() {
+            let p = m.from;
             if let Some(dep) = find_jump(jump_tab, axis_of, m.from) {
                 let src = s.board(p.l(), p.t(), player);
                 let royal = src.royal() & pmask(p.xy()) != 0;
-                let needs_test = royal || safety(q.l(), q.t()).in_check;
-                if !needs_test || !has_physical_check(&arrival_board(s, m), player) {
+                if arrival_safe(k, m, royal, arrival_ok, &mut memo) {
                     let fa = axis_of_line(axis_of, m.from.l()) as u32;
                     branch_moves.push((m, dep, fa, src.kind(p.xy())));
                 }
