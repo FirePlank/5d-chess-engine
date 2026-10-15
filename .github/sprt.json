@@ -1,0 +1,12 @@
+{
+  "name": "hce_scale_2",
+  "old": "4580a49b9e64a2d70c1ae4eb8399e1c844fcd8e9",
+  "games": 16000,
+  "shards": 40,
+  "tc": "movetime 100",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "ab --opt hce_scale=2",
+  "old_args": "ab",
+  "base": "self"
+}
