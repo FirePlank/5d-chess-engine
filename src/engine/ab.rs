@@ -44,11 +44,6 @@ const CHECK_BONUS: i32 = 30_000;
 /// it beats beta by RFP_MARGIN per ply.
 const RFP_DEPTH: i32 = 2;
 const RFP_MARGIN: i32 = 200;
-/// Null move (a pass, i.e. a phantom turn): at non-PV nodes from this depth, when the static
-/// eval is at least beta, search the pass with depth reduced by NMP_R + depth / NMP_DIV.
-const NMP_MIN_DEPTH: i32 = 3;
-const NMP_R: i32 = 3;
-const NMP_DIV: i32 = 3;
 const DEFAULT_HASH_MB: usize = 64;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -490,20 +485,6 @@ impl AlphaBeta {
         c
     }
 
-    /// Passing is only trusted when some active board holds at least two non-pawn pieces
-    /// (besides royals) of the side to move. Counted per board: every timeline holds its own
-    /// copy of a piece, so a lone knight on three timelines is still a lone knight. With less,
-    /// zugzwang and mating nets the reduced search can't see are common.
-    fn has_null_material(s: &State) -> bool {
-        let stm = s.get_present().1;
-        let (amin, amax) = s.get_active_range();
-        (amin..=amax).any(|l| {
-            let (t, c) = s.get_timeline_end(l);
-            let b = s.board(l, t, c);
-            (b.hostile(!stm) & !b.lpawn() & !b.royal()).count_ones() >= 2
-        })
-    }
-
     fn in_check(s: &State) -> bool {
         let _p = crate::misc::prof::scope(10);
         s.has_phantom_check()
@@ -624,22 +605,10 @@ impl AlphaBeta {
             }
         }
 
-        if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !Self::in_check(s) {
+        if !pv && depth <= RFP_DEPTH && beta.abs() < MATE - 1000 && !Self::in_check(s) {
             let e = self.static_eval(s);
-            if depth <= RFP_DEPTH && e - RFP_MARGIN * depth >= beta {
+            if e - RFP_MARGIN * depth >= beta {
                 return e;
-            }
-            if depth >= NMP_MIN_DEPTH && e >= beta && Self::has_null_material(s) {
-                let r = NMP_R + depth / NMP_DIV;
-                let mark = s.make_null();
-                let v = -self.negamax(s, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
-                s.unmake(mark);
-                if self.aborted {
-                    return 0;
-                }
-                if v >= beta {
-                    return if v > MATE - 1000 { beta } else { v };
-                }
             }
         }
 
