@@ -13,7 +13,7 @@ use crate::core::action::{Action, FullMove, MoveSeq};
 use crate::core::bitboard::{marked_pos, pmask};
 use crate::core::board::Board;
 use crate::core::check_position::{BoardOverlay, CheckBuf, CheckKind, CheckPosition, SpReach};
-use crate::core::hypercuboid::{has_physical_check, BestFirstCursor, Entry, HcCursor, HcInfo};
+use crate::core::hypercuboid::{has_physical_check, BestFirstCursor, Entry, HcCursor, HcInfo, NeedBranch};
 use crate::core::multiverse::next_turn;
 use crate::core::piece::*;
 use crate::core::state::{Mark, State};
@@ -485,8 +485,8 @@ impl AlphaBeta {
                 hist.clear();
                 hist.resize(u[n].max().map(|i| i as usize + 1).unwrap_or(0), 0);
                 for i in u[n].iter() {
-                    if let Entry::Arriving { m, mover, .. } = info.entry(n, i) {
-                        hist[i as usize] = self.history[history_index_of(*mover, m)];
+                    if let Some((m, mover)) = info.branch_arrival(i) {
+                        hist[i as usize] = self.history[history_index_of(mover, &m)];
                     }
                 }
                 sc.push(self.coord_score(s, info, n, 0, &mut detector, None));
@@ -736,7 +736,7 @@ impl AlphaBeta {
         let mut nb = self.bufs.pop().unwrap_or_default();
         {
             let NodeBufs { info, evasions, order, evasion_scores, .. } = &mut *nb;
-            evasions.ss = info.rebuild(s);
+            evasions.ss = info.rebuild(s, true);
             // The branch axes are only ordered once some hypercuboid needs their order.
             let fba = info.first_branch_axis();
             self.node_ordering(s, info, false, order, evasions.order.axes_mut(), evasion_scores, 0..fba, BranchOrder::Now);
@@ -754,7 +754,15 @@ impl AlphaBeta {
                 let fba = info.first_branch_axis();
                 // (Quiescence leaves the history alone, so ordering later gives the same order.)
                 let next = evasions.next_with(info, s, &mut |o| self.node_ordering(s, info, false, order, o, evasion_scores, fba..fba + 1, BranchOrder::Now));
-                let Some(act) = next else { break };
+                let Some(act) = (match next {
+                    Ok(a) => a,
+                    Err(NeedBranch) => {
+                        info.materialize_branch(s);
+                        continue;
+                    }
+                }) else {
+                    break;
+                };
                 any = true;
                 tried += 1;
                 let mark = Self::make(s, &act);
@@ -895,7 +903,7 @@ impl AlphaBeta {
         }
 
         let mut nb = self.bufs.pop().unwrap_or_default();
-        let ss = nb.info.rebuild(s);
+        let ss = nb.info.rebuild(s, true);
         let first = Self::without_future(s, &nb.info, &ss);
         let mut full = Some(ss);
         {
@@ -916,7 +924,8 @@ impl AlphaBeta {
                         cursor.next_with(info, s, &mut |o, sc| self.branch_order(s, info, order, o, sc))
                     };
                     match next {
-                        None => {
+                        Err(NeedBranch) => nb.info.materialize_branch(s),
+                        Ok(None) => {
                             // Every legal action may need a move on an optional board. (The
                             // ordering is unchanged: nothing was searched since it was made.)
                             if generated == 0 {
@@ -928,7 +937,7 @@ impl AlphaBeta {
                             exhausted = true;
                             break;
                         }
-                        Some(act) => {
+                        Ok(Some(act)) => {
                             generated += 1;
                             if pre_tried.contains(&act) || tt_action.as_ref() == Some(&act) {
                                 continue;

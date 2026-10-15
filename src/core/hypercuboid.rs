@@ -79,8 +79,12 @@ pub struct HcInfo {
     axis_of: Vec<usize>,
     /// Entries of the existing playable timelines' axes (the first `new_axis` are in use).
     axis_coords: Vec<Vec<Entry>>,
-    /// Entries shared by every prospective new-timeline axis.
+    /// Entries shared by every prospective new-timeline axis: the null one, then (once
+    /// `materialize_branch` has run) one per arrival of `branch_moves`.
     branch_entries: Vec<Entry>,
+    /// The branch axes' arrivals: (move, departure coordinate, departure axis, moving piece).
+    branch_moves: Vec<(FullMove, Index, u32, Piece)>,
+    branch_ready: bool,
     dim: usize,
     universe: Hc,
     new_axis: usize,
@@ -209,6 +213,26 @@ pub struct PointScratch {
     pub point: Point,
 }
 
+/// The board the jump `m` of the side to move creates on its target: the target board with
+/// the piece (or the piece a brawn promotes to) on the destination square.
+fn arrival_board(s: &State, m: FullMove) -> Board {
+    let player = s.get_present().1;
+    let (p, q) = (m.from, m.to);
+    let src = s.board(p.l(), p.t(), player);
+    let mut nb = *s.board(q.l(), q.t(), player);
+    let (_, size_y) = s.get_board_size();
+    if src.lrawn() & pmask(p.xy()) != 0 && (q.y() == 0 || q.y() == size_y - 1) {
+        let promotion =
+            s.normalize_promotion(super::action::ExtMove::new(m, NO_PIECE)).map(|e| e.promote_to).unwrap_or(NO_PIECE);
+        if promotion != NO_PIECE {
+            nb.set_piece(q.xy(), if player { to_black(promotion) } else { promotion });
+            return nb;
+        }
+    }
+    nb.place_from(q.xy(), src, p.xy());
+    nb
+}
+
 /// True if a royal piece of `defender`'s color is attacked on this board.
 pub fn has_physical_check(position: &Board, defender: bool) -> bool {
     let defending = if defender { position.black() } else { position.white() };
@@ -239,7 +263,7 @@ impl HcInfo {
     }
     #[inline(always)]
     pub fn axis_len(&self, n: usize) -> usize {
-        if n < self.new_axis { self.axis_coords[n].len() } else { self.branch_entries.len() }
+        if n < self.new_axis { self.axis_coords[n].len() } else { self.branch_moves.len() + 1 }
     }
     #[inline(always)]
     pub fn first_branch_axis(&self) -> usize {
@@ -254,7 +278,30 @@ impl HcInfo {
     }
     #[inline(always)]
     pub fn entry(&self, n: usize, i: Index) -> &Entry {
-        if n < self.new_axis { &self.axis_coords[n][i as usize] } else { &self.branch_entries[i as usize] }
+        if n < self.new_axis {
+            &self.axis_coords[n][i as usize]
+        } else {
+            debug_assert!(i == 0 || self.branch_ready, "branch entries not built");
+            &self.branch_entries[i as usize]
+        }
+    }
+
+    /// Whether the branch axes' arrival entries are built (see `rebuild`).
+    #[inline(always)]
+    pub fn branch_ready(&self) -> bool {
+        self.branch_ready
+    }
+
+    /// Whether working on `hc` needs the branch entries and they are not built yet.
+    #[inline]
+    pub fn needs_branch(&self, hc: &Hc) -> bool {
+        !self.branch_ready && (self.new_axis..hc.dimension()).any(|n| hc[n].has_other_than(0))
+    }
+
+    /// The arrival (move and moving piece) of branch coordinate `i`, built or not.
+    pub fn branch_arrival(&self, i: Index) -> Option<(FullMove, Piece)> {
+        let &(m, _, _, mover) = self.branch_moves.get((i as usize).checked_sub(1)?)?;
+        Some((m, mover))
     }
     pub fn get_semimove(&self, n: usize, i: Index) -> Semimove {
         match self.entry(n, i) {
@@ -288,17 +335,34 @@ impl HcInfo {
 
     pub fn build_hc(s: &State) -> (HcInfo, SearchSpace) {
         let mut info = HcInfo::default();
-        let ss = info.rebuild(s);
+        let ss = info.rebuild(s, false);
         (info, ss)
     }
 
     /// Build the search context of `s` in place (reusing this one's buffers); returns the
-    /// initial search space.
-    pub fn rebuild(&mut self, s: &State) -> SearchSpace {
+    /// initial search space. With `defer_branch`, the branch axes' arrival entries (their
+    /// boards) wait for `materialize_branch`: a hypercuboid whose branch coordinates are all
+    /// null never looks at them (cursors report when one would).
+    pub fn rebuild(&mut self, s: &State, defer_branch: bool) -> SearchSpace {
         let _p = crate::misc::prof::scope(0);
         let st_scope = crate::misc::prof::scope(15);
-        let HcInfo { player: info_player, line_axes, axis_lo, axis_of, axis_coords, branch_entries, dim, universe, new_axis, groups, scratch, all_lines_mine, lone_checks } =
-            self;
+        let HcInfo {
+            player: info_player,
+            line_axes,
+            axis_lo,
+            axis_of,
+            axis_coords,
+            branch_entries,
+            branch_moves,
+            branch_ready,
+            dim,
+            universe,
+            new_axis,
+            groups,
+            scratch,
+            all_lines_mine,
+            lone_checks,
+        } = self;
         let BuildScratch { playable, stays, departures, arrivals, sorted, line_counts, ml, jump_tab, safety, group_slots } = scratch;
         let present = s.get_present();
         let player = present.1;
@@ -481,16 +545,9 @@ impl HcInfo {
                 if m.to.t() == last_t && player == last_c {
                     let (p, q) = (m.from, m.to);
                     let src = s.board(p.l(), p.t(), player);
-                    let mut nb = *s.board(q.l(), q.t(), player);
-                    let victim = nb.kind(q.xy());
-                    let zp = pmask(p.xy());
-                    let royal = src.royal() & zp != 0;
-                    if src.lrawn() & zp != 0 && (q.y() == 0 || q.y() == size_y - 1) && promo_piece(m) != NO_PIECE {
-                        let promotion = promo_piece(m);
-                        nb.set_piece(q.xy(), if player { to_black(promotion) } else { promotion });
-                    } else {
-                        nb.place_from(q.xy(), src, p.xy());
-                    }
+                    let victim = s.board(q.l(), q.t(), player).kind(q.xy());
+                    let royal = src.royal() & pmask(p.xy()) != 0;
+                    let nb = arrival_board(s, m);
                     let needs_test = royal || safety(q.l(), q.t()).in_check;
                     if !needs_test || !has_physical_check(&nb, player) {
                         let fa = axis_of_line(axis_of, m.from.l()) as u32;
@@ -502,29 +559,24 @@ impl HcInfo {
 
         drop(ent_scope);
         let br_scope = crate::misc::prof::scope(13);
-        branch_entries.clear();
-        branch_entries.push(Entry::Null);
+        // The branch arrivals: only the ones whose result needs a check test get their board
+        // here; the entries are built by `materialize_branch`.
+        branch_moves.clear();
         for &(_, m) in arrivals.iter() {
             let (p, q) = (m.from, m.to);
             if let Some(dep) = find_jump(jump_tab, axis_of, m.from) {
                 let src = s.board(p.l(), p.t(), player);
-                let mut nb = *s.board(q.l(), q.t(), player);
-                let victim = nb.kind(q.xy());
-                let zp = pmask(p.xy());
-                let royal = src.royal() & zp != 0;
-                if src.lrawn() & zp != 0 && (q.y() == 0 || q.y() == size_y - 1) && promo_piece(m) != NO_PIECE {
-                    let promotion = promo_piece(m);
-                    nb.set_piece(q.xy(), if player { to_black(promotion) } else { promotion });
-                } else {
-                    nb.place_from(q.xy(), src, p.xy());
-                }
+                let royal = src.royal() & pmask(p.xy()) != 0;
                 let needs_test = royal || safety(q.l(), q.t()).in_check;
-                if !needs_test || !has_physical_check(&nb, player) {
+                if !needs_test || !has_physical_check(&arrival_board(s, m), player) {
                     let fa = axis_of_line(axis_of, m.from.l()) as u32;
-                    branch_entries.push(Entry::Arriving { m, b: nb, idx: dep, fa, mover: src.kind(p.xy()), victim });
+                    branch_moves.push((m, dep, fa, src.kind(p.xy())));
                 }
             }
         }
+        branch_entries.clear();
+        branch_entries.push(Entry::Null);
+        *branch_ready = false;
         drop(br_scope);
         let _fin = crate::misc::prof::scope(14);
         let new_l = s.new_line();
@@ -540,7 +592,7 @@ impl HcInfo {
         }
         line_axes.sort_unstable_by_key(|e| e.0);
         let dimension = np + max_branch;
-        let n_branch = branch_entries.len();
+        let n_branch = branch_moves.len() + 1;
         universe.set_ranges(dimension, |n| if n < np { axis_coords[n].len() } else { n_branch });
         // Branch arrivals were only admitted with a live departure; existing-axis arrivals
         // lose their coordinate when their departure was filtered out.
@@ -597,7 +649,25 @@ impl HcInfo {
         *new_axis = np;
         *all_lines_mine = (lines_lo..=lines_hi).all(|l| s.get_timeline_end(l).1 == player);
         lone_checks.get_mut().iter_mut().for_each(|e| e.0 = false);
+        if !defer_branch {
+            self.materialize_branch(s);
+        }
         ss
+    }
+
+    /// Build the branch axes' arrival entries `rebuild` deferred (`s` is the state it was
+    /// built from).
+    pub fn materialize_branch(&mut self, s: &State) {
+        if self.branch_ready {
+            return;
+        }
+        for &(m, dep, fa, mover) in &self.branch_moves {
+            let victim = s.board(m.to.l(), m.to.t(), self.player).kind(m.to.xy());
+            self.branch_entries.push(Entry::Arriving { m, b: arrival_board(s, m), idx: dep, fa, mover, victim });
+        }
+        let np = self.new_axis;
+        self.groups[np].rebuild(&self.branch_entries, np, &mut self.scratch.group_slots);
+        self.branch_ready = true;
     }
 
     /// Pick a point in `hc` whose departures and arrivals pair up (into `sc.point`). Prunes
@@ -1074,15 +1144,25 @@ impl HcCursor {
     }
 
     pub fn next(&mut self, info: &HcInfo, s: &State) -> Option<MoveSeq> {
-        self.next_with(info, s, &mut |_| {})
+        self.next_with(info, s, &mut |_| {}).expect("branch entries built")
     }
 
     /// `next`, filling the branch axes' order with `fill_branch` when `branch_pending` and a
     /// hypercuboid first leaves several coordinates on a branch axis (only then can taking a
-    /// point look at that order).
-    pub fn next_with(&mut self, info: &HcInfo, s: &State, fill_branch: &mut dyn FnMut(&mut AxisOrders)) -> Option<MoveSeq> {
+    /// point look at that order). Stops with `NeedBranch` (and no progress) when the next
+    /// hypercuboid needs the branch entries `info` deferred.
+    pub fn next_with(
+        &mut self,
+        info: &HcInfo,
+        s: &State,
+        fill_branch: &mut dyn FnMut(&mut AxisOrders),
+    ) -> Result<Option<MoveSeq>, NeedBranch> {
         while !self.ss.is_empty() {
             let mut hc = self.ss.pop_back().unwrap();
+            if info.needs_branch(&hc) {
+                self.ss.push_back(hc);
+                return Err(NeedBranch);
+            }
             if self.branch_pending
                 && (info.first_branch_axis()..hc.dimension()).any(|n| !hc[n].is_empty() && hc[n].single().is_none())
             {
@@ -1097,7 +1177,7 @@ impl HcCursor {
                 None => {
                     let act = info.to_action(pt);
                     hc.remove_point_with(pt, |h| self.ss.push_back(h));
-                    return Some(act);
+                    return Ok(Some(act));
                 }
                 Some(problem) => {
                     let _p = crate::misc::prof::scope(5);
@@ -1106,9 +1186,14 @@ impl HcCursor {
                 }
             }
         }
-        None
+        Ok(None)
     }
 }
+
+/// A cursor stopped: the next hypercuboid needs branch entries its context deferred (build
+/// them with `HcInfo::materialize_branch` and call again).
+#[derive(Debug)]
+pub struct NeedBranch;
 
 /// Legal actions roughly best-first by the sum of per-axis coordinate scores. The remaining
 /// space is kept as hypercuboids in a heap keyed by the score of their best point (each
@@ -1256,12 +1341,17 @@ impl BestFirstCursor {
     }
 
     pub fn next(&mut self, info: &HcInfo, s: &State) -> Option<MoveSeq> {
-        self.next_with(info, s, &mut |_, _| {})
+        self.next_with(info, s, &mut |_, _| {}).expect("branch entries built")
     }
 
-    /// `next`, ordering pending branch axes with `fill` once needed.
-    pub fn next_with(&mut self, info: &HcInfo, s: &State, fill: &mut BranchFill) -> Option<MoveSeq> {
+    /// `next`, ordering pending branch axes with `fill` once needed; stops with `NeedBranch`
+    /// (and no progress) when the next hypercuboid needs the branch entries `info` deferred.
+    pub fn next_with(&mut self, info: &HcInfo, s: &State, fill: &mut BranchFill) -> Result<Option<MoveSeq>, NeedBranch> {
         while let Some(BfItem { key, mut hc }) = self.heap.heap.pop() {
+            if info.needs_branch(&hc) {
+                self.heap.heap.push(BfItem { key, hc });
+                return Err(NeedBranch);
+            }
             let class = -key.0;
             self.heap.need_branch(&hc, true, fill);
             if !info.take_point(&mut hc, &self.heap.order, &mut self.sc) {
@@ -1273,7 +1363,7 @@ impl BestFirstCursor {
                 None => {
                     let act = info.to_action(pt);
                     hc.remove_point_with(pt, |h| heap.push(h, class, fill));
-                    return Some(act);
+                    return Ok(Some(act));
                 }
                 Some(problem) => {
                     let _p = crate::misc::prof::scope(5);
@@ -1281,7 +1371,7 @@ impl BestFirstCursor {
                 }
             }
         }
-        None
+        Ok(None)
     }
 }
 
