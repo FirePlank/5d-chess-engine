@@ -397,7 +397,13 @@ impl AlphaBeta {
             if l >= amin && l <= amax && s.get_timeline_end(l) == present {
                 continue;
             }
-            let set = IntegerSet::singleton(0);
+            let mut set = IntegerSet::singleton(0);
+            // Pieces on future boards may still travel back (departures stay).
+            for i in 0..info.axis_len(n) as Index {
+                if matches!(info.entry(n, i), Entry::Departing { .. }) {
+                    set.insert(i);
+                }
+            }
             allowed.push((n, set));
         }
         if allowed.is_empty() {
