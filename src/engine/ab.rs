@@ -171,7 +171,7 @@ impl Default for AbParams {
             rfp_depth: 0,
             rfp_margin: 200,
             use_hce: false,
-            root_static: true,
+            root_static: false,
             q_restrict: false,
         }
     }
