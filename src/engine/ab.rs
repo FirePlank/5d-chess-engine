@@ -59,9 +59,6 @@ const RFP_MARGIN: i32 = 200;
 const NMP_MIN_DEPTH: i32 = 3;
 const NMP_R: i32 = 3;
 const NMP_DIV: i32 = 3;
-/// Razoring: a non-PV depth-1 node whose static eval is this far below alpha is resolved by
-/// quiescence alone.
-const RAZOR_MARGIN: i32 = 500;
 const DEFAULT_HASH_MB: usize = 64;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -701,9 +698,6 @@ impl AlphaBeta {
             let e = self.static_eval(s);
             if depth <= RFP_DEPTH && e - RFP_MARGIN * depth >= beta {
                 return e;
-            }
-            if depth == 1 && e + RAZOR_MARGIN <= alpha {
-                return self.qsearch(s, ply, alpha, beta, QDEPTH);
             }
             if depth >= NMP_MIN_DEPTH && e >= beta && !self.seek_mate && Self::has_null_material(s) {
                 let r = NMP_R + depth / NMP_DIV;
