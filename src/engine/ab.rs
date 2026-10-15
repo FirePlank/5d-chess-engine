@@ -771,19 +771,22 @@ impl AlphaBeta {
         if self.check_abort() {
             return 0;
         }
-        let stand = self.static_eval(s);
         let in_check = known_check.unwrap_or_else(|| self.in_check(s));
-        // Royal captures are threatened: standing pat is unsound, so search evasions.
+        let leaf = qd <= 0 || ply >= MAX_PLY;
+        // Royal captures are threatened: standing pat is unsound, so search evasions (the
+        // static evaluation only matters at the depth limit).
+        if in_check && leaf {
+            return self.static_eval(s);
+        }
         if !in_check {
+            let stand = self.static_eval(s);
             if stand >= beta {
                 return stand;
             }
             alpha = alpha.max(stand);
-        }
-        if qd <= 0 || ply >= MAX_PLY {
-            return if in_check { stand } else { alpha };
-        }
-        if !in_check {
+            if leaf {
+                return alpha;
+            }
             // Moves on different boards don't interact (barring jumps between boards), so
             // the pending captures resolve board by board and their gains add up.
             let present = s.get_present();
@@ -906,11 +909,13 @@ impl AlphaBeta {
         }
 
         if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| self.in_check(s)) {
-            let e = self.static_eval(s);
-            if depth <= RFP_DEPTH && e - RFP_MARGIN * depth >= beta {
-                return e;
+            if depth <= RFP_DEPTH {
+                let e = self.static_eval(s);
+                if e - RFP_MARGIN * depth >= beta {
+                    return e;
+                }
             }
-            if depth >= NMP_MIN_DEPTH && e >= beta && !self.seek_mate && Self::has_null_material(s) {
+            if depth >= NMP_MIN_DEPTH && !self.seek_mate && Self::has_null_material(s) && self.static_eval(s) >= beta {
                 let r = NMP_R + depth / NMP_DIV;
                 let mark = s.make_null();
                 let v = -self.negamax(s, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
