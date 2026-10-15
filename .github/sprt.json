@@ -1,0 +1,12 @@
+{
+  "name": "future_travel_d3",
+  "old": "a38d93e5735b2a61ac8fb628d4fa7a158f2c9165",
+  "games": 12000,
+  "shards": 40,
+  "tc": "movetime 100",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}
