@@ -6,7 +6,7 @@ use crate::core::board::Board;
 use crate::core::check_position::CheckPosition;
 use crate::core::state::State;
 
-pub const NF: usize = 48;
+pub const NF: usize = 53;
 
 /// Feature indices.
 pub mod fi {
@@ -52,6 +52,12 @@ pub mod fi {
     pub const SP_CHECKS: usize = 46;
     /// Boards the side to move must play on (+ for white, - for black).
     pub const MANDATORY: usize = 47;
+    // Pawn structure, attackers near the enemy royal, development (white minus black).
+    pub const PASSED: usize = 48;
+    pub const DOUBLED: usize = 49;
+    pub const ISOLATED: usize = 50;
+    pub const KING_PROX: usize = 51;
+    pub const UNDEVELOPED: usize = 52;
 }
 
 pub const FEATURE_NAMES: [&str; NF] = [
@@ -61,7 +67,7 @@ pub const FEATURE_NAMES: [&str; NF] = [
     "cent_bishop", "cent_rook", "cent_queen", "cent_other", "pawn_adv", "pawn_near", "king_cent", "tl_slots",
     "tl_slots_heavy", "k_holes", "k_knights", "k_open_orth", "k_open_diag", "k_shield", "k_zone_att", "mob_knight",
     "mob_bishop", "mob_rook", "mob_queen", "mob_king", "hanging", "royal_att", "tempo", "active_lines",
-    "checks_5d", "sp_checks", "mandatory",
+    "checks_5d", "sp_checks", "mandatory", "passed", "doubled", "isolated", "king_prox", "undeveloped",
 ];
 
 pub type Features = [i32; NF];
@@ -282,6 +288,64 @@ pub struct Sides {
     pub inactive: i32,
     /// Active boards the side to move must play on.
     pub mandatory: i32,
+    /// Extra per-side terms (`ex`), not part of the eval net's inputs.
+    pub extra: [[i32; ex::COUNT]; 2],
+}
+
+/// Extra per-side term indices of `Sides`.
+pub mod ex {
+    pub const PASSED: usize = 0;
+    pub const DOUBLED: usize = 1;
+    pub const ISOLATED: usize = 2;
+    /// Own non-pawn pieces within two squares of an enemy royal.
+    pub const KING_PROX: usize = 3;
+    /// Own knights and bishops still on the back rank.
+    pub const UNDEVELOPED: usize = 4;
+    pub const COUNT: usize = 5;
+}
+
+/// Squares within king distance 2.
+#[inline]
+fn ring2(sq: i32) -> Bitboard {
+    let r1 = king_attack(sq) | pmask(sq);
+    let r = r1 | shift_north(r1) | shift_south(r1);
+    r | shift_east(r) | shift_west(r)
+}
+
+fn board_extra(b: &Board, extra: &mut [[i32; ex::COUNT]; 2], h: i32) {
+    let colors = [b.white() & !b.black(), b.black() & !b.white()];
+    for c in 0..2 {
+        let (me, them) = (colors[c], colors[1 - c]);
+        let (own_p, their_p) = (b.lpawn() & me, b.lpawn() & them);
+        let f = &mut extra[c];
+        for sq in marked_pos(own_p) {
+            let (x, y) = (sq & 7, sq >> 3);
+            let file = A_FILE << x;
+            let adj = if x > 0 { A_FILE << (x - 1) } else { 0 } | if x < 7 { A_FILE << (x + 1) } else { 0 };
+            let ahead = if c == 0 {
+                if y >= 7 { 0 } else { u64::MAX << (8 * (y + 1)) }
+            } else if y == 0 {
+                0
+            } else {
+                (1u64 << (8 * y)) - 1
+            };
+            if their_p & (file | adj) & ahead == 0 {
+                f[ex::PASSED] += 1;
+            }
+            if own_p & file & ahead != 0 {
+                f[ex::DOUBLED] += 1;
+            }
+            if own_p & adj == 0 {
+                f[ex::ISOLATED] += 1;
+            }
+        }
+        let pieces = me & !b.lpawn() & !b.royal();
+        for k in marked_pos(b.royal() & them) {
+            f[ex::KING_PROX] += (ring2(k) & pieces).count_ones() as i32;
+        }
+        let back = if c == 0 { 0xff } else { 0xffu64 << (8 * (h - 1)) };
+        f[ex::UNDEVELOPED] += ((b.knight() | b.bishop()) & me & back).count_ones() as i32;
+    }
 }
 
 fn board_sides(b: &Board, side: &mut [[i32; si::COUNT]; 2], active: bool, w: i32, h: i32) {
@@ -349,7 +413,7 @@ fn board_sides(b: &Board, side: &mut [[i32; si::COUNT]; 2], active: bool, w: i32
 }
 
 pub fn sides(s: &State) -> Sides {
-    let mut sd = Sides { side: [[0; si::COUNT]; 2], heavy: 0, active: 0, inactive: 0, mandatory: 0 };
+    let mut sd = Sides { side: [[0; si::COUNT]; 2], heavy: 0, active: 0, inactive: 0, mandatory: 0, extra: [[0; ex::COUNT]; 2] };
     let (l_min, l_max) = s.get_lines_range();
     let (amin, amax) = s.get_active_range();
     let (w, h) = s.get_board_size();
@@ -360,6 +424,7 @@ pub fn sides(s: &State) -> Sides {
         let active = l >= amin && l <= amax;
         board_sides(b, &mut sd.side, active, w, h);
         if active {
+            board_extra(b, &mut sd.extra, h);
             sd.heavy += (b.queen() | b.bishop() | b.princess()).count_ones() as i32;
             sd.active += 1;
             sd.mandatory += ((t, c) == present) as i32;
@@ -420,6 +485,12 @@ pub fn features_from(sd: &Sides, s: &State, checks: bool) -> Features {
         f[fi::SP_CHECKS] = sign * checks.iter().filter(|m| m.from.tl() != m.to.tl()).count().min(8) as i32;
     }
     f[fi::MANDATORY] = sign * sd.mandatory;
+    let e = |i: usize| sd.extra[0][i] - sd.extra[1][i];
+    f[fi::PASSED] = e(ex::PASSED);
+    f[fi::DOUBLED] = e(ex::DOUBLED);
+    f[fi::ISOLATED] = e(ex::ISOLATED);
+    f[fi::KING_PROX] = e(ex::KING_PROX);
+    f[fi::UNDEVELOPED] = e(ex::UNDEVELOPED);
     f
 }
 
