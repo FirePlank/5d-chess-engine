@@ -5,8 +5,10 @@
 # scripts/sprt_done.sh.
 #   scripts/sprt_run.sh <name> <base-sha> <patch-file|-> <games> [tc] [elo0] [elo1]
 #   tc: "movetime 100" | "nodes 20000" | "depth 4"
-#   Env: SHARDS (default 40), NEW_ARGS / OLD_ARGS (engine args, default "ab"),
-#        BASE (self | cpp:<engine>, e.g. cpp:zero-capture-check-pw), MIN_GAMES, RUN_ID.
+#   Env: SHARDS (default 40), NEW_ARGS / OLD_ARGS (extra engine args, default none),
+#        BASE (self | cpp:<engine>, e.g. cpp:zero-capture-check-pw), MIN_GAMES, RUN_ID,
+#        OLD_SHA (build the old engine from this commit instead of <base-sha>, e.g. to
+#        measure main against an earlier version; use with patch "-").
 set -euo pipefail
 NAME=$1 BASE_SHA=$2 PATCH=$3 GAMES=$4 TC=${5:-movetime 100} E0=${6:-0} E1=${7:-5}
 R=$(git rev-parse --show-toplevel); W="$R/../5d-sprt-branch"
@@ -33,9 +35,9 @@ else
     exit 1
   fi
   [ "$PATCH" = "-" ] || git apply "$PATCH"
-  jq -n --arg n "$NAME" --arg o "$BASE_SHA" --arg tc "$TC" --argjson g "$GAMES" \
+  jq -n --arg n "$NAME" --arg o "${OLD_SHA:-$BASE_SHA}" --arg tc "$TC" --argjson g "$GAMES" \
         --argjson e0 "$E0" --argjson e1 "$E1" --argjson sh "${SHARDS:-40}" \
-        --arg na "${NEW_ARGS:-ab}" --arg oa "${OLD_ARGS:-ab}" --arg b "${BASE:-self}" \
+        --arg na "${NEW_ARGS:-}" --arg oa "${OLD_ARGS:-}" --arg b "${BASE:-self}" \
         '{name:$n, old:$o, games:$g, shards:$sh, tc:$tc, elo0:$e0, elo1:$e1, new_args:$na, old_args:$oa, base:$b}' \
         > .github/sprt.json
   git add -A && git commit -q -m "test: $NAME"
@@ -88,7 +90,7 @@ T="$R/games/sprt/.remote_${NAME}_$$"; rm -rf "$T"
 until timeout 600 gh run download "$ID" -p "shard-*" -D "$T"; do
   echo "shard download failed; retrying in 30s" >&2; rm -rf "$T"; sleep 30
 done
-python "$R/scripts/sprt_merge.py" --label "$NAME" --old "$BASE_SHA" --elo0 "$E0" --elo1 "$E1" \
+python "$R/scripts/sprt_merge.py" --label "$NAME" --old "${OLD_SHA:-$BASE_SHA}" --elo0 "$E0" --elo1 "$E1" \
   --out "$R/games/sprt/games_${NAME}.jsonl" "$T"/shard-*/shard_*.jsonl \
   | tee "$R/games/sprt/summary_${NAME}.txt"
 rm -rf "$T"

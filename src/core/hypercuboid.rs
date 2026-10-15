@@ -778,10 +778,7 @@ impl HcInfo {
     }
 
     pub fn search<'a>(&'a self, s: &'a State, ss: SearchSpace) -> HcSearch<'a> {
-        HcSearch { info: self, s, cursor: HcCursor::new(ss, HcOrdering::Natural, SearchMode::Balanced) }
-    }
-    pub fn search_with<'a>(&'a self, s: &'a State, ss: SearchSpace, order: HcOrdering, mode: SearchMode) -> HcSearch<'a> {
-        HcSearch { info: self, s, cursor: HcCursor::new(ss, order, mode) }
+        HcSearch { info: self, s, cursor: HcCursor::new(ss, HcOrdering::Natural) }
     }
 }
 
@@ -805,33 +802,17 @@ fn get_move_path(s: &CheckPosition<'_>, fm: FullMove, c: bool) -> (Vec<Vec4>, i3
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum SearchMode {
-    /// Adaptive propagation (`HC_info::search`).
-    Balanced,
-    /// Remove problems only from the current HC.
-    Iterative,
-    /// Propagate problems through every HC.
-    Stable,
-    /// Rollout search: iterative for the first 100 problems, then balanced.
-    Mixed,
-}
 
 /// Resumable legal-action enumeration. The caller supplies the context and the state it
 /// was built from on every call (the state may be modified between calls if restored).
 pub struct HcCursor {
     pub ss: SearchSpace,
-    pub order: std::rc::Rc<HcOrdering>,
-    mode: SearchMode,
-    problems: usize,
+    pub order: HcOrdering,
 }
 
 impl HcCursor {
-    pub fn new(ss: SearchSpace, order: HcOrdering, mode: SearchMode) -> Self {
-        HcCursor { ss, order: std::rc::Rc::new(order), mode, problems: 0 }
-    }
-    pub fn with_shared(ss: SearchSpace, order: std::rc::Rc<HcOrdering>, mode: SearchMode) -> Self {
-        HcCursor { ss, order, mode, problems: 0 }
+    pub fn new(ss: SearchSpace, order: HcOrdering) -> Self {
+        HcCursor { ss, order }
     }
 
     pub fn next(&mut self, info: &HcInfo, s: &State) -> Option<MoveSeq> {
@@ -849,24 +830,8 @@ impl HcCursor {
                 }
                 Some(problem) => {
                     let _p = crate::misc::prof::scope(5);
-                    let iterative =
-                        self.mode == SearchMode::Iterative || (self.mode == SearchMode::Mixed && self.problems < 100);
-                    if self.mode == SearchMode::Mixed && self.problems < 100 {
-                        self.problems += 1;
-                    }
-                    if iterative {
-                        self.ss.concat(hc.remove_slice(&problem));
-                    } else if self.mode == SearchMode::Stable {
-                        let mut adjoined = SearchSpace::default();
-                        for other in self.ss.iter() {
-                            adjoined.concat(other.remove_slice_carefully(&problem));
-                        }
-                        adjoined.concat(hc.remove_slice(&problem));
-                        self.ss = adjoined;
-                    } else {
-                        self.ss.push_back(hc);
-                        self.ss.remove_slice_backwards(&problem, true, 10, 1);
-                    }
+                    self.ss.push_back(hc);
+                    self.ss.remove_slice_backwards(&problem, true, 10, 1);
                 }
             }
         }
@@ -882,8 +847,8 @@ impl HcCursor {
 /// Subspaces of the initial search space keep their precedence (later ones first).
 pub struct BestFirstCursor {
     heap: std::collections::BinaryHeap<BfItem>,
-    order: std::rc::Rc<HcOrdering>,
-    scores: std::rc::Rc<Vec<Vec<i32>>>,
+    order: HcOrdering,
+    scores: Vec<Vec<i32>>,
     seq: u64,
 }
 
@@ -909,7 +874,7 @@ impl Ord for BfItem {
 }
 
 impl BestFirstCursor {
-    pub fn new(ss: SearchSpace, order: std::rc::Rc<HcOrdering>, scores: std::rc::Rc<Vec<Vec<i32>>>) -> Self {
+    pub fn new(ss: SearchSpace, order: HcOrdering, scores: Vec<Vec<i32>>) -> Self {
         let mut c = BestFirstCursor { heap: std::collections::BinaryHeap::new(), order, scores, seq: 0 };
         let n = ss.hcs.len();
         for (k, hc) in ss.hcs.into_iter().enumerate() {
