@@ -170,7 +170,7 @@ impl Default for AbParams {
             best_first: true,
             rfp_depth: 0,
             rfp_margin: 200,
-            use_hce: true,
+            use_hce: false,
             root_static: false,
             q_restrict: false,
         }
