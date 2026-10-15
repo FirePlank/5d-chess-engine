@@ -38,15 +38,6 @@ const QDEPTH: i32 = 3;
 const QCAP: usize = 10;
 const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
-/// Late root actions (by the previous iteration's order) are searched shallower from this
-/// index on, and re-searched at full depth if they beat alpha.
-const ROOT_LMR_MIN_INDEX: usize = 6;
-
-/// Late move reduction for the `index`-th action at `depth`: 1 + ln(depth) ln(index) / 2.
-#[inline]
-fn lmr(depth: i32, index: usize) -> i32 {
-    (1.0 + (depth.max(1) as f32).ln() * (index.max(1) as f32).ln() / 2.0) as i32
-}
 /// Ordering bonus of a checking semimove (above every capture).
 const CHECK_BONUS: i32 = 30_000;
 /// Reverse futility pruning: at non-PV nodes up to this depth, return the static eval when
@@ -697,9 +688,11 @@ impl AlphaBeta {
                 let mark = Self::make(s, &act);
                 let quiet = sc < 10_000;
                 let mut r = 0;
-                // Checking actions are not reduced: mating lines run through them.
-                if depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet && !Self::in_check(s) {
-                    r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
+                if depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet {
+                    r = 1 + (searched >= 12) as i32;
+                    if pv {
+                        r -= 1;
+                    }
                 }
                 let mut v;
                 if searched == 0 {
@@ -864,16 +857,7 @@ impl AlphaBeta {
                 let v = if k == 0 {
                     -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true)
                 } else {
-                    // Late root actions are reduced, never pruned.
-                    let r = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX && !Self::in_check(&work) {
-                        (lmr(depth, k) - 1).clamp(0, depth - 2)
-                    } else {
-                        0
-                    };
-                    let mut v = -self.negamax(&mut work, depth - 1 - r, 1, -alpha - 1, -alpha, false);
-                    if !self.aborted && v > alpha && r > 0 {
-                        v = -self.negamax(&mut work, depth - 1, 1, -alpha - 1, -alpha, false);
-                    }
+                    let mut v = -self.negamax(&mut work, depth - 1, 1, -alpha - 1, -alpha, false);
                     if !self.aborted && v > alpha {
                         v = -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true);
                     }
