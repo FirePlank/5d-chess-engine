@@ -262,7 +262,7 @@ impl State {
                 None => return false,
             }
         }
-        let (size_x, size_y) = self.m.get_board_size();
+        let (_, size_y) = self.m.get_board_size();
         if d.tl() == Vec4::ZERO {
             let b = *self.m.board(p.l(), p.t(), player);
             let z = pmask(p.xy());
@@ -276,8 +276,8 @@ impl State {
                     b.replace_piece(p.xy(), NO_PIECE).replace_piece(q.xy(), promoted)
                 }
             } else if b.king() & z != 0 && d.x().abs() > 1 {
-                let rook_x1 = if d.x() < 0 { 0 } else { size_x - 1 };
-                let rook_x2 = q.x() + if d.x() < 0 { 1 } else { -1 };
+                let rook_x1 = b.first_occupied_x(p.x(), p.y(), d.x().signum());
+                let rook_x2 = p.x() + d.x().signum();
                 b.move_piece(ppos(rook_x1, p.y()), ppos(rook_x2, q.y())).move_piece(p.xy(), q.xy())
             } else {
                 b.move_piece(p.xy(), q.xy())

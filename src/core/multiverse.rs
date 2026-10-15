@@ -612,23 +612,20 @@ impl Multiverse {
                 let mut a = king_attack(pos) & !friendly;
                 let urook = b.umove() & b.rook() & friendly;
                 if !b.is_under_attack(pos, c) {
-                    for d in [Vec4::new(1, 0, 0, 0), Vec4::new(-1, 0, 0, 0)] {
-                        let mut i = 0;
-                        let mut q = p + d;
-                        while !q.outbound() {
-                            let w = pmask(q.xy());
-                            if i < 2 && b.is_under_attack(q.xy(), c) {
-                                break;
-                            } else if w & urook != 0 {
-                                if (q + d).outbound() {
-                                    a |= pmask((p + d + d).xy());
-                                }
-                                break;
-                            } else if w & b.occupied() != 0 {
-                                break;
-                            }
-                            i += 1;
-                            q = q + d;
+                    // Castling: the first piece along the rank must be an unmoved rook at least two
+                    // squares away (anywhere on the rank in variants). The king moves two squares,
+                    // onto the rook's square when it is exactly two away, and may not pass through
+                    // a square attacked on this board.
+                    let (x, y) = (p.x(), p.y());
+                    for dx in [1, -1] {
+                        let rx = b.first_occupied_x(x, y, dx);
+                        if (0..BOARD_LENGTH).contains(&rx)
+                            && (rx - x).abs() >= 2
+                            && urook & pmask(ppos(rx, y)) != 0
+                            && !b.is_under_attack(ppos(x + dx, y), c)
+                            && !b.is_under_attack(ppos(x + 2 * dx, y), c)
+                        {
+                            a |= pmask(ppos(x + 2 * dx, y));
                         }
                     }
                 }

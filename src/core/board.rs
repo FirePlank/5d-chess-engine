@@ -380,6 +380,16 @@ impl Board {
         s
     }
 
+    /// File of the first occupied square (walls included) from (x, y) along the rank in
+    /// direction `dx`, or a file off the board when there is none.
+    pub fn first_occupied_x(&self, x: i32, y: i32, dx: i32) -> i32 {
+        let mut i = x + dx;
+        while (0..BOARD_LENGTH).contains(&i) && self.occupied() & pmask(ppos(i, y)) == 0 {
+            i += dx;
+        }
+        i
+    }
+
     /// All pieces (both colors) that attack `pos` on this board.
     pub fn attacks_to(&self, pos: i32) -> Bitboard {
         let w = self.white();
