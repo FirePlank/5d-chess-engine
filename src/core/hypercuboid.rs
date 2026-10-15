@@ -388,6 +388,17 @@ impl HcInfo {
                 }
             }
         }
+        // The search only tests same-board checks on boards the action creates. A royal already
+        // attacked on the same board of an opponent-to-move board stays capturable whatever the
+        // mover does, so no action is legal (unreachable by legal play; set-up positions only).
+        if dimension > 0
+            && (lines_lo..=lines_hi).any(|l| {
+                let (t, c) = s.get_timeline_end(l);
+                c != player && has_physical_check(s.board(l, t, c), player)
+            })
+        {
+            universe[0] = IntegerSet::new();
+        }
         let mut hc_n_lines = universe.clone();
         let mut non_null = IntegerSet::new();
         if new_axis < dimension {

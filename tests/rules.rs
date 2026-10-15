@@ -37,6 +37,23 @@ fn no_en_passant_against_a_pawn_that_did_not_just_double_step() {
 }
 
 #[test]
+fn check_on_an_untouchable_opponent_board_is_mate() {
+    // Black's queen on the inactive timeline -2 (Black to move there) attacks White's king on
+    // the same board. Nothing White plays changes that board, so no action is legal.
+    use kairos::core::hypercuboid::HcInfo;
+    use kairos::core::state::MateType;
+    let s = parse_g_line(
+        "G 1 size 8x8 odd fen [4k3/8/8/8/8/8/8/4K3:0:1:w][4k3/8/8/8/8/8/8/4K3:-1:1:w][4k3/8/8/8/8/8/8/q3K3:-2:1:b]",
+    )
+    .unwrap();
+    assert!(s.has_phantom_check());
+    let (w, ss) = HcInfo::build_hc(&s);
+    let acts: Vec<_> = w.search(&s, ss).take(5).collect();
+    assert!(acts.is_empty(), "illegal actions found: {:?}", acts);
+    assert_eq!(s.get_mate_type(), MateType::Checkmate);
+}
+
+#[test]
 fn castling_on_boards_narrower_than_eight_files() {
     // King d1, rooks a1 and g1 on a 7-file board: both castlings are available.
     let s = parse_g_line("G 1 size 7x7 odd fen [r*2k*2r*/p*p*p*p*p*p*p*/7/7/7/P*P*P*P*P*P*P*/R*2K*2R*:0:1:w]").unwrap();
