@@ -44,7 +44,7 @@ cargo test --release
 AB_NODES=20000 ./target/release/ktools abbench
 ```
 
-Strength is measured with the SPRT harness in `src/bin/sprt.rs` (pentanomial GSPRT, colour-swapped opening pairs from `data/book.g`):
+Strength is measured with the SPRT harness in `src/bin/sprt.rs` (pentanomial GSPRT, colour-swapped pairs from openings generated per pair (a random 8x8 variant plus 6 noisy shallow-search actions), 10+0.1 clock by default):
 
 ```bash
 ./target/release/sprt --new target/release/kairos --base baseline/kairos \
