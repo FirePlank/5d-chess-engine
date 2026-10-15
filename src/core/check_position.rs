@@ -24,6 +24,8 @@ pub struct CheckPosition<'a> {
     base: &'a State,
     first_line: i32,
     lines: Vec<LineView<'a>>,
+    /// Only pieces on these squares of a source board are scanned.
+    source_mask: Bitboard,
 }
 
 #[derive(Clone, Copy)]
@@ -58,7 +60,7 @@ impl<'a> CheckPosition<'a> {
             line.start = s.get_timeline_start(l);
             line.end = s.get_timeline_end(l);
         }
-        CheckPosition { base: s, first_line: l_min, lines }
+        CheckPosition { base: s, first_line: l_min, lines, source_mask: !0 }
     }
 
     fn for_present(s: &'a State, present: Turn) -> Self {
@@ -183,6 +185,21 @@ impl<'a> CheckPosition<'a> {
         result
     }
 
+    /// `gives_check` scanning only the overlaid boards' pieces on `mask`.
+    pub fn gives_check_masked(
+        &mut self,
+        kind: CheckKind,
+        mv: BoardOverlay<'a>,
+        attacker: bool,
+        departure: Option<BoardOverlay<'a>>,
+        mask: Bitboard,
+    ) -> bool {
+        self.source_mask = mask;
+        let r = self.gives_check(kind, mv, attacker, departure);
+        self.source_mask = !0;
+        r
+    }
+
     pub fn first_check(&self, attacker: bool, include_physical: bool) -> Option<FullMove> {
         let mut r = None;
         self.scan(
@@ -228,7 +245,7 @@ impl<'a> CheckPosition<'a> {
             }
             let p0 = Vec4::new(0, 0, line.end.0, self.first_line + i as i32);
             let source = self.get_board_ptr(p0.l(), p0.t(), c).unwrap();
-            let friendly = source.hostile(!c);
+            let friendly = source.hostile(!c) & self.source_mask;
             (include_physical && self.scan_physical(c, p0, source, friendly, emit))
                 || (include_superphysical
                     && (self.scan_pure_sliders(c, p0, source, friendly, emit)

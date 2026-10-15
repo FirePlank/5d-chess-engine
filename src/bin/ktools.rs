@@ -262,7 +262,7 @@ fn main() {
                     let (w, ss) = HcInfo::build_hc(&s);
                     let (order, mode) = match variant {
                         0 => (kairos::misc::ordering::HcOrdering::Natural, SearchMode::Balanced),
-                        1 => (kairos::engine::ab::AlphaBeta::new(Default::default(), Default::default()).ordering(&s, &w), SearchMode::Balanced),
+                        1 => (kairos::engine::ab::AlphaBeta::new(Default::default(), Default::default()).ordering(&s, &w, true), SearchMode::Balanced),
                         v => (kairos::misc::ordering::HcOrdering::random(w.get_universe(), &mut kairos::misc::rng::Mt19937::new(v)),
                               if v == 3 { SearchMode::Iterative } else { SearchMode::Balanced }),
                     };
@@ -296,7 +296,7 @@ fn main() {
                 let (w, ss) = HcInfo::build_hc(&s);
                 let natural = w.search(&s, ss.clone()).count();
                 let ab = kairos::engine::ab::AlphaBeta::new(Default::default(), Default::default());
-                let mut cur = HcCursor::new(ss, ab.ordering(&s, &w), SearchMode::Balanced);
+                let mut cur = HcCursor::new(ss, ab.ordering(&s, &w, true), SearchMode::Balanced);
                 let mut n = 0;
                 while cur.next(&w, &s).is_some() {
                     n += 1;
@@ -406,6 +406,14 @@ fn abbench(path: &str, depth: u32, out: &mut impl Write) {
     let mut total_nodes = 0u64;
     for (k, s) in positions.iter().enumerate() {
         let mut e = AlphaBeta::new(Default::default(), Default::default());
+        if let Ok(opts) = std::env::var("AB_OPTS") {
+            use kairos::engine::OptionValue;
+            for o in opts.split_whitespace() {
+                if let Some((k, v)) = o.split_once('=') {
+                    e.set_option(k, &OptionValue::parse(v));
+                }
+            }
+        }
         let node_cap = std::env::var("AB_NODES").ok().and_then(|v| v.parse().ok());
         let limits = Limits { depth: Some(depth), nodes: node_cap, ..Default::default() };
         let mut last = String::new();

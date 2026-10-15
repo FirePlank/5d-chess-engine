@@ -5,6 +5,7 @@
 //! action is tried first; at non-PV nodes only a depth-dependent number of actions is searched.
 
 use super::eval::{evaluate, piece_value, EvalParams};
+use super::features::{MoveEvaluator, MoveWeights};
 use super::{Engine, Limits, OptionValue};
 use crate::core::action::{Action, FullMove, MoveSeq};
 use crate::core::board::Board;
@@ -111,6 +112,13 @@ pub struct AbParams {
     pub check_ext: bool,
     /// Order time travels that land with check first and other travels last.
     pub travel_checks: bool,
+    /// Semimoves that give check go first on their axis: 0 off, 1 physical checks,
+    /// 2 physical and superphysical checks.
+    pub check_order: u8,
+    /// Ordering bonus for a checking semimove.
+    pub check_bonus: i32,
+    /// Interior nodes with at most this remaining depth order checks first.
+    pub check_order_depth: i32,
 }
 
 impl Default for AbParams {
@@ -129,6 +137,9 @@ impl Default for AbParams {
             merge_branches: false,
             check_ext: false,
             travel_checks: false,
+            check_order: 0,
+            check_bonus: 30_000,
+            check_order_depth: 64,
         }
     }
 }
@@ -324,7 +335,17 @@ impl AlphaBeta {
     }
 
     /// Ordering score of one HC coordinate.
-    fn coord_score(&self, s: &State, info: &HcInfo, n: usize, i: Index) -> i32 {
+    fn coord_score(&self, s: &State, info: &HcInfo, n: usize, i: Index, checks: &mut Option<MoveEvaluator>) -> i32 {
+        let check = |checks: &mut Option<MoveEvaluator>| match checks {
+            Some(ev) => {
+                match self.params.check_order {
+                    1 => ev.is_physical_check(n, i),
+                    2 => ev.is_check(n, i),
+                    _ => ev.is_check_fast(n, i),
+                }
+            }
+            None => false,
+        };
         match info.entry(n, i) {
             Entry::Null => -5,
             Entry::Departing { .. } => 0,
@@ -349,17 +370,21 @@ impl AlphaBeta {
                 if wm == KING_W || wm == COMMON_KING_W {
                     sc -= 200;
                 }
+                if check(checks) {
+                    sc += self.params.check_bonus;
+                }
                 sc
             }
         }
     }
 
-    pub fn ordering(&self, s: &State, info: &HcInfo) -> HcOrdering {
+    pub fn ordering(&self, s: &State, info: &HcInfo, checks: bool) -> HcOrdering {
         let _p = crate::misc::prof::scope(6);
         let u = info.get_universe();
         let mut orders = Vec::with_capacity(u.dimension());
         // Branch axes share entries; score them once.
         let mut branch_cache: Option<Vec<Index>> = None;
+        let mut checks = if checks && self.params.check_order > 0 { Some(MoveEvaluator::new(info, s, MoveWeights([0.0; 12]))) } else { None };
         for n in 0..u.dimension() {
             if n >= info.first_branch_axis() {
                 if let Some(c) = &branch_cache {
@@ -367,7 +392,7 @@ impl AlphaBeta {
                     continue;
                 }
             }
-            let mut v: Vec<(i32, Index)> = u[n].iter().map(|i| (self.coord_score(s, info, n, i), i)).collect();
+            let mut v: Vec<(i32, Index)> = u[n].iter().map(|i| (self.coord_score(s, info, n, i, &mut checks), i)).collect();
             v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
             let o: Vec<Index> = v.into_iter().map(|x| x.1).collect();
             if n >= info.first_branch_axis() {
@@ -407,7 +432,7 @@ impl AlphaBeta {
     /// The first `cap` actions of `s` in the order an interior node would try them (diagnostics).
     pub fn node_order(&self, s: &State, cap: usize) -> Vec<MoveSeq> {
         let (info, ss) = HcInfo::build_hc(s);
-        let order = self.ordering(s, &info);
+        let order = self.ordering(s, &info, true);
         let mut agen = ActionGen::new(ss, order, self.params.merge_branches);
         let mut out = Vec::new();
         let mut exhausted = false;
@@ -547,7 +572,7 @@ impl AlphaBeta {
             return stand;
         }
         let (info, ss) = HcInfo::build_hc(s);
-        let order = self.ordering(s, &info);
+        let order = self.ordering(s, &info, false);
         let mut agen = ActionGen::new(ss, order, self.params.merge_branches);
         let mut best = if in_check { -INF } else { stand };
         let mut tried = 0;
@@ -649,7 +674,7 @@ impl AlphaBeta {
         }
 
         let (info, ss) = HcInfo::build_hc(s);
-        let order = self.ordering(s, &info);
+        let order = self.ordering(s, &info, depth <= self.params.check_order_depth);
         let mut agen = ActionGen::new(ss, order, self.params.merge_branches);
         let mut generated = 0usize;
         let mut exhausted = false;
@@ -805,6 +830,9 @@ impl Engine for AlphaBeta {
             ("travel_checks", _) => self.params.travel_checks = !matches!(value, OptionValue::Bool(false)),
             ("batch", Some(x)) => self.params.batch = (x as usize).max(1),
             ("pv_cap_mult", Some(x)) => self.params.pv_cap_mult = x as usize,
+            ("check_order", Some(x)) => self.params.check_order = x as u8,
+            ("check_bonus", Some(x)) => self.params.check_bonus = x as i32,
+            ("check_order_depth", Some(x)) => self.params.check_order_depth = x as i32,
             ("root_cap", Some(x)) => self.params.root_cap = (x as usize).max(1),
             ("lmr_min_depth", Some(x)) => self.params.lmr_min_depth = x as i32,
             ("lmr_min_index", Some(x)) => self.params.lmr_min_index = x as usize,
@@ -849,7 +877,7 @@ impl Engine for AlphaBeta {
 
         // Root actions (all of them, up to the root cap), ordered heuristically.
         let (hc, ss) = HcInfo::build_hc(root);
-        let order = self.ordering(root, &hc);
+        let order = self.ordering(root, &hc, true);
         let mut agen = ActionGen::new(ss, order, self.params.merge_branches);
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
         // Enumerating every root action can take seconds with many timelines: spend at most

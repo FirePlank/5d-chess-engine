@@ -256,7 +256,7 @@ impl<'a> MoveEvaluator<'a> {
         MoveEvaluator { info, s, w, checks: None, evaluate_captures }
     }
 
-    fn is_physical_check(&self, axis: usize, coord: Index) -> bool {
+    pub fn is_physical_check(&self, axis: usize, coord: Index) -> bool {
         let Some(mb) = self.info.get_move_boards(axis, coord) else { return false };
         let defender = !self.s.get_present().1;
         has_physical_check(mb.result, defender) || mb.departure.map(|d| has_physical_check(d, defender)).unwrap_or(false)
@@ -281,6 +281,33 @@ impl<'a> MoveEvaluator<'a> {
         let dt = next_turn((mv.from.t(), player));
         let dep = BoardOverlay { l: mv.from.l(), t: dt.0, c: dt.1, value: mb.departure.unwrap() };
         checks.gives_check(kind, arrival, player, Some(dep))
+    }
+
+    /// Checks given by the moved piece itself from its arrival square (superphysically), or by
+    /// anything on its result board (physically). Misses discovered superphysical checks.
+    pub fn is_check_fast(&mut self, axis: usize, coord: Index) -> bool {
+        if self.is_physical_check(axis, coord) {
+            return true;
+        }
+        let info: &'a HcInfo = self.info;
+        let Some(mb) = info.get_move_boards(axis, coord) else { return false };
+        let s: &'a State = self.s;
+        if self.checks.is_none() {
+            self.checks = Some(CheckPosition::for_move_candidates(s));
+        }
+        let checks = self.checks.as_mut().unwrap();
+        let player = s.get_present().1;
+        let mv = mb.mv;
+        let arrival_line = mv.new_position(s).l();
+        let at = next_turn((mv.to.t(), player));
+        let arrival = BoardOverlay { l: arrival_line, t: at.0, c: at.1, value: mb.result };
+        let mask = pmask(mv.to.xy());
+        if mv.from.tl() == mv.to.tl() {
+            return checks.gives_check_masked(CheckKind::Superphysical, arrival, player, None, mask);
+        }
+        let dt = next_turn((mv.from.t(), player));
+        let dep = BoardOverlay { l: mv.from.l(), t: dt.0, c: dt.1, value: mb.departure.unwrap() };
+        checks.gives_check_masked(CheckKind::Superphysical, arrival, player, Some(dep), mask)
     }
 
     pub fn is_check(&mut self, axis: usize, coord: Index) -> bool {
