@@ -53,9 +53,6 @@ const CHECK_BONUS: i32 = 30_000;
 /// it beats beta by RFP_MARGIN per ply.
 const RFP_DEPTH: i32 = 2;
 const RFP_MARGIN: i32 = 200;
-/// From this remaining depth (and at the root) pieces on boards ahead of the present may
-/// travel back in time; nearer the leaves only the boards that must be played move.
-const FUTURE_DEPARTURE_DEPTH: i32 = 3;
 /// Null move (a pass, i.e. a phantom turn): at non-PV nodes from this depth, when the static
 /// eval is at least beta, search the pass with depth reduced by NMP_R + depth / NMP_DIV.
 const NMP_MIN_DEPTH: i32 = 3;
@@ -421,7 +418,7 @@ impl AlphaBeta {
 
     /// Moves on boards the side to move doesn't have to play (ahead of the present, or on
     /// inactive timelines) are left out: only the null coordinate stay on those axes.
-    fn without_future(s: &State, info: &HcInfo, ss: SearchSpace, departures: bool) -> SearchSpace {
+    fn without_future(s: &State, info: &HcInfo, ss: SearchSpace) -> SearchSpace {
         let present = s.get_present();
         let (amin, amax) = s.get_active_range();
         let (lo, hi) = s.get_lines_range();
@@ -431,16 +428,7 @@ impl AlphaBeta {
             if l >= amin && l <= amax && s.get_timeline_end(l) == present {
                 continue;
             }
-            let mut set = IntegerSet::singleton(0);
-            if departures {
-                // A piece from the future may still travel back (bringing an attacker or a
-                // defender to the present); spatial moves there wait for the present.
-                for i in 0..info.axis_len(n) as Index {
-                    if matches!(info.entry(n, i), Entry::Departing { .. }) {
-                        set.insert(i);
-                    }
-                }
-            }
+            let set = IntegerSet::singleton(0);
             allowed.push((n, set));
         }
         if allowed.is_empty() {
@@ -763,7 +751,7 @@ impl AlphaBeta {
 
         let (info, ss) = HcInfo::build_hc(s);
         let mut full = Some(ss.clone());
-        let mut agen = self.action_gen(s, &info, Self::without_future(s, &info, ss, depth >= FUTURE_DEPARTURE_DEPTH));
+        let mut agen = self.action_gen(s, &info, Self::without_future(s, &info, ss));
         let mut generated = 0usize;
         let mut exhausted = false;
         while searched < cap && !exhausted {
@@ -939,7 +927,7 @@ impl AlphaBeta {
         // Root actions (all of them, up to the root cap), ordered heuristically.
         let (hc, ss) = HcInfo::build_hc(root);
         let mut full = Some(ss.clone());
-        let mut agen = self.action_gen(root, &hc, Self::without_future(root, &hc, ss, true));
+        let mut agen = self.action_gen(root, &hc, Self::without_future(root, &hc, ss));
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
         // Enumerating every root action can take seconds with many timelines: spend at most
         // a quarter of the budget on it (always keeping at least one action).
