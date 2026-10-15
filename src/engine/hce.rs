@@ -6,7 +6,7 @@ use crate::core::board::Board;
 use crate::core::check_position::CheckPosition;
 use crate::core::state::State;
 
-pub const NF: usize = 53;
+pub const NF: usize = 55;
 
 /// Feature indices.
 pub mod fi {
@@ -58,6 +58,11 @@ pub mod fi {
     pub const ISOLATED: usize = 50;
     pub const KING_PROX: usize = 51;
     pub const UNDEVELOPED: usize = 52;
+    /// Own non-pawn pieces on neighbouring timelines' latest boards within two squares of
+    /// an enemy royal (they can strike across timelines).
+    pub const KING_PROX_5D: usize = 53;
+    /// Own queens within two squares of an enemy royal on its board.
+    pub const QUEEN_PROX: usize = 54;
 }
 
 pub const FEATURE_NAMES: [&str; NF] = [
@@ -68,6 +73,7 @@ pub const FEATURE_NAMES: [&str; NF] = [
     "tl_slots_heavy", "k_holes", "k_knights", "k_open_orth", "k_open_diag", "k_shield", "k_zone_att", "mob_knight",
     "mob_bishop", "mob_rook", "mob_queen", "mob_king", "hanging", "royal_att", "tempo", "active_lines",
     "checks_5d", "sp_checks", "mandatory", "passed", "doubled", "isolated", "king_prox", "undeveloped",
+    "king_prox_5d", "queen_prox",
 ];
 
 pub type Features = [i32; NF];
@@ -309,7 +315,9 @@ pub mod ex {
     pub const KING_PROX: usize = 3;
     /// Own knights and bishops still on the back rank.
     pub const UNDEVELOPED: usize = 4;
-    pub const COUNT: usize = 5;
+    pub const KING_PROX_5D: usize = 5;
+    pub const QUEEN_PROX: usize = 6;
+    pub const COUNT: usize = 7;
 }
 
 /// Squares within king distance 2.
@@ -349,7 +357,9 @@ fn board_extra(b: &Board, extra: &mut [[i32; ex::COUNT]; 2], h: i32) {
         }
         let pieces = me & !b.lpawn() & !b.royal();
         for k in marked_pos(b.royal() & them) {
-            f[ex::KING_PROX] += (ring2(k) & pieces).count_ones() as i32;
+            let r = ring2(k);
+            f[ex::KING_PROX] += (r & pieces).count_ones() as i32;
+            f[ex::QUEEN_PROX] += (r & b.queen() & me).count_ones() as i32;
         }
         let back = if c == 0 { 0xff } else { 0xffu64 << (8 * (h - 1)) };
         f[ex::UNDEVELOPED] += ((b.knight() | b.bishop()) & me & back).count_ones() as i32;
@@ -440,6 +450,26 @@ pub fn sides(s: &State) -> Sides {
             sd.inactive += 1;
         }
     }
+    // Pieces on neighbouring timelines near each active royal.
+    for l in amin..=amax {
+        let (t, c) = s.get_timeline_end(l);
+        let b = s.board(l, t, c);
+        for col in 0..2usize {
+            let mine = if col == 0 { b.white() & !b.black() } else { b.black() & !b.white() };
+            for k in marked_pos(b.royal() & mine) {
+                let r = ring2(k);
+                for l2 in (l - 2).max(l_min)..=(l + 2).min(l_max) {
+                    if l2 == l {
+                        continue;
+                    }
+                    let (t2, c2) = s.get_timeline_end(l2);
+                    let b2 = s.board(l2, t2, c2);
+                    let enemy = if col == 0 { b2.black() & !b2.white() } else { b2.white() & !b2.black() };
+                    sd.extra[1 - col][ex::KING_PROX_5D] += (r & enemy & !b2.lpawn() & !b2.royal()).count_ones() as i32;
+                }
+            }
+        }
+    }
     let (l0_min, l0_max) = s.get_initial_lines_range();
     let white_created = l_max - l0_max;
     let black_created = l0_min - l_min;
@@ -499,6 +529,8 @@ pub fn features_from(sd: &Sides, s: &State, checks: bool) -> Features {
     f[fi::ISOLATED] = e(ex::ISOLATED);
     f[fi::KING_PROX] = e(ex::KING_PROX);
     f[fi::UNDEVELOPED] = e(ex::UNDEVELOPED);
+    f[fi::KING_PROX_5D] = e(ex::KING_PROX_5D);
+    f[fi::QUEEN_PROX] = e(ex::QUEEN_PROX);
     f
 }
 
