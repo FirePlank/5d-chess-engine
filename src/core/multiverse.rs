@@ -539,6 +539,55 @@ impl Multiverse {
         }
     }
 
+    /// Whether color `c` has a capture or promotion from the board (l, t), by attack masks and
+    /// superphysical targets (pseudo-legal: legality is not checked).
+    pub fn has_tactical_move(&self, l: i32, t: i32, c: bool, scratch: &mut MoveList) -> bool {
+        let b = self.board(l, t, c);
+        let own = b.hostile(!c);
+        let enemy = b.hostile(c);
+        let occ = b.occupied();
+        for sq in marked_pos(own) {
+            let z = pmask(sq);
+            let att = if b.lpawn() & z != 0 {
+                if c { black_pawn_attack(sq) } else { white_pawn_attack(sq) }
+            } else if b.lknight() & z != 0 {
+                knight_attack(sq)
+            } else if b.lking() & z != 0 {
+                king_attack(sq)
+            } else {
+                let mut a = 0;
+                if b.lrook() & z != 0 {
+                    a |= rook_attack(sq, occ);
+                }
+                if b.lbishop() & z != 0 {
+                    a |= bishop_attack(sq, occ);
+                }
+                a
+            };
+            if att & enemy != 0 {
+                return true;
+            }
+        }
+        let last = if c { 0 } else { self.size_y - 1 };
+        for sq in marked_pos(b.lpawn() & own) {
+            let ahead = if c { sq - 8 } else { sq + 8 };
+            if (sq >> 3) + if c { -1 } else { 1 } == last && ahead >= 0 && ahead < 64 && occ & pmask(ahead) == 0 {
+                return true;
+            }
+        }
+        for sq in marked_pos(own) {
+            let p = Vec4::from_xy(sq, Vec4::new(0, 0, t, l));
+            scratch.clear();
+            self.gen_superphysical_moves(p, c, scratch);
+            for &(q, bb) in scratch.iter() {
+                if bb & self.board(q.l(), q.t(), c).hostile(c) != 0 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Whether the piece on `p` has at least one destination.
     pub fn has_any_move(&self, p: Vec4, c: bool) -> bool {
         let piece = self.piece_with_flag(p, c);

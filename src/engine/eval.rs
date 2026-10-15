@@ -23,6 +23,8 @@ pub struct EvalParams {
     /// Weight (in 1/16) of inactive timelines relative to active ones.
     pub inactive_weight: i32,
     pub timeline_slot: i32,
+    /// Extra value per timeline slot at full queen/bishop material, fading as they come off.
+    pub timeline_slot_scaled: i32,
     pub tempo: i32,
     pub center_knight: i32,
     pub center_bishop: i32,
@@ -46,6 +48,7 @@ impl Default for EvalParams {
             common_king: 370,
             inactive_weight: 8,
             timeline_slot: 30,
+            timeline_slot_scaled: 0,
             tempo: 15,
             center_knight: 8,
             center_bishop: 5,
@@ -104,11 +107,18 @@ pub fn evaluate(s: &State, p: &EvalParams) -> i32 {
     let (amin, amax) = s.get_active_range();
     let (w, h) = s.get_board_size();
     let mut total = 0i32;
+    let (mut heavy, mut active_boards) = (0i32, 0i32);
     for l in l_min..=l_max {
         let (t, c) = s.get_timeline_end(l);
         let b = s.board(l, t, c);
         let sc = board_score(b, p, w, h);
-        total += if l >= amin && l <= amax { sc * 16 } else { sc * p.inactive_weight };
+        if l >= amin && l <= amax {
+            total += sc * 16;
+            heavy += (b.queen() | b.bishop() | b.princess()).count_ones() as i32;
+            active_boards += 1;
+        } else {
+            total += sc * p.inactive_weight;
+        }
     }
     total /= 16;
     let (l0_min, l0_max) = s.get_initial_lines_range();
@@ -116,7 +126,14 @@ pub fn evaluate(s: &State, p: &EvalParams) -> i32 {
     let black_created = l0_min - l_min;
     let avail_w = (1 + black_created - white_created).clamp(0, 4);
     let avail_b = (1 + white_created - black_created).clamp(0, 4);
-    total += p.timeline_slot * (avail_w - avail_b);
+    let slot = if p.timeline_slot_scaled != 0 {
+        // Six queens/bishops per board is the full complement.
+        let full = 6 * active_boards.max(1);
+        p.timeline_slot + p.timeline_slot_scaled * heavy.min(full) / full
+    } else {
+        p.timeline_slot
+    };
+    total += slot * (avail_w - avail_b);
     let stm = if s.get_present().1 { -total } else { total };
     stm + p.tempo
 }

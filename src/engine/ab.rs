@@ -7,6 +7,7 @@
 use super::eval::{evaluate, piece_value, EvalParams};
 use super::{Engine, Limits, OptionValue};
 use crate::core::action::{Action, FullMove, MoveSeq};
+use crate::core::board::Board;
 use crate::core::hypercuboid::{Entry, HcCursor, HcInfo, SearchMode};
 use crate::core::piece::*;
 use crate::core::state::{Mark, State};
@@ -48,6 +49,7 @@ pub struct AbParams {
     pub lmr_min_depth: i32,
     pub lmr_min_index: usize,
     pub tt_mb: usize,
+    pub q_fastpath: bool,
 }
 
 impl Default for AbParams {
@@ -62,6 +64,7 @@ impl Default for AbParams {
             lmr_min_depth: 3,
             lmr_min_index: 4,
             tt_mb: 64,
+            q_fastpath: false,
         }
     }
 }
@@ -104,11 +107,78 @@ fn mate_from_tt(score: i32, ply: usize) -> i32 {
     }
 }
 
-fn history_index(s: &State, m: &FullMove) -> usize {
-    let pc = to_white(piece_name(s.get_piece(m.from, s.get_present().1))) as usize;
+/// White-normalized piece on `sq` (same as `to_white(piece_name(b.get_piece(sq)))`), decoded
+/// straight from the bitboards.
+#[inline(always)]
+fn kind_at(b: &Board, sq: i32) -> Piece {
+    let z = 1u64 << sq;
+    if b.occupied() & z == 0 {
+        return NO_PIECE;
+    }
+    if b.lpawn() & z != 0 {
+        return if b.lrawn() & z != 0 { BRAWN_W } else { PAWN_W };
+    }
+    if b.lknight() & z != 0 {
+        return KNIGHT_W;
+    }
+    if b.lking() & z != 0 {
+        return if b.royal() & z != 0 { KING_W } else { COMMON_KING_W };
+    }
+    let (r, bi, d) = (b.lrook() & z != 0, b.lbishop() & z != 0, b.ldragon() & z != 0);
+    if r && d {
+        return if b.royal() & z != 0 { ROYAL_QUEEN_W } else { QUEEN_W };
+    }
+    if r && bi {
+        return PRINCESS_W;
+    }
+    if r {
+        return ROOK_W;
+    }
+    if bi {
+        return BISHOP_W;
+    }
+    if b.lunicorn() & z != 0 {
+        return UNICORN_W;
+    }
+    if d {
+        return DRAGON_W;
+    }
+    WALL_PIECE
+}
+
+/// (moving piece, captured piece), white-normalized; matches `moved_piece`/`captured_piece`.
+#[inline]
+fn mover_victim(s: &State, m: &FullMove) -> (Piece, Piece) {
+    let player = s.get_present().1;
+    let src = s.board(m.from.l(), m.from.t(), player);
+    let mover = kind_at(src, m.from.xy());
+    let victim = if m.from.tl() == m.to.tl() {
+        if mover == KING_W && (m.from.x() - m.to.x()).abs() > 1 {
+            NO_PIECE
+        } else {
+            let d = kind_at(src, m.to.xy());
+            if d == NO_PIECE && (mover == PAWN_W || mover == BRAWN_W) && m.from.x() != m.to.x() {
+                kind_at(src, ppos(m.to.x(), m.from.y()))
+            } else {
+                d
+            }
+        }
+    } else {
+        kind_at(s.board(m.to.l(), m.to.t(), player), m.to.xy())
+    };
+    (mover, victim)
+}
+
+#[inline]
+fn history_index_of(mover: Piece, m: &FullMove) -> usize {
+    let pc = mover as usize;
     let d = m.to - m.from;
     let k = (pc * 64 + m.to.xy() as usize) * 16 + (((d.t() + 2).clamp(0, 3)) * 4 + (d.l().signum() + 1)) as usize;
     k & 0xffff
+}
+
+fn history_index(s: &State, m: &FullMove) -> usize {
+    history_index_of(mover_victim(s, m).0, m)
 }
 
 impl AlphaBeta {
@@ -167,20 +237,18 @@ impl AlphaBeta {
 
     /// Ordering score of one HC coordinate.
     fn coord_score(&self, s: &State, info: &HcInfo, n: usize, i: Index) -> i32 {
-        let player = s.get_present().1;
         match info.entry(n, i) {
             Entry::Null => -5,
             Entry::Departing { .. } => 0,
             Entry::Physical { m, .. } | Entry::Arriving { m, .. } => {
-                let mover = s.get_piece(m.from, player);
-                let victim = m.captured_piece(s);
+                let (mover, victim) = mover_victim(s, m);
                 let mut sc = 0;
                 if victim != NO_PIECE {
                     sc += 10_000 + 10 * piece_value(victim, &self.eval) - piece_value(mover, &self.eval) / 10;
                 } else {
-                    sc += self.history[history_index(s, m)].clamp(-5000, 5000);
+                    sc += self.history[history_index_of(mover, m)].clamp(-5000, 5000);
                 }
-                let wm = to_white(piece_name(mover));
+                let wm = mover;
                 if (wm == PAWN_W || wm == BRAWN_W) && (m.to.y() == 0 || m.to.y() == s.get_board_size().1 - 1) {
                     sc += 9000;
                 }
@@ -221,13 +289,12 @@ impl AlphaBeta {
 
     fn action_score(&self, s: &State, act: &MoveSeq, ply: usize) -> i32 {
         let mut sc = 0;
-        let player = s.get_present().1;
         for m in act {
-            let victim = m.captured_piece(s);
+            let (mover, victim) = mover_victim(s, m);
             if victim != NO_PIECE {
-                sc += 10_000 + 10 * piece_value(victim, &self.eval) - piece_value(s.get_piece(m.from, player), &self.eval) / 10;
+                sc += 10_000 + 10 * piece_value(victim, &self.eval) - piece_value(mover, &self.eval) / 10;
             } else {
-                sc += self.history[history_index(s, m)].clamp(-5000, 5000) / 4;
+                sc += self.history[history_index_of(mover, m)].clamp(-5000, 5000) / 4;
             }
             if m.from.tl() != m.to.tl() && victim == NO_PIECE {
                 sc -= 300;
@@ -246,10 +313,9 @@ impl AlphaBeta {
     fn is_tactical(s: &State, act: &MoveSeq) -> bool {
         let h = s.get_board_size().1;
         act.iter().any(|m| {
-            m.captured_piece(s) != NO_PIECE || {
-                let pc = to_white(piece_name(s.get_piece(m.from, s.get_present().1)));
-                (pc == PAWN_W || pc == BRAWN_W) && (m.to.y() == 0 || m.to.y() == h - 1) && m.from.tl() == m.to.tl()
-            }
+            let (pc, victim) = mover_victim(s, m);
+            victim != NO_PIECE
+                || ((pc == PAWN_W || pc == BRAWN_W) && (m.to.y() == 0 || m.to.y() == h - 1) && m.from.tl() == m.to.tl())
         })
     }
 
@@ -296,6 +362,19 @@ impl AlphaBeta {
         c
     }
 
+    fn any_tactical(s: &State) -> bool {
+        let player = s.get_present().1;
+        let mut scratch = crate::core::multiverse::MoveList::new();
+        let (l_min, l_max) = s.get_lines_range();
+        for l in l_min..=l_max {
+            let (t, c) = s.get_timeline_end(l);
+            if c == player && s.multiverse().has_tactical_move(l, t, player, &mut scratch) {
+                return true;
+            }
+        }
+        false
+    }
+
     fn in_check(s: &State) -> bool {
         let _p = crate::misc::prof::scope(10);
         s.has_phantom_check()
@@ -321,6 +400,10 @@ impl AlphaBeta {
         }
         if qd <= 0 || ply >= MAX_PLY {
             return if in_check { stand } else { alpha };
+        }
+        // Nothing to capture or promote anywhere: skip building the action space.
+        if !in_check && self.params.q_fastpath && !Self::any_tactical(s) {
+            return stand;
         }
         let (info, ss) = HcInfo::build_hc(s);
         let order = self.ordering(s, &info);
@@ -573,6 +656,7 @@ impl Engine for AlphaBeta {
         match (key, v) {
             ("qdepth", Some(x)) => self.params.qdepth = x as i32,
             ("qcap", Some(x)) => self.params.qcap = x as usize,
+            ("q_fastpath", _) => self.params.q_fastpath = !matches!(value, OptionValue::Bool(false)),
             ("batch", Some(x)) => self.params.batch = (x as usize).max(1),
             ("pv_cap_mult", Some(x)) => self.params.pv_cap_mult = x as usize,
             ("Hash", Some(x)) => {
@@ -582,6 +666,7 @@ impl Engine for AlphaBeta {
             }
             ("inactive_weight", Some(x)) => self.eval.inactive_weight = x as i32,
             ("timeline_slot", Some(x)) => self.eval.timeline_slot = x as i32,
+            ("timeline_slot_scaled", Some(x)) => self.eval.timeline_slot_scaled = x as i32,
             ("tempo", Some(x)) => self.eval.tempo = x as i32,
             _ => return false,
         }
