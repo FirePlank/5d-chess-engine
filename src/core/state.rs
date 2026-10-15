@@ -180,6 +180,24 @@ impl State {
         self.m.append_board(l, b);
     }
 
+    /// A pass: every board the side to move must play on is carried forward unchanged (the
+    /// phantom turn behind check detection) and the turn is submitted. Not a legal action;
+    /// for null-move search. Undo with `unmake`.
+    pub fn make_null(&mut self) -> Mark {
+        let mark = self.mark();
+        let (amin, amax) = self.m.get_active_range();
+        let present = (self.present, self.player);
+        for l in amin..=amax {
+            let (t, c) = self.m.get_timeline_end(l);
+            if (t, c) == present {
+                let b = *self.m.board(l, t, c);
+                self.append(l, b);
+            }
+        }
+        self.submit::<true>();
+        mark
+    }
+
     pub fn new_line(&self) -> i32 {
         let (l_min, l_max) = self.m.get_lines_range();
         if !self.player { l_max + 1 } else { l_min - 1 }
