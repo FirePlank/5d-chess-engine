@@ -1,7 +1,6 @@
 pub mod ab;
 pub mod evalnet;
 pub mod hce;
-pub mod local;
 pub mod uci;
 
 #[derive(Clone, Debug, PartialEq)]

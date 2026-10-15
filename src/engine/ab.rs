@@ -17,7 +17,7 @@ use crate::core::multiverse::next_turn;
 use crate::core::piece::*;
 use crate::core::state::{Mark, State};
 use crate::misc::geometry::SearchSpace;
-use crate::misc::integer_set::Index;
+use crate::misc::integer_set::{Index, IntegerSet};
 use crate::misc::ordering::HcOrdering;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -64,8 +64,6 @@ struct TtEntry {
 
 pub struct AlphaBeta {
     hce: hce::Weights,
-    /// Exchange values for the per-board capture search at quiescent leaves.
-    local_vals: super::local::Values,
     tt: Vec<Option<TtEntry>>,
     history: Vec<i32>,
     killers: Vec<[Option<MoveSeq>; 2]>,
@@ -133,7 +131,7 @@ fn piece_value(pc: Piece) -> i32 {
 /// White-normalized piece on `sq` (same as `to_white(piece_name(b.get_piece(sq)))`), decoded
 /// straight from the bitboards.
 #[inline(always)]
-pub(crate) fn kind_at(b: &Board, sq: i32) -> Piece {
+fn kind_at(b: &Board, sq: i32) -> Piece {
     let z = 1u64 << sq;
     if b.occupied() & z == 0 {
         return NO_PIECE;
@@ -241,19 +239,24 @@ impl<'a> CheckDetector<'a> {
     }
 }
 
-/// Per-axis ordering of a node: axis orders (best first) and each coordinate's score
-/// (indexed by coordinate).
+/// Quiescence action source.
+enum QGen {
+    Evasions(HcCursor),
+    Tactical(BestFirstCursor),
+}
+
+/// Per-axis ordering of a node: axis orders (best first), each coordinate's score (indexed
+/// by coordinate) and the captures/promotions of each axis.
 struct NodeOrder {
     order: HcOrdering,
     scores: Vec<Vec<i32>>,
+    tactical: Vec<IntegerSet>,
 }
 
 impl AlphaBeta {
     pub fn new() -> Self {
-        let hce = hce::tuned_weights();
         AlphaBeta {
-            local_vals: super::local::values_from(&hce[hce::fi::MAT_A..hce::fi::MAT_A + 10]),
-            hce,
+            hce: hce::tuned_weights(),
             tt: tt_table(DEFAULT_HASH_MB),
             history: vec![0; 1 << 16],
             killers: vec![[None, None]; MAX_PLY + 1],
@@ -312,13 +315,14 @@ impl AlphaBeta {
         self.aborted
     }
 
-    /// Ordering score of one HC coordinate.
-    fn coord_score(&self, s: &State, info: &HcInfo, n: usize, i: Index, checks: &mut Option<CheckDetector>) -> i32 {
+    /// Ordering score of one HC coordinate, and whether it captures or promotes.
+    fn coord_score(&self, s: &State, info: &HcInfo, n: usize, i: Index, checks: &mut Option<CheckDetector>) -> (i32, bool) {
         match info.entry(n, i) {
-            Entry::Null => -5,
-            Entry::Departing { .. } => 0,
+            Entry::Null => (-5, false),
+            Entry::Departing { .. } => (0, false),
             Entry::Physical { m, .. } | Entry::Arriving { m, .. } => {
                 let (mover, victim) = mover_victim(s, m);
+                let mut tactical = victim != NO_PIECE;
                 let mut sc = 0;
                 if victim != NO_PIECE {
                     sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
@@ -327,6 +331,7 @@ impl AlphaBeta {
                 }
                 if (mover == PAWN_W || mover == BRAWN_W) && (m.to.y() == 0 || m.to.y() == s.get_board_size().1 - 1) {
                     sc += 9000;
+                    tactical = true;
                 }
                 if m.from.tl() != m.to.tl() && victim == NO_PIECE {
                     sc -= 300;
@@ -337,7 +342,7 @@ impl AlphaBeta {
                 if checks.as_mut().map(|c| c.gives_check(n, i)).unwrap_or(false) {
                     sc += CHECK_BONUS;
                 }
-                sc
+                (sc, tactical)
             }
         }
     }
@@ -348,18 +353,30 @@ impl AlphaBeta {
         let u = info.get_universe();
         let mut orders = Vec::with_capacity(u.dimension());
         let mut scores: Vec<Vec<i32>> = Vec::with_capacity(u.dimension());
+        let mut tactical: Vec<IntegerSet> = Vec::with_capacity(u.dimension());
         // Branch axes share entries; score them once.
-        let mut branch_cache: Option<(Vec<Index>, Vec<i32>)> = None;
+        let mut branch_cache: Option<(Vec<Index>, Vec<i32>, IntegerSet)> = None;
         let mut detector = if checks { Some(CheckDetector::new(info, s)) } else { None };
         for n in 0..u.dimension() {
             if n >= info.first_branch_axis() {
-                if let Some((o, sc)) = &branch_cache {
+                if let Some((o, sc, tac)) = &branch_cache {
                     orders.push(o.clone());
                     scores.push(sc.clone());
+                    tactical.push(tac.clone());
                     continue;
                 }
             }
-            let mut v: Vec<(i32, Index)> = u[n].iter().map(|i| (self.coord_score(s, info, n, i, &mut detector), i)).collect();
+            let mut tac = IntegerSet::new();
+            let mut v: Vec<(i32, Index)> = u[n]
+                .iter()
+                .map(|i| {
+                    let (score, t) = self.coord_score(s, info, n, i, &mut detector);
+                    if t {
+                        tac.insert(i);
+                    }
+                    (score, i)
+                })
+                .collect();
             let mut sc = vec![0i32; v.iter().map(|x| x.1 as usize + 1).max().unwrap_or(0)];
             for &(score, i) in &v {
                 sc[i as usize] = score;
@@ -367,17 +384,56 @@ impl AlphaBeta {
             v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
             let o: Vec<Index> = v.into_iter().map(|x| x.1).collect();
             if n >= info.first_branch_axis() {
-                branch_cache = Some((o.clone(), sc.clone()));
+                branch_cache = Some((o.clone(), sc.clone(), tac.clone()));
             }
             orders.push(o);
             scores.push(sc);
+            tactical.push(tac);
         }
-        NodeOrder { order: HcOrdering::Precomputed(orders), scores }
+        NodeOrder { order: HcOrdering::Precomputed(orders), scores, tactical }
     }
 
     /// Per-axis order of a node's coordinates (diagnostics).
     pub fn ordering(&self, s: &State, info: &HcInfo) -> HcOrdering {
         self.node_ordering(s, info, true).order
+    }
+
+    /// Quiescence search space: per axis the captures and promotions, departures (for
+    /// capturing travels), nulls, and the best quiet coordinate as filler.
+    fn q_space(info: &HcInfo, ss: SearchSpace, no: &NodeOrder) -> SearchSpace {
+        let u = info.get_universe();
+        let mut allowed: Vec<IntegerSet> = Vec::with_capacity(u.dimension());
+        for n in 0..u.dimension() {
+            if n > info.first_branch_axis() {
+                let first = allowed[info.first_branch_axis()].clone();
+                allowed.push(first);
+                continue;
+            }
+            let mut set = IntegerSet::new();
+            let mut filler = false;
+            no.order.for_each(n, &u[n], |i| match info.entry(n, i) {
+                Entry::Null | Entry::Departing { .. } => set.insert(i),
+                Entry::Physical { .. } | Entry::Arriving { .. } => {
+                    let t = no.tactical[n].contains(i);
+                    if t || !filler {
+                        filler |= !t;
+                        set.insert(i);
+                    }
+                }
+            });
+            allowed.push(set);
+        }
+        let mut out = SearchSpace::default();
+        'hc: for mut hc in ss.hcs {
+            for n in 0..hc.dimension() {
+                hc[n].and_assign(&allowed[n]);
+                if hc[n].is_empty() {
+                    continue 'hc;
+                }
+            }
+            out.hcs.push(hc);
+        }
+        out
     }
 
     /// Action generator for an interior node or the root.
@@ -485,6 +541,19 @@ impl AlphaBeta {
         c
     }
 
+    fn any_tactical(s: &State) -> bool {
+        let player = s.get_present().1;
+        let mut scratch = crate::core::multiverse::MoveList::new();
+        let (l_min, l_max) = s.get_lines_range();
+        for l in l_min..=l_max {
+            let (t, c) = s.get_timeline_end(l);
+            if c == player && s.multiverse().has_tactical_move(l, t, player, &mut scratch) {
+                return true;
+            }
+        }
+        false
+    }
+
     fn in_check(s: &State) -> bool {
         let _p = crate::misc::prof::scope(10);
         s.has_phantom_check()
@@ -511,33 +580,35 @@ impl AlphaBeta {
         if qd <= 0 || ply >= MAX_PLY {
             return if in_check { stand } else { alpha };
         }
-        if !in_check {
-            // Moves on different boards don't interact (barring jumps between boards), so
-            // the pending captures resolve board by board and their gains add up.
-            let stm = s.get_present().1;
-            let height = s.get_board_size().1;
-            let (l_min, l_max) = s.get_lines_range();
-            let mut gain = 0;
-            for l in l_min..=l_max {
-                let (t, c) = s.get_timeline_end(l);
-                if c == stm {
-                    gain += super::local::capture_gain(s.board(l, t, c), stm, height, &self.local_vals);
-                }
-            }
-            return stand + gain;
+        // Nothing to capture or promote anywhere: skip building the action space.
+        if !in_check && !Self::any_tactical(s) {
+            return stand;
         }
         let (info, ss) = HcInfo::build_hc(s);
-        // In check: search the evasions.
-        let mut agen = HcCursor::new(ss, self.node_ordering(s, &info, false).order);
-        let mut best = -INF;
+        let no = self.node_ordering(s, &info, false);
+        // Evasions come in plain cursor order; otherwise tactical actions best-first.
+        let mut agen = if in_check {
+            QGen::Evasions(HcCursor::new(ss, no.order))
+        } else {
+            let space = Self::q_space(&info, ss, &no);
+            QGen::Tactical(BestFirstCursor::new(space, no.order, no.scores))
+        };
+        let mut best = if in_check { -INF } else { stand };
         let mut any = false;
         let mut tried = 0;
         while tried < QCAP {
             if self.check_abort() {
                 return 0;
             }
-            let Some(act) = agen.next(&info, s) else { break };
+            let next = match &mut agen {
+                QGen::Evasions(c) => c.next(&info, s),
+                QGen::Tactical(c) => c.next(&info, s),
+            };
+            let Some(act) = next else { break };
             any = true;
+            if !in_check && !Self::is_tactical(s, &act) {
+                break;
+            }
             tried += 1;
             let mark = Self::make(s, &act);
             let v = -self.qsearch(s, ply + 1, -beta, -alpha, qd - 1);
