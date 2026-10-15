@@ -152,7 +152,8 @@ impl AlphaBeta {
         if self.aborted {
             return true;
         }
-        if self.nodes & 255 == 0 {
+        // Nodes cost tens of microseconds, so reading the clock every node is free.
+        {
             let stop = unsafe { &*self.stop_ptr };
             if stop.load(Ordering::Relaxed)
                 || self.deadline.map(|d| Instant::now() >= d).unwrap_or(false)
@@ -311,6 +312,9 @@ impl AlphaBeta {
         let mut tried = 0;
         let mut any = false;
         while tried < self.params.qcap {
+            if self.check_abort() {
+                return 0;
+            }
             let Some(act) = cursor.next(&info, s) else { break };
             any = true;
             if !in_check && !Self::is_tactical(s, &act) {
@@ -406,6 +410,9 @@ impl AlphaBeta {
         while searched < cap && !exhausted {
             let mut batch: Vec<(i32, MoveSeq)> = Vec::with_capacity(self.params.batch);
             while batch.len() < self.params.batch {
+                if self.check_abort() {
+                    return 0;
+                }
                 match cursor.next(&info, s) {
                     None => {
                         exhausted = true;
@@ -580,7 +587,13 @@ impl Engine for AlphaBeta {
         let order = self.ordering(root, &hc);
         let mut cursor = HcCursor::new(ss, order, SearchMode::Balanced);
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
+        // Enumerating every root action can take seconds with many timelines: spend at most
+        // a quarter of the budget on it (always keeping at least one action).
+        let gen_deadline = budget.map(|ms| start + Duration::from_millis(ms / 4));
         while roots.len() < self.params.root_cap {
+            if !roots.is_empty() && gen_deadline.map(|d| Instant::now() >= d).unwrap_or(false) {
+                break;
+            }
             match cursor.next(&hc, root) {
                 Some(a) => {
                     let sc = self.action_score(root, &a, 0);
