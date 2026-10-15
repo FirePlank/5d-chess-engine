@@ -34,7 +34,7 @@ prof = []
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-panic = "unwind"
+panic = "abort"
 debug = false
 
 # Fast to build, still optimized: `cargo test`, tools and experiments.
