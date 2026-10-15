@@ -179,6 +179,8 @@ fn main() {
         "mate2" => {
             // Exact (full-width) mate-in-1/2 check: every white first action that forces mate
             // next turn, with each black reply and the white action that mates it.
+            // `mate2 1` checks mate in 1 only.
+            let only1 = args.get(2).map(|s| s.as_str()) == Some("1");
             for line in stdin.lock().lines() {
                 let line = line.unwrap();
                 if !line.starts_with("G ") {
@@ -197,6 +199,9 @@ fn main() {
                     let Some(q) = apply_seq(&s, a) else { continue };
                     if is_mated(&q) {
                         writeln!(out, "MATE IN 1: {}", txt(&s, a)).unwrap();
+                        continue;
+                    }
+                    if only1 {
                         continue;
                     }
                     let (wq, ssq) = HcInfo::build_hc(&q);
