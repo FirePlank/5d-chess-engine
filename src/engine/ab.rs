@@ -152,7 +152,7 @@ impl Default for AbParams {
             merge_branches: false,
             check_ext: false,
             travel_checks: false,
-            check_order: 3,
+            check_order: 0,
             check_bonus: 30_000,
             check_order_depth: 64,
             best_first: false,
