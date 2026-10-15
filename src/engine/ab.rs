@@ -49,6 +49,10 @@ fn lmr(depth: i32, index: usize) -> i32 {
 }
 /// Ordering bonus of a checking semimove (above every capture).
 const CHECK_BONUS: i32 = 30_000;
+/// Ordering penalty per timeline an action creates: quiet travels come after quiet moves,
+/// but a travel that checks or wins a lot of material competes with them (Tchaikovsky,
+/// knight loops, defended travels).
+const BRANCH_PENALTY: i64 = 20_000;
 /// Reverse futility pruning: at non-PV nodes up to this depth, return the static eval when
 /// it beats beta by RFP_MARGIN per ply.
 const RFP_DEPTH: i32 = 2;
@@ -450,7 +454,7 @@ impl AlphaBeta {
     /// Action generator for an interior node or the root.
     fn action_gen(&self, s: &State, info: &HcInfo, ss: SearchSpace) -> BestFirstCursor {
         let no = self.node_ordering(s, info, true);
-        BestFirstCursor::new(ss, no.order, no.scores)
+        BestFirstCursor::new(ss, no.order, no.scores, BRANCH_PENALTY)
     }
 
     fn action_score(&self, s: &State, act: &MoveSeq, ply: usize) -> i32 {
