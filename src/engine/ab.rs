@@ -315,6 +315,20 @@ struct OrderScratch {
     sort: Vec<u64>,
     checks: CheckBuf,
     reach: Vec<(i32, SpReach)>,
+    /// History values of the branch coordinates, by coordinate, as they were when the
+    /// node was ordered (the branch axes may be scored later).
+    branch_history: Vec<i32>,
+}
+
+/// How `node_ordering` treats the branch axes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BranchOrder {
+    /// Score and order them now.
+    Now,
+    /// Only score the null coordinate and record the history values the rest need.
+    Defer,
+    /// Score and order them with the recorded history values.
+    Recorded,
 }
 
 /// Buffers of one search node, reused by later nodes at the same recursion depth.
@@ -400,7 +414,8 @@ impl AlphaBeta {
     }
 
     /// Ordering score of one HC coordinate.
-    fn coord_score(&self, s: &State, info: &HcInfo, n: usize, i: Index, checks: &mut Option<CheckDetector>) -> i32 {
+    /// Ordering score of one HC coordinate; `history` overrides the history table's value.
+    fn coord_score(&self, s: &State, info: &HcInfo, n: usize, i: Index, checks: &mut Option<CheckDetector>, history: Option<i32>) -> i32 {
         match info.entry(n, i) {
             Entry::Null => -5,
             Entry::Departing { .. } => 0,
@@ -412,7 +427,7 @@ impl AlphaBeta {
                 if victim != NO_PIECE {
                     sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
                 } else {
-                    sc += self.history[history_index_of(mover, m)].clamp(-5000, 5000);
+                    sc += history.unwrap_or_else(|| self.history[history_index_of(mover, m)]).clamp(-5000, 5000);
                 }
                 if (mover == PAWN_W || mover == BRAWN_W) && (m.to.y() == 0 || m.to.y() == s.get_board_size().1 - 1) {
                     sc += 9000;
@@ -444,6 +459,7 @@ impl AlphaBeta {
         orders: &mut AxisOrders,
         scores: &mut Vec<Vec<i32>>,
         axes: std::ops::Range<usize>,
+        branch: BranchOrder,
     ) {
         let _p = crate::misc::prof::scope(6);
         let u = info.get_universe();
@@ -462,12 +478,27 @@ impl AlphaBeta {
         for n in axes.start..axes.end.min(dim) {
             let sc = &mut scores[n];
             sc.clear();
+            if n == fba && branch == BranchOrder::Defer {
+                // Only the null coordinate is scored (all a branch axis restricted to it
+                // needs); the history values the others will need are recorded as of now.
+                let hist = &mut scratch.branch_history;
+                hist.clear();
+                hist.resize(u[n].max().map(|i| i as usize + 1).unwrap_or(0), 0);
+                for i in u[n].iter() {
+                    if let Entry::Arriving { m, mover, .. } = info.entry(n, i) {
+                        hist[i as usize] = self.history[history_index_of(*mover, m)];
+                    }
+                }
+                sc.push(self.coord_score(s, info, n, 0, &mut detector, None));
+                continue;
+            }
             sc.resize(u[n].max().map(|i| i as usize + 1).unwrap_or(0), 0);
             // Sort keys: score descending, then coordinate ascending.
             let v = &mut scratch.sort;
             v.clear();
             for i in u[n].iter() {
-                let score = self.coord_score(s, info, n, i, &mut detector);
+                let recorded = if n == fba && branch == BranchOrder::Recorded { Some(scratch.branch_history[i as usize]) } else { None };
+                let score = self.coord_score(s, info, n, i, &mut detector, recorded);
                 sc[i as usize] = score;
                 v.push(((!((score as u32) ^ 0x8000_0000) as u64) << 32) | i as u64);
             }
@@ -484,7 +515,7 @@ impl AlphaBeta {
     /// Per-axis order of a node's coordinates (diagnostics).
     pub fn ordering(&self, s: &State, info: &HcInfo) -> HcOrdering {
         let mut orders = AxisOrders::default();
-        self.node_ordering(s, info, true, &mut OrderScratch::default(), &mut orders, &mut Vec::new(), 0..usize::MAX);
+        self.node_ordering(s, info, true, &mut OrderScratch::default(), &mut orders, &mut Vec::new(), 0..usize::MAX, BranchOrder::Now);
         HcOrdering::Precomputed(orders)
     }
 
@@ -522,10 +553,20 @@ impl AlphaBeta {
     }
 
     /// Order the node's coordinates into `cursor` and start it on `ss`.
-    fn start_actions(&self, s: &State, info: &HcInfo, cursor: &mut BestFirstCursor, scratch: &mut OrderScratch, ss: SearchSpace) {
+    /// Order the node's coordinates into `cursor` and start it on `ss`; with `defer`, the
+    /// branch axes are ordered once the cursor needs them (`next_with` and `branch_order`).
+    fn start_actions(&self, s: &State, info: &HcInfo, cursor: &mut BestFirstCursor, scratch: &mut OrderScratch, ss: SearchSpace, defer: bool) {
         let (orders, scores) = cursor.ordering_mut();
-        self.node_ordering(s, info, true, scratch, orders, scores, 0..usize::MAX);
+        let branch = if defer { BranchOrder::Defer } else { BranchOrder::Now };
+        self.node_ordering(s, info, true, scratch, orders, scores, 0..usize::MAX, branch);
+        cursor.set_branch_pending(defer && info.first_branch_axis() < info.dimension());
         cursor.restart(info, ss);
+    }
+
+    /// The deferred branch-axis ordering of `start_actions`.
+    fn branch_order(&self, s: &State, info: &HcInfo, scratch: &mut OrderScratch, orders: &mut AxisOrders, scores: &mut Vec<Vec<i32>>) {
+        let fba = info.first_branch_axis();
+        self.node_ordering(s, info, true, scratch, orders, scores, fba..fba + 1, BranchOrder::Recorded);
     }
 
     fn action_score(&self, s: &State, act: &MoveSeq, ply: usize) -> i32 {
@@ -555,7 +596,7 @@ impl AlphaBeta {
     pub fn node_order(&self, s: &State, cap: usize) -> Vec<MoveSeq> {
         let (info, ss) = HcInfo::build_hc(s);
         let mut agen = BestFirstCursor::default();
-        self.start_actions(s, &info, &mut agen, &mut OrderScratch::default(), ss);
+        self.start_actions(s, &info, &mut agen, &mut OrderScratch::default(), ss, false);
         let mut out = Vec::new();
         let mut exhausted = false;
         while out.len() < cap && !exhausted {
@@ -698,7 +739,7 @@ impl AlphaBeta {
             evasions.ss = info.rebuild(s);
             // The branch axes are only ordered once some hypercuboid needs their order.
             let fba = info.first_branch_axis();
-            self.node_ordering(s, info, false, order, evasions.order.axes_mut(), evasion_scores, 0..fba);
+            self.node_ordering(s, info, false, order, evasions.order.axes_mut(), evasion_scores, 0..fba, BranchOrder::Now);
             evasions.branch_pending = fba < info.dimension();
         }
         let mut best = -INF;
@@ -711,7 +752,8 @@ impl AlphaBeta {
                 }
                 let NodeBufs { info, evasions, order, evasion_scores, .. } = &mut *nb;
                 let fba = info.first_branch_axis();
-                let next = evasions.next_with(info, s, &mut |o| self.node_ordering(s, info, false, order, o, evasion_scores, fba..fba + 1));
+                // (Quiescence leaves the history alone, so ordering later gives the same order.)
+                let next = evasions.next_with(info, s, &mut |o| self.node_ordering(s, info, false, order, o, evasion_scores, fba..fba + 1, BranchOrder::Now));
                 let Some(act) = next else { break };
                 any = true;
                 tried += 1;
@@ -858,7 +900,7 @@ impl AlphaBeta {
         let mut full = Some(ss);
         {
             let NodeBufs { info, cursor, order, .. } = &mut *nb;
-            self.start_actions(s, info, cursor, order, first);
+            self.start_actions(s, info, cursor, order, first, true);
         }
         let mut generated = 0usize;
         let mut exhausted = false;
@@ -869,7 +911,11 @@ impl AlphaBeta {
                     if self.check_abort() {
                         break 'search Some(0);
                     }
-                    match nb.cursor.next(&nb.info, s) {
+                    let next = {
+                        let NodeBufs { info, cursor, order, .. } = &mut *nb;
+                        cursor.next_with(info, s, &mut |o, sc| self.branch_order(s, info, order, o, sc))
+                    };
+                    match next {
                         None => {
                             // Every legal action may need a move on an optional board. (The
                             // ordering is unchanged: nothing was searched since it was made.)
@@ -1047,7 +1093,7 @@ impl AlphaBeta {
         // Root actions (all of them, up to the root cap), ordered heuristically.
         let (hc, ss) = HcInfo::build_hc(root);
         let mut agen = BestFirstCursor::default();
-        self.start_actions(root, &hc, &mut agen, &mut OrderScratch::default(), Self::without_future(root, &hc, &ss));
+        self.start_actions(root, &hc, &mut agen, &mut OrderScratch::default(), Self::without_future(root, &hc, &ss), false);
         let mut full = Some(ss);
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
         // Enumerating every root action can take seconds with many timelines: spend at most

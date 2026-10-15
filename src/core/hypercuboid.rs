@@ -1125,11 +1125,39 @@ struct BfHeap {
     /// The coordinates the orders list (the context's universe).
     universe: Hc,
     seq: u64,
+    /// The branch axes (from `first_branch`) are not ordered yet: only the null
+    /// coordinate's score is known.
+    branch_pending: bool,
+    first_branch: usize,
 }
 
+/// Fills the branch axes' order and scores of a cursor whose branch ordering is pending.
+pub type BranchFill<'a> = dyn FnMut(&mut AxisOrders, &mut Vec<Vec<i32>>) + 'a;
+
 impl BfHeap {
-    fn push(&mut self, hc: Hc, class: i32) {
+    /// Order the branch axes now when `hc` has a branch coordinate other than the null one.
+    fn need_branch(&mut self, hc: &Hc, several: bool, fill: &mut BranchFill) {
+        if self.branch_pending
+            && (self.first_branch..hc.dimension()).any(|n| if several { !hc[n].is_empty() && hc[n].single().is_none() } else { hc[n].has_other_than(0) })
+        {
+            fill(self.order.axes_mut(), &mut self.scores);
+            self.branch_pending = false;
+        }
+    }
+
+    /// One of the initial hypercuboids: each has a class of its own, so its bound never
+    /// decides an order and is not computed.
+    fn push_initial(&mut self, hc: Hc, class: i32) {
+        if (0..hc.dimension()).any(|n| hc[n].is_empty()) {
+            return;
+        }
+        self.seq += 1;
+        self.heap.push(BfItem { key: (-class, 0, self.seq), hc });
+    }
+
+    fn push(&mut self, hc: Hc, class: i32, fill: &mut BranchFill) {
         let _p = crate::misc::prof::scope(11);
+        self.need_branch(&hc, false, fill);
         let mut bound = 0i64;
         let shared = match &self.order {
             HcOrdering::Precomputed(o) => o.shared,
@@ -1139,6 +1167,9 @@ impl BfHeap {
             let sc = &self.scores[n.min(shared)];
             let set = &hc[n];
             let best = match &self.order {
+                HcOrdering::Precomputed(_) if set.single().is_some_and(|i| self.universe[n].contains(i)) => {
+                    set.single().map(|i| sc[i as usize])
+                }
                 // An order lists its axis' universe best first, so the first member of the
                 // set has the set's best score.
                 HcOrdering::Precomputed(o) if set.is_subset_of(&self.universe[n]) => {
@@ -1186,6 +1217,8 @@ impl Default for BestFirstCursor {
                 scores: Vec::new(),
                 universe: Hc::default(),
                 seq: 0,
+                branch_pending: false,
+                first_branch: 0,
             },
             sc: PointScratch::default(),
             checks: CheckBuf::default(),
@@ -1200,20 +1233,33 @@ impl BestFirstCursor {
         (self.heap.order.axes_mut(), &mut self.heap.scores)
     }
 
+    /// Whether the branch axes' order is still to come (`next_with` asks for it when a
+    /// hypercuboid first needs it); until then only their null coordinate is scored.
+    pub fn set_branch_pending(&mut self, pending: bool) {
+        self.heap.branch_pending = pending;
+    }
+
     /// Enumerate `ss` (of the context `info`) from the start under the current ordering.
     pub fn restart(&mut self, info: &HcInfo, ss: SearchSpace) {
         self.heap.heap.clear();
         self.heap.seq = 0;
         self.heap.universe.clone_from(info.get_universe());
+        self.heap.first_branch = info.first_branch_axis();
         let n = ss.hcs.len();
         for (k, hc) in ss.hcs.into_iter().enumerate() {
-            self.heap.push(hc, (n - 1 - k) as i32);
+            self.heap.push_initial(hc, (n - 1 - k) as i32);
         }
     }
 
     pub fn next(&mut self, info: &HcInfo, s: &State) -> Option<MoveSeq> {
+        self.next_with(info, s, &mut |_, _| {})
+    }
+
+    /// `next`, ordering pending branch axes with `fill` once needed.
+    pub fn next_with(&mut self, info: &HcInfo, s: &State, fill: &mut BranchFill) -> Option<MoveSeq> {
         while let Some(BfItem { key, mut hc }) = self.heap.heap.pop() {
             let class = -key.0;
+            self.heap.need_branch(&hc, true, fill);
             if !info.take_point(&mut hc, &self.heap.order, &mut self.sc) {
                 continue;
             }
@@ -1222,12 +1268,12 @@ impl BestFirstCursor {
             match info.find_problem(s, pt, &hc, &mut self.checks) {
                 None => {
                     let act = info.to_action(pt);
-                    hc.remove_point_with(pt, |h| heap.push(h, class));
+                    hc.remove_point_with(pt, |h| heap.push(h, class, fill));
                     return Some(act);
                 }
                 Some(problem) => {
                     let _p = crate::misc::prof::scope(5);
-                    hc.remove_slice_with(&problem, |h| heap.push(h, class));
+                    hc.remove_slice_with(&problem, |h| heap.push(h, class, fill));
                 }
             }
         }
