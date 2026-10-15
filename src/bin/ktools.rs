@@ -110,6 +110,58 @@ fn main() {
             }
             writeln!(out, "{:?}", hist).unwrap();
         }
+        "puzzles" => puzzles(
+            args.get(2).map(|s| s.as_str()).unwrap_or("data/puzzles.g"),
+            args.get(3).and_then(|s| s.parse().ok()).unwrap_or(15000),
+            &mut out,
+        ),
+        "mate2" => {
+            // Exact (full-width) mate-in-1/2 check: every white first action that forces mate
+            // next turn, with each black reply and the white action that mates it.
+            for line in stdin.lock().lines() {
+                let line = line.unwrap();
+                if !line.starts_with("G ") {
+                    continue;
+                }
+                let s = parse_g_line(&line).unwrap();
+                let txt = |st: &State, a: &MoveSeq| {
+                    let act = kairos::core::action::Action::from_moveseq(a, st);
+                    let mut os = st.clone();
+                    act.moves().iter().map(|em| { let t = em.lan(&os); if let Some(n) = os.normalize_promotion(*em) { os.apply_ext::<true>(n); } t }).collect::<Vec<_>>().join(" ")
+                };
+                let (w, ss) = HcInfo::build_hc(&s);
+                let firsts: Vec<MoveSeq> = w.search(&s, ss).collect();
+                writeln!(out, "{} white actions", firsts.len()).unwrap();
+                for a in &firsts {
+                    let Some(q) = apply_seq(&s, a) else { continue };
+                    if is_mated(&q) {
+                        writeln!(out, "MATE IN 1: {}", txt(&s, a)).unwrap();
+                        continue;
+                    }
+                    let (wq, ssq) = HcInfo::build_hc(&q);
+                    let replies: Vec<MoveSeq> = wq.search(&q, ssq).collect();
+                    if replies.is_empty() {
+                        continue; // stalemate
+                    }
+                    let mut mates = Vec::new();
+                    let mut ok = true;
+                    for r in &replies {
+                        let Some(q2) = apply_seq(&q, r) else { ok = false; break };
+                        let (w2, ss2) = HcInfo::build_hc(&q2);
+                        match w2.search(&q2, ss2).find(|c| apply_seq(&q2, c).map(|q3| is_mated(&q3)).unwrap_or(false)) {
+                            Some(c) => mates.push((txt(&q, r), txt(&q2, &c))),
+                            None => { ok = false; break; }
+                        }
+                    }
+                    if ok {
+                        writeln!(out, "MATE IN 2: {}  ({} black replies)", txt(&s, a), replies.len()).unwrap();
+                        for (r, c) in mates {
+                            writeln!(out, "    {:<28} -> {}", r, c).unwrap();
+                        }
+                    }
+                }
+            }
+        }
         "abbench" => abbench(
             args.get(2).map(|s| s.as_str()).unwrap_or("data/bench_ab.g"),
             args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20),
@@ -335,7 +387,8 @@ fn main() {
                  \x20 (positions as G lines on stdin)\n  \
                  bench [file]            perft oracle\n  \
                  abbench [file] [depth]  alpha-beta node oracle (AB_NODES caps nodes per position)\n  \
-                 blunders <games.jsonl> [n] | materank <games.jsonl> [n] | depthstat <games.jsonl> [ms] | rootgen [file]"
+                 puzzles [file] [ms]     time to find each mate in data/puzzles.g
+                   blunders <games.jsonl> [n] | materank <games.jsonl> [n] | depthstat <games.jsonl> [ms] | rootgen [file]"
             );
         }
     }
@@ -587,4 +640,49 @@ fn shuffled_order(w: &HcInfo, seed: u64) -> kairos::misc::ordering::HcOrdering {
         })
         .collect();
     kairos::misc::ordering::HcOrdering::Precomputed(orders)
+}
+
+/// Mate puzzles: "# mate <n> <name>" comment lines, each followed by a G line. Reports the
+/// time and depth at which the search first reports the mate, within `ms` per puzzle.
+fn puzzles(path: &str, ms: u64, out: &mut impl Write) {
+    use kairos::engine::ab::AlphaBeta;
+    use kairos::engine::Limits;
+    let text = std::fs::read_to_string(path).expect("puzzles");
+    let mut label = String::new();
+    let mut solved = 0;
+    let mut total = 0;
+    for line in text.lines() {
+        if let Some(l) = line.strip_prefix("# mate ") {
+            label = l.to_string();
+            continue;
+        }
+        if !line.starts_with("G ") {
+            continue;
+        }
+        total += 1;
+        let want: u32 = label.split_whitespace().next().and_then(|n| n.parse().ok()).unwrap_or(0);
+        let s = parse_g_line(line).unwrap();
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let mut e = AlphaBeta::new();
+        let t0 = Instant::now();
+        let mut found: Option<(f64, String)> = None;
+        let mut last = String::new();
+        e.find_best_move(&s, &Limits { movetime: Some(ms), ..Default::default() }, &stop, &mut |m| {
+            if found.is_none() && m.contains("score mate ") && !m.contains("score mate -") {
+                found = Some((t0.elapsed().as_secs_f64(), m.clone()));
+            }
+            last = m;
+        });
+        let depth = |m: &str| m.split_whitespace().nth(1).unwrap_or("?").to_string();
+        match found {
+            Some((t, m)) => {
+                solved += 1;
+                let n = m.split_whitespace().skip_while(|w| *w != "mate").nth(1).unwrap_or("?");
+                writeln!(out, "mate {:<3} {:<45} found mate {} at depth {} in {:.2}s", want, label, n, depth(&m), t).unwrap();
+            }
+            None => writeln!(out, "mate {:<3} {:<45} not found in {:.1}s (reached depth {})", want, label, ms as f64 / 1000.0, depth(&last)).unwrap(),
+        }
+        out.flush().unwrap();
+    }
+    writeln!(out, "solved {}/{}", solved, total).unwrap();
 }
