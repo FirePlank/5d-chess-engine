@@ -1,0 +1,12 @@
+{
+  "name": "timeline_scaled_300",
+  "old": "333c09f1441b4a12825afe4e6919ff5345a2f460",
+  "games": 16000,
+  "shards": 40,
+  "tc": "movetime 100",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "ab",
+  "old_args": "ab",
+  "base": "self"
+}
