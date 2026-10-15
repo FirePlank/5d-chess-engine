@@ -1,0 +1,12 @@
+{
+  "name": "rfp_d2",
+  "old": "a316707935711ae2c2efc963aebd51a51a06b880",
+  "games": 16000,
+  "shards": 40,
+  "tc": "movetime 100",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "ab --opt rfp_depth=2",
+  "old_args": "ab",
+  "base": "self"
+}
