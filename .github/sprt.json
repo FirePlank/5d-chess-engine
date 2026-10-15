@@ -1,0 +1,12 @@
+{
+  "name": "nmp",
+  "old": "a9b4e9d26b882350a394804cc3289a14fddc061f",
+  "games": 16000,
+  "shards": 40,
+  "tc": "movetime 100",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}
