@@ -3,9 +3,9 @@
 
 use super::action::{FullMove, MoveSeq};
 use super::bitboard::*;
-use super::board::Board;
-use super::check_position::CheckPosition;
-use super::multiverse::next_turn;
+use super::board::{Board, RoyalSafety};
+use super::check_position::{CheckBuf, CheckPosition};
+use super::multiverse::{next_turn, MoveList};
 use super::piece::*;
 use super::state::State;
 use super::vec4::Vec4;
@@ -13,7 +13,6 @@ use crate::misc::geometry::{Hc, Point, SearchSpace, Slice};
 use crate::misc::graph::Graph;
 use crate::misc::integer_set::{Index, IntegerSet};
 use crate::misc::ordering::HcOrdering;
-use std::collections::BTreeMap;
 
 const INVALID: Index = Index::MAX;
 
@@ -67,11 +66,17 @@ pub struct MoveBoards<'a> {
 }
 
 /// Hypercuboid search context. Independent of the state it was built from (which callers
-/// pass back in where needed), so a search can run while the state is made/unmade.
+/// pass back in where needed), so a search can run while the state is made/unmade. Every
+/// buffer is kept when it is rebuilt for another state (`rebuild`).
+#[derive(Default)]
 pub struct HcInfo {
     player: bool,
-    line_axes: BTreeMap<i32, usize>,
-    /// Entries of the existing playable timelines' axes.
+    /// (line, axis) of every axis, ascending by line.
+    line_axes: Vec<(i32, usize)>,
+    /// Axis of line `axis_lo + k` at `axis_of[k]` (`usize::MAX`: none).
+    axis_lo: i32,
+    axis_of: Vec<usize>,
+    /// Entries of the existing playable timelines' axes (the first `new_axis` are in use).
     axis_coords: Vec<Vec<Entry>>,
     /// Entries shared by every prospective new-timeline axis.
     branch_entries: Vec<Entry>,
@@ -80,6 +85,20 @@ pub struct HcInfo {
     new_axis: usize,
     /// Coordinate groups per axis (index `new_axis` is shared by all branch axes).
     groups: Vec<AxisGroups>,
+    scratch: BuildScratch,
+}
+
+#[derive(Default)]
+struct BuildScratch {
+    playable: Vec<i32>,
+    stays: Vec<Vec<FullMove>>,
+    departures: Vec<Vec<Vec4>>,
+    /// (destination line, move) of every jump, stably sorted by line.
+    arrivals: Vec<(i32, FullMove)>,
+    ml: MoveList,
+    /// Departure coordinate of each source square, per axis.
+    jump_tab: Vec<[Index; 64]>,
+    safety: Vec<(i32, i32, RoyalSafety)>,
 }
 
 #[derive(Default)]
@@ -92,25 +111,27 @@ struct AxisGroups {
 }
 
 impl AxisGroups {
-    fn build<'a>(entries: impl Iterator<Item = (Index, &'a Entry)>) -> Self {
-        let mut g = AxisGroups::default();
-        for (i, e) in entries {
+    fn rebuild(&mut self, entries: &[Entry]) {
+        self.nonjump = IntegerSet::new();
+        self.by_dep.clear();
+        self.by_from.clear();
+        for (i, e) in entries.iter().enumerate() {
+            let i = i as Index;
             match e {
-                Entry::Physical { .. } | Entry::Null => g.nonjump.insert(i),
+                Entry::Physical { .. } | Entry::Null => self.nonjump.insert(i),
                 Entry::Arriving { idx, fa, .. } if *idx != INVALID => {
-                    match g.by_dep.iter_mut().find(|d| d.0 == *fa && d.1 == *idx) {
+                    match self.by_dep.iter_mut().find(|d| d.0 == *fa && d.1 == *idx) {
                         Some(d) => d.2.insert(i),
-                        None => g.by_dep.push((*fa, *idx, IntegerSet::singleton(i))),
+                        None => self.by_dep.push((*fa, *idx, IntegerSet::singleton(i))),
                     }
-                    match g.by_from.iter_mut().find(|d| d.0 == *fa) {
+                    match self.by_from.iter_mut().find(|d| d.0 == *fa) {
                         Some(d) => d.1.insert(i),
-                        None => g.by_from.push((*fa, IntegerSet::singleton(i))),
+                        None => self.by_from.push((*fa, IntegerSet::singleton(i))),
                     }
                 }
                 _ => {}
             }
         }
-        g
     }
 }
 
@@ -160,8 +181,12 @@ impl HcInfo {
     pub fn first_branch_axis(&self) -> usize {
         self.new_axis
     }
+    #[inline(always)]
     pub fn line_to_axis(&self, l: i32) -> Option<usize> {
-        self.line_axes.get(&l).copied()
+        match self.axis_of.get(l.wrapping_sub(self.axis_lo) as u32 as usize) {
+            Some(&a) if a != usize::MAX => Some(a),
+            _ => None,
+        }
     }
     #[inline(always)]
     pub fn entry(&self, n: usize, i: Index) -> &Entry {
@@ -186,7 +211,7 @@ impl HcInfo {
         match self.entry(axis, coord) {
             Entry::Physical { m, b } => Some(MoveBoards { mv: *m, result: b, departure: None }),
             Entry::Arriving { m, b, idx, .. } => {
-                let src = self.line_axes[&m.from.l()];
+                let src = self.line_to_axis(m.from.l()).expect("departure axis");
                 let dep = match self.entry(src, *idx) {
                     Entry::Departing { b, .. } => b,
                     _ => panic!("arrival without departure"),
@@ -198,61 +223,91 @@ impl HcInfo {
     }
 
     pub fn build_hc(s: &State) -> (HcInfo, SearchSpace) {
+        let mut info = HcInfo::default();
+        let ss = info.rebuild(s);
+        (info, ss)
+    }
+
+    /// Build the search context of `s` in place (reusing this one's buffers); returns the
+    /// initial search space.
+    pub fn rebuild(&mut self, s: &State) -> SearchSpace {
         let _p = crate::misc::prof::scope(0);
         let st_scope = crate::misc::prof::scope(15);
-        let ts = s.get_timeline_status();
-        let playable = ts.playable();
-        let (_present_t, player) = s.get_present();
-        let mut line_axes: BTreeMap<i32, usize> = BTreeMap::new();
+        let HcInfo { player: info_player, line_axes, axis_lo, axis_of, axis_coords, branch_entries, dim, universe, new_axis, groups, scratch } =
+            self;
+        let BuildScratch { playable, stays, departures, arrivals, ml, jump_tab, safety } = scratch;
+        let present = s.get_present();
+        let player = present.1;
         let (lines_lo, lines_hi) = s.get_lines_range();
-        // Axis of each existing timeline (playable ones), indexed by l - lines_lo.
-        let mut axis_of = vec![usize::MAX; (lines_hi - lines_lo + 1) as usize];
-        for (axis, &l) in playable.iter().enumerate() {
-            line_axes.insert(l, axis);
-            axis_of[(l - lines_lo) as usize] = axis;
+        let (amin, amax) = s.get_active_range();
+        // Playable timelines: the mandatory ones, then the optional ones.
+        playable.clear();
+        for l in lines_lo..=lines_hi {
+            if amin <= l && l <= amax && s.get_timeline_end(l) == present {
+                playable.push(l);
+            }
         }
-        let axis_of_line = |l: i32| axis_of[(l - lines_lo) as usize];
-        let mut stays: Vec<Vec<FullMove>> = vec![Vec::new(); playable.len()];
-        let mut departures: Vec<Vec<Vec4>> = vec![Vec::new(); playable.len()];
-        let mut arrivals: Vec<(i32, Vec<FullMove>)> = Vec::new();
+        for l in lines_lo..=lines_hi {
+            let tc = s.get_timeline_end(l);
+            if !(amin <= l && l <= amax && tc == present) && tc.1 == player {
+                playable.push(l);
+            }
+        }
+        let np = playable.len();
+        // Axis of each line (existing playable timelines and the new ones branches create).
+        *axis_lo = lines_lo - np as i32;
+        axis_of.clear();
+        axis_of.resize((lines_hi - lines_lo + 1) as usize + 2 * np, usize::MAX);
+        for (axis, &l) in playable.iter().enumerate() {
+            axis_of[(l - *axis_lo) as usize] = axis;
+        }
+        let axis_lo = *axis_lo;
+        let axis_of_line = |axis_of: &[usize], l: i32| axis_of[(l - axis_lo) as usize];
+        if stays.len() < np {
+            stays.resize_with(np, Vec::new);
+            departures.resize_with(np, Vec::new);
+        }
+        arrivals.clear();
         drop(st_scope);
-        let mut tos: Vec<Vec4> = Vec::new();
-        let mut scratch = super::multiverse::MoveList::new();
         let gen_scope = crate::misc::prof::scope(1);
-        for from in s.get_all_pieces(&playable) {
-            let source_axis = axis_of_line(from.l());
-            let mut has_depart = false;
-            tos.clear();
-            s.multiverse().gen_piece_move_with(from, player, &mut tos, &mut scratch);
-            for &to in &tos {
-                let m = FullMove::new(from, to);
-                if from.tl() != to.tl() {
-                    if !has_depart {
-                        departures[source_axis].push(from);
-                        has_depart = true;
+        for (axis, &l) in playable.iter().enumerate() {
+            stays[axis].clear();
+            departures[axis].clear();
+            let t = s.get_timeline_end(l).0;
+            let p0 = Vec4::new(0, 0, t, l);
+            let b = s.board(l, t, player);
+            for pos in marked_pos(b.friendly(player) & !b.wall()) {
+                let from = Vec4::from_xy(pos, p0);
+                let mut has_depart = false;
+                ml.clear();
+                s.multiverse().gen_moves(from, player, ml);
+                for &(r, bb) in ml.iter() {
+                    for sq in marked_pos(bb) {
+                        let to = Vec4::from_xy(sq, r);
+                        let m = FullMove::new(from, to);
+                        if from.tl() != to.tl() {
+                            if !has_depart {
+                                departures[axis].push(from);
+                                has_depart = true;
+                            }
+                            arrivals.push((to.l(), m));
+                        } else {
+                            stays[axis].push(m);
+                        }
                     }
-                    let line = to.l();
-                    match arrivals.iter_mut().find(|b| b.0 == line) {
-                        Some(b) => b.1.push(m),
-                        None => arrivals.push((line, vec![m])),
-                    }
-                } else {
-                    stays[source_axis].push(m);
                 }
             }
         }
         drop(gen_scope);
-        arrivals.sort_by_key(|b| b.0);
-        let max_branch = departures.iter().filter(|d| !d.is_empty()).count();
-        // Departure coordinate of each source square, per axis.
-        let mut jump_tab: Vec<[Index; 64]> = vec![[INVALID; 64]; playable.len()];
-        let find_jump = |jt: &Vec<[Index; 64]>, from: Vec4| {
-            let i = jt[axis_of_line(from.l())][from.xy() as usize];
+        arrivals.sort_by_key(|a| a.0);
+        let max_branch = departures[..np].iter().filter(|d| !d.is_empty()).count();
+        jump_tab.clear();
+        jump_tab.resize(np, [INVALID; 64]);
+        let find_jump = |jt: &[[Index; 64]], axis_of: &[usize], from: Vec4| {
+            let i = jt[axis_of_line(axis_of, from.l())][from.xy() as usize];
             if i == INVALID { None } else { Some(i) }
         };
         let (_, size_y) = s.get_board_size();
-        let mut axis_coords: Vec<Vec<Entry>> = Vec::with_capacity(playable.len() + max_branch);
-
         let promo_piece = |m: FullMove| -> Piece {
             s.normalize_promotion(super::action::ExtMove::new(m, NO_PIECE)).map(|e| e.promote_to).unwrap_or(NO_PIECE)
         };
@@ -260,20 +315,25 @@ impl HcInfo {
         // Royal safety per board: only royal moves, pinned pieces, en passant or a board
         // already in check can leave the mover's royal attacked, so most results skip the
         // full check test.
-        let mut safety_cache: Vec<(i32, i32, super::board::RoyalSafety)> = Vec::new();
-        let mut safety = |l: i32, t: i32| -> super::board::RoyalSafety {
-            if let Some(e) = safety_cache.iter().find(|e| e.0 == l && e.1 == t) {
+        safety.clear();
+        let mut safety = |l: i32, t: i32| -> RoyalSafety {
+            if let Some(e) = safety.iter().find(|e| e.0 == l && e.1 == t) {
                 return e.2;
             }
             let r = s.board(l, t, player).royal_safety(player);
-            safety_cache.push((l, t, r));
+            safety.push((l, t, r));
             r
         };
         let ent_scope = crate::misc::prof::scope(12);
-        for axis in 0..playable.len() {
+        if axis_coords.len() < np {
+            axis_coords.resize_with(np, Vec::new);
+        }
+        for axis in 0..np {
             let l = playable[axis];
-            let arriving = arrivals.iter().find(|b| b.0 == l).map(|b| &b.1);
-            let mut locs: Vec<Entry> = Vec::with_capacity(1 + stays[axis].len() + departures[axis].len());
+            let lo = arrivals.partition_point(|a| a.0 < l);
+            let hi = arrivals.partition_point(|a| a.0 <= l);
+            let locs = &mut axis_coords[axis];
+            locs.clear();
             locs.push(Entry::Null);
             let board_t = s.get_timeline_end(l).0;
             let rs = safety(l, board_t);
@@ -318,40 +378,10 @@ impl HcInfo {
                     jump_tab[axis][p.xy() as usize] = idx;
                 }
             }
-            if let Some(arr) = arriving {
-                for &m in arr {
-                    let (last_t, last_c) = s.get_timeline_end(m.to.l());
-                    if m.to.t() == last_t && player == last_c {
-                        let (p, q) = (m.from, m.to);
-                        let src = s.board(p.l(), p.t(), player);
-                        let mut nb = *s.board(q.l(), q.t(), player);
-                        let zp = pmask(p.xy());
-                        let royal = src.royal() & zp != 0;
-                        if src.lrawn() & zp != 0 && (q.y() == 0 || q.y() == size_y - 1) && promo_piece(m) != NO_PIECE {
-                            let promotion = promo_piece(m);
-                            nb.set_piece(q.xy(), if player { to_black(promotion) } else { promotion });
-                        } else {
-                            nb.place_from(q.xy(), src, p.xy());
-                        }
-                        let needs_test = royal || safety(q.l(), q.t()).in_check;
-                        if !needs_test || !has_physical_check(&nb, player) {
-                            let fa = axis_of_line(m.from.l()) as u32;
-                            locs.push(Entry::Arriving { m, b: nb, idx: INVALID, fa });
-                        }
-                    }
-                }
-            }
-            axis_coords.push(locs);
-        }
-
-        drop(ent_scope);
-        let br_scope = crate::misc::prof::scope(13);
-        let new_axis = axis_coords.len();
-        let mut locs: Vec<Entry> = vec![Entry::Null];
-        for (_, bucket) in &arrivals {
-            for &m in bucket {
-                let (p, q) = (m.from, m.to);
-                if let Some(dep) = find_jump(&jump_tab, m.from) {
+            for &(_, m) in &arrivals[lo..hi] {
+                let (last_t, last_c) = s.get_timeline_end(m.to.l());
+                if m.to.t() == last_t && player == last_c {
+                    let (p, q) = (m.from, m.to);
                     let src = s.board(p.l(), p.t(), player);
                     let mut nb = *s.board(q.l(), q.t(), player);
                     let zp = pmask(p.xy());
@@ -364,9 +394,34 @@ impl HcInfo {
                     }
                     let needs_test = royal || safety(q.l(), q.t()).in_check;
                     if !needs_test || !has_physical_check(&nb, player) {
-                        let fa = axis_of_line(m.from.l()) as u32;
-                        locs.push(Entry::Arriving { m, b: nb, idx: dep, fa });
+                        let fa = axis_of_line(axis_of, m.from.l()) as u32;
+                        locs.push(Entry::Arriving { m, b: nb, idx: INVALID, fa });
                     }
+                }
+            }
+        }
+
+        drop(ent_scope);
+        let br_scope = crate::misc::prof::scope(13);
+        branch_entries.clear();
+        branch_entries.push(Entry::Null);
+        for &(_, m) in arrivals.iter() {
+            let (p, q) = (m.from, m.to);
+            if let Some(dep) = find_jump(jump_tab, axis_of, m.from) {
+                let src = s.board(p.l(), p.t(), player);
+                let mut nb = *s.board(q.l(), q.t(), player);
+                let zp = pmask(p.xy());
+                let royal = src.royal() & zp != 0;
+                if src.lrawn() & zp != 0 && (q.y() == 0 || q.y() == size_y - 1) && promo_piece(m) != NO_PIECE {
+                    let promotion = promo_piece(m);
+                    nb.set_piece(q.xy(), if player { to_black(promotion) } else { promotion });
+                } else {
+                    nb.place_from(q.xy(), src, p.xy());
+                }
+                let needs_test = royal || safety(q.l(), q.t()).in_check;
+                if !needs_test || !has_physical_check(&nb, player) {
+                    let fa = axis_of_line(axis_of, m.from.l()) as u32;
+                    branch_entries.push(Entry::Arriving { m, b: nb, idx: dep, fa });
                 }
             }
         }
@@ -374,22 +429,25 @@ impl HcInfo {
         let _fin = crate::misc::prof::scope(14);
         let new_l = s.new_line();
         let sign = signum(new_l);
-        for i in 0..max_branch {
-            line_axes.insert(new_l + sign * i as i32, new_axis + i);
+        line_axes.clear();
+        for (axis, &l) in playable.iter().enumerate() {
+            line_axes.push((l, axis));
         }
-        let dimension = new_axis + max_branch;
-        let branch_range = IntegerSet::range(locs.len() as Index);
-        let mut universe = Hc::new(
-            (0..dimension)
-                .map(|n| if n < new_axis { IntegerSet::range(axis_coords[n].len() as Index) } else { branch_range.clone() })
-                .collect(),
-        );
+        for i in 0..max_branch {
+            let l = new_l + sign * i as i32;
+            line_axes.push((l, np + i));
+            axis_of[(l - axis_lo) as usize] = np + i;
+        }
+        line_axes.sort_unstable_by_key(|e| e.0);
+        let dimension = np + max_branch;
+        let n_branch = branch_entries.len();
+        *universe = Hc::ranges(dimension, |n| if n < np { axis_coords[n].len() } else { n_branch });
         // Branch arrivals were only admitted with a live departure; existing-axis arrivals
         // lose their coordinate when their departure was filtered out.
-        for n in 0..new_axis {
+        for n in 0..np {
             for i in 0..axis_coords[n].len() {
                 if let Entry::Arriving { m, idx, .. } = &mut axis_coords[n][i] {
-                    match find_jump(&jump_tab, m.from) {
+                    match find_jump(jump_tab, axis_of, m.from) {
                         Some(d) => *idx = d,
                         None => {
                             universe[n].erase(i as Index);
@@ -411,37 +469,30 @@ impl HcInfo {
         }
         let mut hc_n_lines = universe.clone();
         let mut non_null = IntegerSet::new();
-        if new_axis < dimension {
-            for i in 1..locs.len() {
+        if np < dimension {
+            for i in 1..n_branch {
                 non_null.insert(i as Index);
             }
-            for n in new_axis..dimension {
+            for n in np..dimension {
                 hc_n_lines[n].assign_singleton(0);
             }
         }
         let mut ss = SearchSpace::from_vec(vec![hc_n_lines.clone()]);
-        for n in new_axis..dimension {
+        for n in np..dimension {
             hc_n_lines[n].assign(&non_null);
             ss.push_front(hc_n_lines.clone());
         }
-        let mut groups: Vec<AxisGroups> = axis_coords
-            .iter()
-            .map(|v| AxisGroups::build(v.iter().enumerate().map(|(i, e)| (i as Index, e))))
-            .collect();
-        groups.push(AxisGroups::build(locs.iter().enumerate().map(|(i, e)| (i as Index, e))));
-        (
-            HcInfo {
-                groups,
-                player,
-                line_axes,
-                axis_coords,
-                branch_entries: locs,
-                dim: dimension,
-                universe,
-                new_axis,
-            },
-            ss,
-        )
+        if groups.len() < np + 1 {
+            groups.resize_with(np + 1, AxisGroups::default);
+        }
+        for n in 0..np {
+            groups[n].rebuild(&axis_coords[n]);
+        }
+        groups[np].rebuild(branch_entries);
+        *info_player = player;
+        *dim = dimension;
+        *new_axis = np;
+        ss
     }
 
     /// Pick a point in `hc` whose departures and arrivals pair up (into `sc.point`). Prunes
@@ -539,7 +590,7 @@ impl HcInfo {
     }
 
 
-    pub fn find_problem(&self, s: &State, p: &Point, hc: &Hc) -> Option<Slice> {
+    pub fn find_problem(&self, s: &State, p: &Point, hc: &Hc, buf: &mut CheckBuf) -> Option<Slice> {
         let jp = crate::misc::prof::scope(3);
         let r = self.jump_order_consistent(s, p, hc).or_else(|| self.test_present(s, p, hc));
         drop(jp);
@@ -547,7 +598,7 @@ impl HcInfo {
             return r;
         }
         let _p = crate::misc::prof::scope(4);
-        self.find_checks(s, p, hc)
+        self.find_checks(s, p, hc, buf)
     }
 
     pub fn jump_order_consistent(&self, st: &State, p: &Point, hc: &Hc) -> Option<Slice> {
@@ -560,7 +611,7 @@ impl HcInfo {
                 _ => unreachable!(),
             };
             let (from, to) = (m_arr.from, m_arr.to);
-            if let Some(&m) = self.line_axes.get(&to.l()) {
+            if let Some(m) = self.line_to_axis(to.l()) {
                 let im = p[m];
                 if self.entry(m, im).is_null() && st.get_timeline_end(to.l()) == (to.t(), c) {
                     let mut s = IntegerSet::new();
@@ -635,8 +686,8 @@ impl HcInfo {
                 return new_ends[j as usize];
             }
             let v = st.multiverse().timeline_end_v(l);
-            match self.line_axes.get(&l) {
-                Some(&n) if !self.entry(n, p[n]).is_null() => v + 1,
+            match self.line_to_axis(l) {
+                Some(n) if !self.entry(n, p[n]).is_null() => v + 1,
                 _ => v,
             }
         };
@@ -654,9 +705,9 @@ impl HcInfo {
         // Every point below keeps the witness timeline unmoved and active and adds no active
         // timeline that ends (on the opponent's turn) before it.
         let mut problem = Slice::new();
-        let w_axis = self.line_axes[&w_line];
+        let w_axis = self.line_to_axis(w_line).expect("witness axis");
         problem.fix_axis(w_axis, IntegerSet::singleton(0));
-        for (&l, &n) in &self.line_axes {
+        for &(l, n) in &self.line_axes {
             if n >= self.new_axis || n == w_axis || l < amin || l > amax {
                 continue;
             }
@@ -686,15 +737,15 @@ impl HcInfo {
         Some(problem)
     }
 
-    pub fn find_checks(&self, st: &State, p: &Point, hc: &Hc) -> Option<Slice> {
+    pub fn find_checks(&self, st: &State, p: &Point, hc: &Hc, buf: &mut CheckBuf) -> Option<Slice> {
         let (_, c) = st.get_present();
         let (mut lo, mut hi) = st.get_lines_range();
-        if let (Some((&first, _)), Some((&last, _))) = (self.line_axes.first_key_value(), self.line_axes.last_key_value()) {
+        if let (Some(&(first, _)), Some(&(last, _))) = (self.line_axes.first(), self.line_axes.last()) {
             lo = lo.min(first);
             hi = hi.max(last);
         }
-        let mut newstate = CheckPosition::with_range(st, lo, hi);
-        for (&l, &axis) in &self.line_axes {
+        let mut newstate = CheckPosition::with_range_in(st, lo, hi, std::mem::take(buf));
+        for &(l, axis) in &self.line_axes {
             let loc = self.entry(axis, p[axis]);
             if loc.is_null() {
                 continue;
@@ -702,7 +753,10 @@ impl HcInfo {
             let (old_t, _) = loc.tl();
             newstate.add_board(l, next_turn((old_t, c)), loc.board());
         }
-        let check = newstate.first_check(!c, false)?;
+        let Some(check) = newstate.first_check(!c, false) else {
+            *buf = newstate.into_buf();
+            return None;
+        };
         let (path, sliding_type) = get_move_path(&newstate, check, !c);
         let is_next = |t1: i32, t2: i32| if c { t1 + 1 == t2 } else { t1 == t2 };
         let sliding_bb = |nb: &Board| -> Bitboard {
@@ -716,7 +770,7 @@ impl HcInfo {
             }
         };
         let mut problem = Slice::new();
-        if let Some(&n1) = self.line_axes.get(&check.from.l()) {
+        if let Some(n1) = self.line_to_axis(check.from.l()) {
             let mut not_taking = IntegerSet::new();
             for i in hc[n1].iter() {
                 let loc = self.entry(n1, i);
@@ -735,7 +789,7 @@ impl HcInfo {
             problem.fix_axis(n1, not_taking);
         }
         let l2 = check.to.l();
-        if let Some(&n2) = self.line_axes.get(&l2) {
+        if let Some(n2) = self.line_to_axis(l2) {
             let loc0 = self.entry(n2, p[n2]);
             if !(loc0.is_null() || !is_next(loc0.tl().0, check.to.t())) {
                 let mut expose = IntegerSet::new();
@@ -754,7 +808,7 @@ impl HcInfo {
             }
         }
         for &crossed in &path {
-            if let Some(&n) = self.line_axes.get(&crossed.l()) {
+            if let Some(n) = self.line_to_axis(crossed.l()) {
                 let loc0 = self.entry(n, p[n]);
                 if loc0.is_null() || !is_next(loc0.tl().0, crossed.t()) {
                     continue;
@@ -785,12 +839,13 @@ impl HcInfo {
             }
         }
         debug_assert!(problem.contains(p));
+        *buf = newstate.into_buf();
         Some(problem)
     }
 
     pub fn to_action(&self, p: &Point) -> MoveSeq {
         let mut mvs = Vec::new();
-        for (_, &i) in &self.line_axes {
+        for &(_, i) in &self.line_axes {
             match self.entry(i, p[i]) {
                 Entry::Physical { m, .. } | Entry::Arriving { m, .. } => mvs.push(*m),
                 _ => {}
@@ -834,11 +889,18 @@ pub struct HcCursor {
     pub ss: SearchSpace,
     pub order: HcOrdering,
     sc: PointScratch,
+    checks: CheckBuf,
+}
+
+impl Default for HcCursor {
+    fn default() -> Self {
+        HcCursor::new(SearchSpace::default(), HcOrdering::Natural)
+    }
 }
 
 impl HcCursor {
     pub fn new(ss: SearchSpace, order: HcOrdering) -> Self {
-        HcCursor { ss, order, sc: PointScratch::default() }
+        HcCursor { ss, order, sc: PointScratch::default(), checks: CheckBuf::default() }
     }
 
     pub fn next(&mut self, info: &HcInfo, s: &State) -> Option<MoveSeq> {
@@ -848,7 +910,7 @@ impl HcCursor {
                 continue;
             }
             let pt = &self.sc.point;
-            match info.find_problem(s, pt, &hc) {
+            match info.find_problem(s, pt, &hc, &mut self.checks) {
                 None => {
                     let act = info.to_action(pt);
                     hc.remove_point_with(pt, |h| self.ss.push_back(h));
@@ -875,6 +937,7 @@ pub struct BestFirstCursor {
     heap: BfHeap,
     order: HcOrdering,
     sc: PointScratch,
+    checks: CheckBuf,
 }
 
 struct BfHeap {
@@ -921,14 +984,39 @@ impl Ord for BfItem {
     }
 }
 
+impl Default for BestFirstCursor {
+    fn default() -> Self {
+        BestFirstCursor {
+            heap: BfHeap { heap: std::collections::BinaryHeap::new(), scores: Vec::new(), seq: 0 },
+            order: HcOrdering::Precomputed(Vec::new()),
+            sc: PointScratch::default(),
+            checks: CheckBuf::default(),
+        }
+    }
+}
+
 impl BestFirstCursor {
     pub fn new(ss: SearchSpace, order: HcOrdering, scores: Vec<Vec<i32>>) -> Self {
-        let mut heap = BfHeap { heap: std::collections::BinaryHeap::new(), scores, seq: 0 };
+        let mut c = BestFirstCursor { order, ..Default::default() };
+        c.heap.scores = scores;
+        c.restart(ss);
+        c
+    }
+
+    /// The per-axis orders and coordinate scores, to fill before `restart` (their storage
+    /// is kept between uses).
+    pub fn ordering_mut(&mut self) -> (&mut Vec<Vec<Index>>, &mut Vec<Vec<i32>>) {
+        (self.order.axes_mut(), &mut self.heap.scores)
+    }
+
+    /// Enumerate `ss` from the start under the current ordering.
+    pub fn restart(&mut self, ss: SearchSpace) {
+        self.heap.heap.clear();
+        self.heap.seq = 0;
         let n = ss.hcs.len();
         for (k, hc) in ss.hcs.into_iter().enumerate() {
-            heap.push(hc, (n - 1 - k) as i32);
+            self.heap.push(hc, (n - 1 - k) as i32);
         }
-        BestFirstCursor { heap, order, sc: PointScratch::default() }
     }
 
     pub fn next(&mut self, info: &HcInfo, s: &State) -> Option<MoveSeq> {
@@ -939,7 +1027,7 @@ impl BestFirstCursor {
             }
             let pt = &self.sc.point;
             let heap = &mut self.heap;
-            match info.find_problem(s, pt, &hc) {
+            match info.find_problem(s, pt, &hc, &mut self.checks) {
                 None => {
                     let act = info.to_action(pt);
                     hc.remove_point_with(pt, |h| heap.push(h, class));

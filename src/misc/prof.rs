@@ -30,10 +30,28 @@ pub fn scope(i: usize) -> Scope {
 #[inline(always)]
 pub fn scope(_: usize) {}
 
+/// Event counters (`count`), reported by index when non-zero.
+#[cfg(feature = "prof")]
+pub static EVENTS: [std::sync::atomic::AtomicU64; 32] = [const { std::sync::atomic::AtomicU64::new(0) }; 32];
+#[cfg(feature = "prof")]
+#[inline(always)]
+pub fn count(i: usize) {
+    EVENTS[i].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+#[cfg(not(feature = "prof"))]
+#[inline(always)]
+pub fn count(_: usize) {}
+
 pub fn report() -> String {
     #[cfg(feature = "prof")]
     {
         let mut s = String::new();
+        for (i, e) in EVENTS.iter().enumerate() {
+            let v = e.load(std::sync::atomic::Ordering::Relaxed);
+            if v > 0 {
+                s += &format!("  event {:<2} {:>12}\n", i, v);
+            }
+        }
         for (i, n) in NAMES.iter().enumerate() {
             let v = COUNTERS[i].load(std::sync::atomic::Ordering::Relaxed);
             let calls = CALLS[i].load(std::sync::atomic::Ordering::Relaxed);

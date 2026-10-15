@@ -11,6 +11,17 @@ pub enum HcOrdering {
 }
 
 impl HcOrdering {
+    /// The explicit per-axis orders (switching to an empty explicit ordering if natural).
+    pub fn axes_mut(&mut self) -> &mut Vec<Vec<Index>> {
+        if let HcOrdering::Natural = self {
+            *self = HcOrdering::Precomputed(Vec::new());
+        }
+        match self {
+            HcOrdering::Precomputed(o) => o,
+            HcOrdering::Natural => unreachable!(),
+        }
+    }
+
     #[inline]
     pub fn for_each(&self, n: usize, s: &Bits, mut f: impl FnMut(Index)) {
         match self {

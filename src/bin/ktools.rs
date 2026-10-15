@@ -371,7 +371,7 @@ fn main() {
                     }
                     let (kind, prob) = if let Some(p) = w.jump_order_consistent(&s, &pt, &hc) { ("jump_order", Some(p)) }
                         else if let Some(p) = w.test_present(&s, &pt, &hc) { ("test_present", Some(p)) }
-                        else if let Some(p) = w.find_checks(&s, &pt, &hc) { ("find_checks", Some(p)) } else { ("ok", None) };
+                        else if let Some(p) = w.find_checks(&s, &pt, &hc, &mut Default::default()) { ("find_checks", Some(p)) } else { ("ok", None) };
                     match prob {
                         None => { yielded.insert(pt.clone()); ss.concat(hc.remove_point(&pt)); }
                         Some(problem) => {

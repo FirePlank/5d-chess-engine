@@ -3,7 +3,7 @@
 use super::action::{special, Action, ExtMove, FullMove};
 use super::bitboard::*;
 use super::board::Board;
-use super::check_position::CheckPosition;
+use super::check_position::{CheckBuf, CheckPosition};
 use super::hypercuboid::HcInfo;
 use super::multiverse::*;
 use super::piece::*;
@@ -379,7 +379,15 @@ impl State {
     }
 
     pub fn has_phantom_check(&self) -> bool {
-        CheckPosition::for_phantom(self).first_check(!self.player, true).is_some()
+        thread_local! {
+            static BUF: std::cell::Cell<CheckBuf> = std::cell::Cell::new(CheckBuf::default());
+        }
+        BUF.with(|b| {
+            let cp = CheckPosition::for_phantom_in(self, b.take());
+            let r = cp.first_check(!self.player, true).is_some();
+            b.set(cp.into_buf());
+            r
+        })
     }
 
     pub fn phantom(&self) -> State {

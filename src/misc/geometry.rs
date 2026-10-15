@@ -65,6 +65,20 @@ impl Hc {
         }
         Hc { k, w }
     }
+    /// Axis `n` holding {0, ..., len(n) - 1}.
+    pub fn ranges(dim: usize, len: impl Fn(usize) -> usize) -> Self {
+        let k = (0..dim).map(|n| len(n).div_ceil(64)).max().unwrap_or(0).max(1);
+        let mut w = vec![0u64; k * dim];
+        for n in 0..dim {
+            let l = len(n);
+            let ax = &mut w[n * k..(n + 1) * k];
+            ax[..l / 64].fill(u64::MAX);
+            if l % 64 != 0 {
+                ax[l / 64] = (1u64 << (l % 64)) - 1;
+            }
+        }
+        Hc { k, w }
+    }
     #[inline(always)]
     pub fn dimension(&self) -> usize {
         self.w.len() / self.k.max(1)

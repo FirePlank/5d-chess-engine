@@ -1,6 +1,9 @@
 //! Borrowed view for finding royal captures over a state plus overlaid boards.
 //! Scan order is behavior: the first check found decides the problem slice the
 //! hypercuboid search removes.
+//!
+//! Turns are handled as half-turn indices `v = 2t + c`; every line keeps a direct pointer
+//! to its stored boards, so a board lookup is a few integer compares.
 
 use super::action::FullMove;
 use super::bitboard::*;
@@ -9,23 +12,43 @@ use super::multiverse::*;
 use super::piece::Piece;
 use super::state::State;
 use super::vec4::Vec4;
+use std::marker::PhantomData;
 
-#[derive(Clone, Copy, Default)]
-struct LineView<'a> {
-    exists: bool,
-    in_base: bool,
-    start: Turn,
-    end: Turn,
-    added_start: Turn,
-    added: Option<&'a Board>,
+#[derive(Clone, Copy)]
+struct LineView {
+    /// First and last half-turn of the line (`start > end` when it doesn't exist).
+    start: i32,
+    end: i32,
+    /// Half-turn from which `added` stands in (`i32::MAX` without an overlay).
+    added_start: i32,
+    added: *const Board,
+    /// The state's boards of this line: `base_len` boards from half-turn `base_start`.
+    base: *const Board,
+    base_start: i32,
+    base_len: i32,
 }
 
+const NO_LINE: LineView = LineView {
+    start: i32::MAX,
+    end: i32::MIN,
+    added_start: i32::MAX,
+    added: std::ptr::null(),
+    base: std::ptr::null(),
+    base_start: 0,
+    base_len: 0,
+};
+
+/// Reusable line storage for `CheckPosition`.
+#[derive(Default)]
+pub struct CheckBuf(Vec<LineView>);
+
 pub struct CheckPosition<'a> {
-    base: &'a State,
     first_line: i32,
-    lines: Vec<LineView<'a>>,
+    lines: Vec<LineView>,
     /// Only pieces on these squares of a source board are scanned.
     source_mask: Bitboard,
+    /// The state and every overlaid board outlive the view.
+    _borrow: PhantomData<&'a Board>,
 }
 
 #[derive(Clone, Copy)]
@@ -43,6 +66,11 @@ pub enum CheckKind {
     Historical,
 }
 
+#[inline(always)]
+fn v_of(t: Turn) -> i32 {
+    2 * t.0 + t.1 as i32
+}
+
 impl<'a> CheckPosition<'a> {
     pub fn new(s: &'a State) -> Self {
         let (a, b) = s.get_lines_range();
@@ -50,21 +78,36 @@ impl<'a> CheckPosition<'a> {
     }
 
     pub fn with_range(s: &'a State, l_min: i32, l_max: i32) -> Self {
-        let mut lines = vec![LineView::default(); (l_max - l_min + 1) as usize];
-        let (first, last) = s.get_lines_range();
-        debug_assert!(l_min <= first && last <= l_max);
-        for l in first..=last {
-            let line = &mut lines[(l - l_min) as usize];
-            line.exists = true;
-            line.in_base = true;
-            line.start = s.get_timeline_start(l);
-            line.end = s.get_timeline_end(l);
-        }
-        CheckPosition { base: s, first_line: l_min, lines, source_mask: !0 }
+        Self::with_range_in(s, l_min, l_max, CheckBuf::default())
     }
 
-    fn for_present(s: &'a State, present: Turn) -> Self {
-        let mut r = Self::new(s);
+    /// `with_range` reusing `buf`'s storage (get it back with `into_buf`).
+    pub fn with_range_in(s: &'a State, l_min: i32, l_max: i32, buf: CheckBuf) -> Self {
+        let mut lines = buf.0;
+        lines.clear();
+        lines.resize((l_max - l_min + 1) as usize, NO_LINE);
+        let (first, last) = s.get_lines_range();
+        debug_assert!(l_min <= first && last <= l_max);
+        let m = s.multiverse();
+        for l in first..=last {
+            let tl = m.timeline(l);
+            let line = &mut lines[(l - l_min) as usize];
+            line.start = tl.start;
+            line.end = tl.end();
+            line.base = tl.boards.as_ptr();
+            line.base_start = tl.start;
+            line.base_len = tl.boards.len() as i32;
+        }
+        CheckPosition { first_line: l_min, lines, source_mask: !0, _borrow: PhantomData }
+    }
+
+    pub fn into_buf(self) -> CheckBuf {
+        CheckBuf(self.lines)
+    }
+
+    fn for_present(s: &'a State, present: Turn, buf: CheckBuf) -> Self {
+        let (a, b) = s.get_lines_range();
+        let mut r = Self::with_range_in(s, a, b, buf);
         let (lo, hi) = s.get_active_range();
         for l in lo..=hi {
             let (t, c) = s.get_timeline_end(l);
@@ -76,7 +119,11 @@ impl<'a> CheckPosition<'a> {
     }
 
     pub fn for_phantom(s: &'a State) -> Self {
-        Self::for_present(s, s.get_present())
+        Self::for_phantom_in(s, CheckBuf::default())
+    }
+
+    pub fn for_phantom_in(s: &'a State, buf: CheckBuf) -> Self {
+        Self::for_present(s, s.get_present(), buf)
     }
 
     pub fn for_check_symbols(s: &'a State) -> Self {
@@ -84,13 +131,17 @@ impl<'a> CheckPosition<'a> {
         if present.1 == s.get_present().1 {
             present = next_turn(present);
         }
-        Self::for_present(s, present)
+        Self::for_present(s, present, CheckBuf::default())
     }
 
     pub fn for_move_candidates(s: &'a State) -> Self {
+        Self::for_move_candidates_in(s, CheckBuf::default())
+    }
+
+    pub fn for_move_candidates_in(s: &'a State, buf: CheckBuf) -> Self {
         let (lo, hi) = s.get_lines_range();
         let branch = s.new_line();
-        let mut r = Self::with_range(s, lo.min(branch), hi.max(branch));
+        let mut r = Self::with_range_in(s, lo.min(branch), hi.max(branch), buf);
         let player = s.get_present().1;
         for l in lo..=hi {
             let at = s.get_timeline_end(l);
@@ -102,35 +153,40 @@ impl<'a> CheckPosition<'a> {
     }
 
     pub fn add_board(&mut self, l: i32, at: Turn, b: &'a Board) {
+        let v = v_of(at);
         let line = &mut self.lines[(l - self.first_line) as usize];
-        debug_assert!(line.added.is_none());
-        if line.exists {
-            debug_assert!(at == next_turn(line.end));
+        debug_assert!(line.added.is_null());
+        if line.start <= line.end {
+            debug_assert!(v == line.end + 1);
         } else {
-            line.exists = true;
-            line.start = at;
+            line.start = v;
         }
-        line.added_start = at;
-        line.end = at;
-        line.added = Some(b);
+        line.added_start = v;
+        line.end = v;
+        line.added = b;
+    }
+
+    /// Board at half-turn `v` of line `l`.
+    #[inline(always)]
+    fn board_v(&self, l: i32, v: i32) -> Option<&'a Board> {
+        let i = l.wrapping_sub(self.first_line) as u32 as usize;
+        let line = self.lines.get(i)?;
+        if v < line.start || v > line.end {
+            return None;
+        }
+        // SAFETY: the pointers come from the state and overlays borrowed for 'a.
+        unsafe {
+            if v >= line.added_start {
+                return Some(&*line.added);
+            }
+            let k = v - line.base_start;
+            if (k as u32) < line.base_len as u32 { Some(&*line.base.add(k as usize)) } else { None }
+        }
     }
 
     #[inline]
     pub fn get_board_ptr(&self, l: i32, t: i32, c: bool) -> Option<&'a Board> {
-        if l < self.first_line || l - self.first_line >= self.lines.len() as i32 {
-            return None;
-        }
-        let line = &self.lines[(l - self.first_line) as usize];
-        let at = (t, c);
-        if !line.exists || at < line.start || at > line.end {
-            return None;
-        }
-        if let Some(a) = line.added {
-            if at >= line.added_start {
-                return Some(a);
-            }
-        }
-        if line.in_base { self.base.get_board_ptr(l, t, c) } else { None }
+        self.board_v(l, 2 * t + c as i32)
     }
 
     pub fn get_piece(&self, p: Vec4, c: bool) -> Piece {
@@ -147,32 +203,32 @@ impl<'a> CheckPosition<'a> {
     ) -> bool {
         let overlays = [Some(mv), departure];
         let mut sources = [0i32; 2];
-        let mut saved = [LineView::default(); 2];
+        let mut saved = [NO_LINE; 2];
         let mut count = 0;
         for upd in overlays.iter().flatten() {
-            let start = (upd.t, upd.c);
+            let start = 2 * upd.t + upd.c as i32;
             sources[count] = upd.l;
             let line = &mut self.lines[(upd.l - self.first_line) as usize];
             saved[count] = *line;
-            if !line.exists {
+            if line.start > line.end {
                 line.start = start;
             }
-            line.exists = true;
             line.added_start = start;
-            line.end = next_turn(start);
-            line.added = Some(upd.value);
+            line.end = start + 1;
+            line.added = upd.value;
             count += 1;
         }
-        let first_line = self.first_line;
         let result = {
             let lines = &self.lines;
+            let first_line = self.first_line;
+            let attacker_v = attacker as i32;
             let mut emit = |m: FullMove| -> bool {
                 match kind {
                     CheckKind::Physical => m.from.tl() == m.to.tl(),
                     CheckKind::Superphysical => m.from.tl() != m.to.tl(),
                     CheckKind::Historical => {
                         let target = &lines[(m.to.l() - first_line) as usize];
-                        (m.to.t(), attacker) != target.end
+                        2 * m.to.t() + attacker_v != target.end
                     }
                 }
             };
@@ -240,11 +296,12 @@ impl<'a> CheckPosition<'a> {
     ) -> bool {
         let scan_line = |i: usize, emit: &mut dyn FnMut(FullMove) -> bool| -> bool {
             let line = &self.lines[i];
-            if !line.exists || line.end.1 != c {
+            if line.start > line.end || (line.end & 1 != 0) != c {
                 return false;
             }
-            let p0 = Vec4::new(0, 0, line.end.0, self.first_line + i as i32);
-            let source = self.get_board_ptr(p0.l(), p0.t(), c).unwrap();
+            let l = self.first_line + i as i32;
+            let p0 = Vec4::new(0, 0, line.end >> 1, l);
+            let source = self.board_v(l, line.end).unwrap();
             let friendly = source.hostile(!c) & self.source_mask;
             (include_physical && self.scan_physical(c, p0, source, friendly, emit))
                 || (include_superphysical
@@ -279,6 +336,12 @@ impl<'a> CheckPosition<'a> {
         false
     }
 
+    /// Board one or more steps from `p0` along a (t, l) direction, for color `c`.
+    #[inline(always)]
+    fn board_at(&self, q: Vec4, c: bool) -> Option<&'a Board> {
+        self.board_v(q.l(), 2 * q.t() + c as i32)
+    }
+
     fn scan_pure_sliders(
         &self,
         c: bool,
@@ -290,7 +353,7 @@ impl<'a> CheckPosition<'a> {
         let scan_direction = |direction: Vec4, mut pieces: Bitboard, emit: &mut dyn FnMut(FullMove) -> bool| {
             let mut q = p0 + direction;
             while pieces != 0 {
-                let b = match self.get_board_ptr(q.l(), q.t(), c) {
+                let b = match self.board_at(q, c) {
                     Some(b) => b,
                     None => break,
                 };
@@ -305,14 +368,20 @@ impl<'a> CheckPosition<'a> {
             }
             false
         };
-        for d in ORTHOGONAL_TL {
-            if scan_direction(d, source.lrook() & friendly, emit) {
-                return true;
+        let rooks = source.lrook() & friendly;
+        if rooks != 0 {
+            for d in ORTHOGONAL_TL {
+                if scan_direction(d, rooks, emit) {
+                    return true;
+                }
             }
         }
-        for d in DIAGONAL_TL {
-            if scan_direction(d, source.lbishop() & friendly, emit) {
-                return true;
+        let bishops = source.lbishop() & friendly;
+        if bishops != 0 {
+            for d in DIAGONAL_TL {
+                if scan_direction(d, bishops, emit) {
+                    return true;
+                }
             }
         }
         false
@@ -340,7 +409,7 @@ impl<'a> CheckPosition<'a> {
             let mut any_royal = 0u64;
             let mut q = p0 + direction;
             while count < 7 {
-                let b = match self.get_board_ptr(q.l(), q.t(), c) {
+                let b = match self.board_at(q, c) {
                     Some(b) => b,
                     None => break,
                 };
@@ -382,14 +451,19 @@ impl<'a> CheckPosition<'a> {
             };
             project(false, orth, emit) || project(true, diag, emit)
         };
-        for d in ORTHOGONAL_TL {
-            if scan_direction(d, source.lbishop() & friendly, source.lunicorn() & friendly, emit) {
-                return true;
+        let (bishops, unicorns, dragons) = (source.lbishop() & friendly, source.lunicorn() & friendly, source.ldragon() & friendly);
+        if bishops | unicorns != 0 {
+            for d in ORTHOGONAL_TL {
+                if scan_direction(d, bishops, unicorns, emit) {
+                    return true;
+                }
             }
         }
-        for d in DIAGONAL_TL {
-            if scan_direction(d, source.lunicorn() & friendly, source.ldragon() & friendly, emit) {
-                return true;
+        if unicorns | dragons != 0 {
+            for d in DIAGONAL_TL {
+                if scan_direction(d, unicorns, dragons, emit) {
+                    return true;
+                }
             }
         }
         false
@@ -412,7 +486,7 @@ impl<'a> CheckPosition<'a> {
                 return false;
             }
             let q = p0 + direction;
-            let b = match self.get_board_ptr(q.l(), q.t(), c) {
+            let b = match self.board_at(q, c) {
                 Some(b) => b,
                 None => return false,
             };
@@ -434,39 +508,51 @@ impl<'a> CheckPosition<'a> {
         let kja = |src: i32| king_jump_attack(src);
         let nj1 = |src: i32| knight_jump1_attack(src);
         let nj2 = |src: i32| knight_jump2_attack(src);
-        for d in ORTHOGONAL_TL {
-            if jump(d, source.lking() & friendly, &kja, emit) {
-                return true;
-            }
-            if jump(d, source.lknight() & friendly, &nj1, emit) {
-                return true;
-            }
-            if jump(d * 2, source.lknight() & friendly, &nj2, emit) {
-                return true;
+        let kings = source.lking() & friendly;
+        let knights = source.lknight() & friendly;
+        if kings | knights != 0 {
+            for d in ORTHOGONAL_TL {
+                if jump(d, kings, &kja, emit) {
+                    return true;
+                }
+                if jump(d, knights, &nj1, emit) {
+                    return true;
+                }
+                if jump(d * 2, knights, &nj2, emit) {
+                    return true;
+                }
             }
         }
-        for d in DIAGONAL_TL {
-            if jump(d, source.lking() & friendly, &kja, emit) {
-                return true;
+        if kings != 0 {
+            for d in DIAGONAL_TL {
+                if jump(d, kings, &kja, emit) {
+                    return true;
+                }
             }
         }
-        for d in SP_KNIGHT {
-            if jump(d, source.lknight() & friendly, &same_xy, emit) {
-                return true;
+        if knights != 0 {
+            for d in SP_KNIGHT {
+                if jump(d, knights, &same_xy, emit) {
+                    return true;
+                }
             }
         }
         let forward_l = if c { 1 } else { -1 };
-        for dt in [-1, 1] {
-            if jump(Vec4::new(0, 0, dt, forward_l), source.lpawn() & friendly, &same_xy, emit) {
-                return true;
+        let pawns = source.lpawn() & friendly;
+        if pawns != 0 {
+            for dt in [-1, 1] {
+                if jump(Vec4::new(0, 0, dt, forward_l), pawns, &same_xy, emit) {
+                    return true;
+                }
             }
         }
         let forward_rank = move |src: i32| if c { shift_south(pmask(src)) } else { shift_north(pmask(src)) };
         let brawn_fwd = move |src: i32| forward_rank(src) | shift_west(pmask(src)) | shift_east(pmask(src));
-        if jump(Vec4::new(0, 0, 0, forward_l), source.lrawn() & friendly, &brawn_fwd, emit) {
+        let brawns = source.lrawn() & friendly;
+        if jump(Vec4::new(0, 0, 0, forward_l), brawns, &brawn_fwd, emit) {
             return true;
         }
-        if jump(Vec4::new(0, 0, -1, 0), source.lrawn() & friendly, &forward_rank, emit) {
+        if jump(Vec4::new(0, 0, -1, 0), brawns, &forward_rank, emit) {
             return true;
         }
         false

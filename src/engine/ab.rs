@@ -12,13 +12,13 @@ use super::{Limits, OptionValue};
 use crate::core::action::{Action, FullMove, MoveSeq};
 use crate::core::bitboard::{marked_pos, pmask};
 use crate::core::board::Board;
-use crate::core::check_position::{BoardOverlay, CheckKind, CheckPosition};
+use crate::core::check_position::{BoardOverlay, CheckBuf, CheckKind, CheckPosition};
 use crate::core::hypercuboid::{has_physical_check, BestFirstCursor, Entry, HcCursor, HcInfo};
 use crate::core::multiverse::next_turn;
 use crate::core::piece::*;
 use crate::core::state::{Mark, State};
 use crate::misc::geometry::SearchSpace;
-use crate::misc::integer_set::{Index, IntegerSet};
+use crate::misc::integer_set::Index;
 use crate::misc::ordering::HcOrdering;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -92,6 +92,8 @@ pub struct AlphaBeta {
     /// The root is won or lost by enough (or by mate) that pruning which hides long mating
     /// lines is switched off (Stockfish's seekMate).
     seek_mate: bool,
+    /// Per-node buffers, reused down the recursion.
+    bufs: Vec<Box<NodeBufs>>,
 }
 
 // The raw stop pointer is only dereferenced during `find_best_move`, while the borrow it
@@ -245,11 +247,19 @@ struct CheckDetector<'a> {
     info: &'a HcInfo,
     s: &'a State,
     checks: Option<CheckPosition<'a>>,
+    buf: CheckBuf,
 }
 
 impl<'a> CheckDetector<'a> {
-    fn new(info: &'a HcInfo, s: &'a State) -> Self {
-        CheckDetector { info, s, checks: None }
+    fn new(info: &'a HcInfo, s: &'a State, buf: CheckBuf) -> Self {
+        CheckDetector { info, s, checks: None, buf }
+    }
+
+    fn into_buf(self) -> CheckBuf {
+        match self.checks {
+            Some(c) => c.into_buf(),
+            None => self.buf,
+        }
     }
 
     fn gives_check(&mut self, axis: usize, coord: Index) -> bool {
@@ -261,7 +271,10 @@ impl<'a> CheckDetector<'a> {
         {
             return true;
         }
-        let checks = self.checks.get_or_insert_with(|| CheckPosition::for_move_candidates(s));
+        if self.checks.is_none() {
+            self.checks = Some(CheckPosition::for_move_candidates_in(s, std::mem::take(&mut self.buf)));
+        }
+        let checks = self.checks.as_mut().unwrap();
         let player = s.get_present().1;
         let mv = mb.mv;
         let at = next_turn((mv.to.t(), player));
@@ -275,11 +288,22 @@ impl<'a> CheckDetector<'a> {
     }
 }
 
-/// Per-axis ordering of a node: axis orders (best first) and each coordinate's score
-/// (indexed by coordinate).
-struct NodeOrder {
-    order: HcOrdering,
-    scores: Vec<Vec<i32>>,
+/// Scratch of `node_ordering`.
+#[derive(Default)]
+struct OrderScratch {
+    sort: Vec<(i32, Index)>,
+    checks: CheckBuf,
+}
+
+/// Buffers of one search node, reused by later nodes at the same recursion depth.
+#[derive(Default)]
+struct NodeBufs {
+    info: HcInfo,
+    cursor: BestFirstCursor,
+    evasions: HcCursor,
+    order: OrderScratch,
+    /// Coordinate scores of the evasion ordering (unused by its cursor).
+    evasion_scores: Vec<Vec<i32>>,
 }
 
 impl AlphaBeta {
@@ -297,6 +321,7 @@ impl AlphaBeta {
             aborted: false,
             stop_ptr: std::ptr::null(),
             seek_mate: false,
+            bufs: Vec::new(),
         }
     }
 
@@ -379,79 +404,103 @@ impl AlphaBeta {
         }
     }
 
-    /// Node ordering; checking semimoves are detected (and go first) when `checks`.
-    fn node_ordering(&self, s: &State, info: &HcInfo, checks: bool) -> NodeOrder {
+    /// Node ordering into `orders` (per axis, coordinates best first) and `scores` (per axis,
+    /// each coordinate's score); checking semimoves are detected (and go first) when `checks`.
+    fn node_ordering(
+        &self,
+        s: &State,
+        info: &HcInfo,
+        checks: bool,
+        scratch: &mut OrderScratch,
+        orders: &mut Vec<Vec<Index>>,
+        scores: &mut Vec<Vec<i32>>,
+    ) {
         let _p = crate::misc::prof::scope(6);
         let u = info.get_universe();
-        let mut orders = Vec::with_capacity(u.dimension());
-        let mut scores: Vec<Vec<i32>> = Vec::with_capacity(u.dimension());
-        // Branch axes share entries; score them once.
-        let mut branch_cache: Option<(Vec<Index>, Vec<i32>)> = None;
-        let mut detector = if checks { Some(CheckDetector::new(info, s)) } else { None };
-        for n in 0..u.dimension() {
-            if n >= info.first_branch_axis() {
-                if let Some((o, sc)) = &branch_cache {
-                    orders.push(o.clone());
-                    scores.push(sc.clone());
-                    continue;
-                }
+        let dim = u.dimension();
+        if orders.len() < dim {
+            orders.resize_with(dim, Vec::new);
+        }
+        if scores.len() < dim {
+            scores.resize_with(dim, Vec::new);
+        }
+        let fba = info.first_branch_axis();
+        let mut detector = if checks { Some(CheckDetector::new(info, s, std::mem::take(&mut scratch.checks))) } else { None };
+        for n in 0..dim {
+            // Branch axes share entries; score them once.
+            if n > fba {
+                let (head, tail) = orders.split_at_mut(n);
+                tail[0].clone_from(&head[fba]);
+                let (head, tail) = scores.split_at_mut(n);
+                tail[0].clone_from(&head[fba]);
+                continue;
             }
-            let mut v: Vec<(i32, Index)> = u[n].iter().map(|i| (self.coord_score(s, info, n, i, &mut detector), i)).collect();
-            let mut sc = vec![0i32; v.iter().map(|x| x.1 as usize + 1).max().unwrap_or(0)];
-            for &(score, i) in &v {
+            let v = &mut scratch.sort;
+            v.clear();
+            for i in u[n].iter() {
+                v.push((self.coord_score(s, info, n, i, &mut detector), i));
+            }
+            let sc = &mut scores[n];
+            sc.clear();
+            sc.resize(v.last().map(|x| x.1 as usize + 1).unwrap_or(0), 0);
+            for &(score, i) in v.iter() {
                 sc[i as usize] = score;
             }
-            v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-            let o: Vec<Index> = v.into_iter().map(|x| x.1).collect();
-            if n >= info.first_branch_axis() {
-                branch_cache = Some((o.clone(), sc.clone()));
-            }
-            orders.push(o);
-            scores.push(sc);
+            v.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+            let o = &mut orders[n];
+            o.clear();
+            o.extend(v.iter().map(|x| x.1));
         }
-        NodeOrder { order: HcOrdering::Precomputed(orders), scores }
+        if let Some(d) = detector {
+            scratch.checks = d.into_buf();
+        }
     }
 
     /// Per-axis order of a node's coordinates (diagnostics).
     pub fn ordering(&self, s: &State, info: &HcInfo) -> HcOrdering {
-        self.node_ordering(s, info, true).order
+        let mut orders = Vec::new();
+        self.node_ordering(s, info, true, &mut OrderScratch::default(), &mut orders, &mut Vec::new());
+        HcOrdering::Precomputed(orders)
     }
 
     /// Moves on boards the side to move doesn't have to play (ahead of the present, or on
     /// inactive timelines) are left out: only the null coordinate stay on those axes.
-    fn without_future(s: &State, info: &HcInfo, ss: SearchSpace) -> SearchSpace {
+    fn without_future(s: &State, info: &HcInfo, ss: &SearchSpace) -> SearchSpace {
         let present = s.get_present();
         let (amin, amax) = s.get_active_range();
         let (lo, hi) = s.get_lines_range();
-        let mut allowed: Vec<(usize, IntegerSet)> = Vec::new();
-        for l in lo..=hi {
-            let Some(n) = info.line_to_axis(l) else { continue };
-            if l >= amin && l <= amax && s.get_timeline_end(l) == present {
-                continue;
-            }
-            let set = IntegerSet::singleton(0);
-            allowed.push((n, set));
-        }
-        if allowed.is_empty() {
-            return ss;
+        let optional = |l: i32| -> Option<usize> {
+            let n = info.line_to_axis(l)?;
+            if l >= amin && l <= amax && s.get_timeline_end(l) == present { None } else { Some(n) }
+        };
+        if !(lo..=hi).any(|l| optional(l).is_some()) {
+            return ss.clone();
         }
         let mut out = SearchSpace::default();
-        'hc: for mut hc in ss.hcs {
-            for (n, set) in &allowed {
-                hc[*n].and_assign(set);
-                if hc[*n].is_empty() {
-                    continue 'hc;
+        'hc: for hc in &ss.hcs {
+            for l in lo..=hi {
+                if let Some(n) = optional(l) {
+                    if !hc[n].contains(0) {
+                        continue 'hc;
+                    }
                 }
             }
-            out.hcs.push(hc);
+            let mut h = hc.clone();
+            for l in lo..=hi {
+                if let Some(n) = optional(l) {
+                    h[n].assign_singleton(0);
+                }
+            }
+            out.hcs.push(h);
         }
         out
     }
 
-    /// Action generator for an interior node or the root.
-    fn action_gen(&self, s: &State, info: &HcInfo, ss: SearchSpace) -> BestFirstCursor {
-        let no = self.node_ordering(s, info, true);
-        BestFirstCursor::new(ss, no.order, no.scores)
+    /// Order the node's coordinates into `cursor` and start it on `ss`.
+    fn start_actions(&self, s: &State, info: &HcInfo, cursor: &mut BestFirstCursor, scratch: &mut OrderScratch, ss: SearchSpace) {
+        let (orders, scores) = cursor.ordering_mut();
+        self.node_ordering(s, info, true, scratch, orders, scores);
+        cursor.restart(ss);
     }
 
     fn action_score(&self, s: &State, act: &MoveSeq, ply: usize) -> i32 {
@@ -480,7 +529,8 @@ impl AlphaBeta {
     /// The first `cap` actions of `s` in the order an interior node would try them (diagnostics).
     pub fn node_order(&self, s: &State, cap: usize) -> Vec<MoveSeq> {
         let (info, ss) = HcInfo::build_hc(s);
-        let mut agen = self.action_gen(s, &info, ss);
+        let mut agen = BestFirstCursor::default();
+        self.start_actions(s, &info, &mut agen, &mut OrderScratch::default(), ss);
         let mut out = Vec::new();
         let mut exhausted = false;
         while out.len() < cap && !exhausted {
@@ -615,34 +665,45 @@ impl AlphaBeta {
             }
             return stand + gain;
         }
-        let (info, ss) = HcInfo::build_hc(s);
         // In check: search the evasions.
-        let mut agen = HcCursor::new(ss, self.node_ordering(s, &info, false).order);
+        let mut nb = self.bufs.pop().unwrap_or_default();
+        {
+            let NodeBufs { info, evasions, order, evasion_scores, .. } = &mut *nb;
+            evasions.ss = info.rebuild(s);
+            self.node_ordering(s, info, false, order, evasions.order.axes_mut(), evasion_scores);
+        }
         let mut best = -INF;
         let mut any = false;
         let mut tried = 0;
-        while tried < QCAP {
-            if self.check_abort() {
-                return 0;
-            }
-            let Some(act) = agen.next(&info, s) else { break };
-            any = true;
-            tried += 1;
-            let mark = Self::make(s, &act);
-            let v = -self.qsearch(s, ply + 1, -beta, -alpha, qd - 1);
-            s.unmake(mark);
-            if self.aborted {
-                return 0;
-            }
-            if v > best {
-                best = v;
-                if v > alpha {
-                    alpha = v;
-                    if v >= beta {
-                        break;
+        let aborted = 'search: {
+            while tried < QCAP {
+                if self.check_abort() {
+                    break 'search true;
+                }
+                let Some(act) = nb.evasions.next(&nb.info, s) else { break };
+                any = true;
+                tried += 1;
+                let mark = Self::make(s, &act);
+                let v = -self.qsearch(s, ply + 1, -beta, -alpha, qd - 1);
+                s.unmake(mark);
+                if self.aborted {
+                    break 'search true;
+                }
+                if v > best {
+                    best = v;
+                    if v > alpha {
+                        alpha = v;
+                        if v >= beta {
+                            break;
+                        }
                     }
                 }
             }
+            false
+        };
+        self.bufs.push(nb);
+        if aborted {
+            return 0;
         }
         if !any {
             return Self::terminal_score(s, ply);
@@ -757,80 +818,93 @@ impl AlphaBeta {
             pre_tried.push(act);
         }
 
-        let (info, ss) = HcInfo::build_hc(s);
-        let mut full = Some(ss.clone());
-        let mut agen = self.action_gen(s, &info, Self::without_future(s, &info, ss));
+        let mut nb = self.bufs.pop().unwrap_or_default();
+        let ss = nb.info.rebuild(s);
+        let first = Self::without_future(s, &nb.info, &ss);
+        let mut full = Some(ss);
+        {
+            let NodeBufs { info, cursor, order, .. } = &mut *nb;
+            self.start_actions(s, info, cursor, order, first);
+        }
         let mut generated = 0usize;
         let mut exhausted = false;
-        while searched < cap && !exhausted {
-            let mut batch: Vec<(i32, MoveSeq)> = Vec::with_capacity(BATCH);
-            while batch.len() < BATCH {
-                if self.check_abort() {
-                    return 0;
-                }
-                match agen.next(&info, s) {
-                    None => {
-                        // Every legal action may need a move on an optional board.
-                        if generated == 0 {
-                            if let Some(f) = full.take() {
-                                agen = self.action_gen(s, &info, f);
+        let outcome: Option<i32> = 'search: {
+            while searched < cap && !exhausted {
+                let mut batch: Vec<(i32, MoveSeq)> = Vec::with_capacity(BATCH);
+                while batch.len() < BATCH {
+                    if self.check_abort() {
+                        break 'search Some(0);
+                    }
+                    match nb.cursor.next(&nb.info, s) {
+                        None => {
+                            // Every legal action may need a move on an optional board. (The
+                            // ordering is unchanged: nothing was searched since it was made.)
+                            if generated == 0 {
+                                if let Some(f) = full.take() {
+                                    nb.cursor.restart(f);
+                                    continue;
+                                }
+                            }
+                            exhausted = true;
+                            break;
+                        }
+                        Some(act) => {
+                            generated += 1;
+                            if pre_tried.contains(&act) || tt_action.as_ref() == Some(&act) {
                                 continue;
                             }
+                            batch.push((self.action_score(s, &act, ply), act));
                         }
-                        exhausted = true;
+                    }
+                }
+                batch.sort_by(|a, b| b.0.cmp(&a.0));
+                for (sc, act) in batch {
+                    if searched >= cap {
                         break;
                     }
-                    Some(act) => {
-                        generated += 1;
-                        if pre_tried.contains(&act) || tt_action.as_ref() == Some(&act) {
-                            continue;
+                    let mark = Self::make(s, &act);
+                    let quiet = sc < 10_000;
+                    let mut r = 0;
+                    // Checking actions are not reduced: mating lines run through them.
+                    if depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet && !Self::in_check(s) {
+                        r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
+                    }
+                    let mut v;
+                    if searched == 0 {
+                        v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, pv);
+                    } else {
+                        v = -self.negamax(s, depth - 1 - r, ply + 1, -alpha - 1, -alpha, false);
+                        if !self.aborted && v > alpha && r > 0 {
+                            v = -self.negamax(s, depth - 1, ply + 1, -alpha - 1, -alpha, false);
                         }
-                        batch.push((self.action_score(s, &act, ply), act));
+                        if !self.aborted && v > alpha && v < beta && pv {
+                            v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, true);
+                        }
+                    }
+                    s.unmake(mark);
+                    if self.aborted {
+                        break 'search Some(0);
+                    }
+                    searched += 1;
+                    if v > best {
+                        best = v;
+                        best_action = act.clone();
+                        if v > alpha {
+                            alpha = v;
+                        }
+                    }
+                    if alpha >= beta {
+                        self.on_cutoff(s, &act, depth, ply);
+                        self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), &best_action);
+                        break 'search Some(best);
                     }
                 }
             }
-            batch.sort_by(|a, b| b.0.cmp(&a.0));
-            for (sc, act) in batch {
-                if searched >= cap {
-                    break;
-                }
-                let mark = Self::make(s, &act);
-                let quiet = sc < 10_000;
-                let mut r = 0;
-                // Checking actions are not reduced: mating lines run through them.
-                if depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet && !Self::in_check(s) {
-                    r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
-                }
-                let mut v;
-                if searched == 0 {
-                    v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, pv);
-                } else {
-                    v = -self.negamax(s, depth - 1 - r, ply + 1, -alpha - 1, -alpha, false);
-                    if !self.aborted && v > alpha && r > 0 {
-                        v = -self.negamax(s, depth - 1, ply + 1, -alpha - 1, -alpha, false);
-                    }
-                    if !self.aborted && v > alpha && v < beta && pv {
-                        v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, true);
-                    }
-                }
-                s.unmake(mark);
-                if self.aborted {
-                    return 0;
-                }
-                searched += 1;
-                if v > best {
-                    best = v;
-                    best_action = act.clone();
-                    if v > alpha {
-                        alpha = v;
-                    }
-                }
-                if alpha >= beta {
-                    self.on_cutoff(s, &act, depth, ply);
-                    self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), &best_action);
-                    return best;
-                }
-            }
+            None
+        };
+        self.bufs.push(nb);
+        if let Some(v) = outcome {
+            return v;
         }
         if searched == 0 && generated == 0 && tt_action.is_none() {
             return Self::terminal_score(s, ply);
@@ -932,8 +1006,9 @@ impl AlphaBeta {
 
         // Root actions (all of them, up to the root cap), ordered heuristically.
         let (hc, ss) = HcInfo::build_hc(root);
-        let mut full = Some(ss.clone());
-        let mut agen = self.action_gen(root, &hc, Self::without_future(root, &hc, ss));
+        let mut agen = BestFirstCursor::default();
+        self.start_actions(root, &hc, &mut agen, &mut OrderScratch::default(), Self::without_future(root, &hc, &ss));
+        let mut full = Some(ss);
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
         // Enumerating every root action can take seconds with many timelines: spend at most
         // a quarter of the budget on it (always keeping at least one action).
@@ -945,7 +1020,7 @@ impl AlphaBeta {
             }
             match agen.next(&hc, root) {
                 Some(a) => roots.push((self.action_score(root, &a, 0), a)),
-                None if roots.is_empty() && full.is_some() => agen = self.action_gen(root, &hc, full.take().unwrap()),
+                None if roots.is_empty() && full.is_some() => agen.restart(full.take().unwrap()),
                 None => {
                     complete = true;
                     break;
