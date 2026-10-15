@@ -1,0 +1,12 @@
+{
+  "name": "lmr",
+  "old": "2b67b23b424afcbfafbdc8ae0e1d0868f9b53a2a",
+  "games": 12000,
+  "shards": 40,
+  "tc": "movetime 100",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}
