@@ -59,6 +59,10 @@ const RFP_MARGIN: i32 = 200;
 const NMP_MIN_DEPTH: i32 = 3;
 const NMP_R: i32 = 3;
 const NMP_DIV: i32 = 3;
+/// Futility pruning: at non-PV nodes up to this depth, quiet actions are skipped (after the
+/// first) when the static eval plus FUT_MARGIN per ply cannot reach alpha.
+const FUT_DEPTH: i32 = 2;
+const FUT_MARGIN: i32 = 300;
 const DEFAULT_HASH_MB: usize = 64;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -757,6 +761,11 @@ impl AlphaBeta {
             pre_tried.push(act);
         }
 
+        let futile = !pv
+            && depth <= FUT_DEPTH
+            && alpha.abs() < MATE - 1000
+            && !Self::in_check(s)
+            && self.static_eval(s) + FUT_MARGIN * depth <= alpha;
         let (info, ss) = HcInfo::build_hc(s);
         let mut full = Some(ss.clone());
         let mut agen = self.action_gen(s, &info, Self::without_future(s, &info, ss));
@@ -794,8 +803,11 @@ impl AlphaBeta {
                 if searched >= cap {
                     break;
                 }
-                let mark = Self::make(s, &act);
                 let quiet = sc < 10_000;
+                if futile && quiet && searched > 0 {
+                    continue;
+                }
+                let mark = Self::make(s, &act);
                 let mut r = 0;
                 // Checking actions are not reduced: mating lines run through them.
                 if depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet && !Self::in_check(s) {

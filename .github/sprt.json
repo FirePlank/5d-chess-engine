@@ -1,0 +1,12 @@
+{
+  "name": "futility",
+  "old": "8e59456a38b8c6ec7b621a97f8e9d49fce310091",
+  "games": 12000,
+  "shards": 40,
+  "tc": "tc 10+0.1",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}
