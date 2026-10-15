@@ -86,6 +86,13 @@ pub struct HcInfo {
     /// Coordinate groups per axis (index `new_axis` is shared by all branch axes).
     groups: Vec<AxisGroups>,
     scratch: BuildScratch,
+    /// Every timeline ends on the mover's turn, so after a point only its moved timelines
+    /// can give check.
+    all_lines_mine: bool,
+    /// Per existing axis (filled on demand, cleared by `rebuild`): every superphysical check
+    /// from that timeline's next board, in scan order, when it is the only moved timeline
+    /// and still holds all of the opponent's pieces.
+    lone_checks: std::cell::RefCell<Vec<(bool, Vec<FullMove>)>>,
 }
 
 #[derive(Default)]
@@ -251,7 +258,7 @@ impl HcInfo {
     pub fn rebuild(&mut self, s: &State) -> SearchSpace {
         let _p = crate::misc::prof::scope(0);
         let st_scope = crate::misc::prof::scope(15);
-        let HcInfo { player: info_player, line_axes, axis_lo, axis_of, axis_coords, branch_entries, dim, universe, new_axis, groups, scratch } =
+        let HcInfo { player: info_player, line_axes, axis_lo, axis_of, axis_coords, branch_entries, dim, universe, new_axis, groups, scratch, all_lines_mine, lone_checks } =
             self;
         let BuildScratch { playable, stays, departures, arrivals, sorted, line_counts, ml, jump_tab, safety } = scratch;
         let present = s.get_present();
@@ -527,6 +534,8 @@ impl HcInfo {
         *info_player = player;
         *dim = dimension;
         *new_axis = np;
+        *all_lines_mine = (lines_lo..=lines_hi).all(|l| s.get_timeline_end(l).1 == player);
+        lone_checks.get_mut().iter_mut().for_each(|e| e.0 = false);
         ss
     }
 
@@ -772,12 +781,50 @@ impl HcInfo {
         Some(problem)
     }
 
+    /// False when `p` moves a single existing timeline (physically) and none of the checks
+    /// its next board could give survives the move; true when the full test is needed.
+    fn lone_move_may_check(&self, st: &State, p: &Point, lo: i32, hi: i32, buf: &mut CheckBuf) -> bool {
+        let mut moved = None;
+        for &(l, axis) in &self.line_axes {
+            if !self.entry(axis, p[axis]).is_null() {
+                if axis >= self.new_axis || moved.is_some() {
+                    return true;
+                }
+                moved = Some((l, axis));
+            }
+        }
+        let Some((l, axis)) = moved else { return true };
+        let Entry::Physical { b: result, .. } = self.entry(axis, p[axis]) else { return true };
+        let c = self.player;
+        let mut cache = self.lone_checks.borrow_mut();
+        if cache.len() < self.new_axis {
+            cache.resize_with(self.new_axis, Default::default);
+        }
+        let (known, checks) = &mut cache[axis];
+        if !*known {
+            // The timeline's next board with every opponent piece in place: the moved board
+            // differs only by the mover's pieces and possibly one captured piece.
+            let (t, _) = st.get_timeline_end(l);
+            let mut cp = CheckPosition::with_range_in(st, lo, hi, std::mem::take(buf));
+            cp.add_board(l, next_turn((t, c)), st.board(l, t, c));
+            checks.clear();
+            cp.checks_into(!c, false, checks);
+            *buf = cp.into_buf();
+            *known = true;
+        }
+        let attackers = result.hostile(c);
+        checks.iter().any(|m| attackers & pmask(m.from.xy()) != 0)
+    }
+
     pub fn find_checks(&self, st: &State, p: &Point, hc: &Hc, buf: &mut CheckBuf) -> Option<Slice> {
         let (_, c) = st.get_present();
         let (mut lo, mut hi) = st.get_lines_range();
         if let (Some(&(first, _)), Some(&(last, _))) = (self.line_axes.first(), self.line_axes.last()) {
             lo = lo.min(first);
             hi = hi.max(last);
+        }
+        if self.all_lines_mine && !self.lone_move_may_check(st, p, lo, hi, buf) {
+            return None;
         }
         let mut newstate = CheckPosition::with_range_in(st, lo, hi, std::mem::take(buf));
         for &(l, axis) in &self.line_axes {

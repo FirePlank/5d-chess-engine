@@ -417,17 +417,22 @@ impl<'a> CheckPosition<'a> {
 
     pub fn checks(&self, attacker: bool, include_physical: bool) -> Vec<FullMove> {
         let mut r = Vec::new();
+        self.checks_into(attacker, include_physical, &mut r);
+        r
+    }
+
+    /// `checks` appended to `out`.
+    pub fn checks_into(&self, attacker: bool, include_physical: bool, out: &mut Vec<FullMove>) {
         self.scan(
             attacker,
             include_physical,
             &mut |m| {
-                r.push(m);
+                out.push(m);
                 false
             },
             &[],
             true,
         );
-        r
     }
 
     fn scan(

@@ -137,6 +137,8 @@ pub struct AlphaBeta {
     bufs: Vec<Box<NodeBufs>>,
     /// Evaluation terms of recently seen boards.
     terms: Box<hce::TermCache>,
+    /// Whether the position the next `negamax` call searches is in check, when known.
+    known_check: Option<bool>,
 }
 
 // The raw stop pointer is only dereferenced during `find_best_move`, while the borrow it
@@ -382,6 +384,7 @@ impl AlphaBeta {
             seek_mate: false,
             bufs: Vec::new(),
             terms: Box::default(),
+            known_check: None,
         }
     }
 
@@ -696,13 +699,14 @@ impl AlphaBeta {
         if Self::in_check(s) { -(MATE - ply as i32) } else { 0 }
     }
 
-    fn qsearch(&mut self, s: &mut State, ply: usize, mut alpha: i32, beta: i32, qd: i32) -> i32 {
+    /// `known_check`: whether `s` is in check, when the caller already knows.
+    fn qsearch(&mut self, s: &mut State, ply: usize, mut alpha: i32, beta: i32, qd: i32, known_check: Option<bool>) -> i32 {
         self.nodes += 1;
         if self.check_abort() {
             return 0;
         }
         let stand = self.static_eval(s);
-        let in_check = Self::in_check(s);
+        let in_check = known_check.unwrap_or_else(|| Self::in_check(s));
         // Royal captures are threatened: standing pat is unsound, so search evasions.
         if !in_check {
             if stand >= beta {
@@ -747,7 +751,7 @@ impl AlphaBeta {
                 any = true;
                 tried += 1;
                 let mark = Self::make(s, &act);
-                let v = -self.qsearch(s, ply + 1, -beta, -alpha, qd - 1);
+                let v = -self.qsearch(s, ply + 1, -beta, -alpha, qd - 1, None);
                 s.unmake(mark);
                 if self.aborted {
                     break 'search true;
@@ -769,7 +773,8 @@ impl AlphaBeta {
             return 0;
         }
         if !any {
-            return Self::terminal_score(s, ply);
+            // Only reached in check: mated.
+            return -(MATE - ply as i32);
         }
         best
     }
@@ -790,8 +795,9 @@ impl AlphaBeta {
     }
 
     fn negamax(&mut self, s: &mut State, depth: i32, ply: usize, mut alpha: i32, beta: i32, pv: bool) -> i32 {
+        let known_check = self.known_check.take();
         if depth <= 0 {
-            return self.qsearch(s, ply, alpha, beta, QDEPTH);
+            return self.qsearch(s, ply, alpha, beta, QDEPTH, known_check);
         }
         self.nodes += 1;
         if self.check_abort() {
@@ -818,7 +824,7 @@ impl AlphaBeta {
             }
         }
 
-        if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !Self::in_check(s) {
+        if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| Self::in_check(s)) {
             let e = self.static_eval(s);
             if depth <= RFP_DEPTH && e - RFP_MARGIN * depth >= beta {
                 return e;
@@ -928,19 +934,27 @@ impl AlphaBeta {
                     let mark = Self::make(s, &act);
                     let quiet = sc < 10_000;
                     let mut r = 0;
+                    let mut child_check = None;
                     // Checking actions are not reduced: mating lines run through them.
-                    if depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet && !Self::in_check(s) {
-                        r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
+                    if depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet {
+                        let ic = Self::in_check(s);
+                        child_check = Some(ic);
+                        if !ic {
+                            r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
+                        }
                     }
                     let mut v;
+                    self.known_check = child_check;
                     if searched == 0 {
                         v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, pv);
                     } else {
                         v = -self.negamax(s, depth - 1 - r, ply + 1, -alpha - 1, -alpha, false);
                         if !self.aborted && v > alpha && r > 0 {
+                            self.known_check = child_check;
                             v = -self.negamax(s, depth - 1, ply + 1, -alpha - 1, -alpha, false);
                         }
                         if !self.aborted && v > alpha && v < beta && pv {
+                            self.known_check = child_check;
                             v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, true);
                         }
                     }
@@ -1116,16 +1130,16 @@ impl AlphaBeta {
                     -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true)
                 } else {
                     // Late root actions are reduced, never pruned.
-                    let r = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX && !Self::in_check(&work) {
-                        (lmr(depth, k) - 1).clamp(0, depth - 2)
-                    } else {
-                        0
-                    };
+                    let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(Self::in_check(&work)) } else { None };
+                    let r = if child_check == Some(false) { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
+                    self.known_check = child_check;
                     let mut v = -self.negamax(&mut work, depth - 1 - r, 1, -alpha - 1, -alpha, false);
                     if !self.aborted && v > alpha && r > 0 {
+                        self.known_check = child_check;
                         v = -self.negamax(&mut work, depth - 1, 1, -alpha - 1, -alpha, false);
                     }
                     if !self.aborted && v > alpha {
+                        self.known_check = child_check;
                         v = -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true);
                     }
                     v
