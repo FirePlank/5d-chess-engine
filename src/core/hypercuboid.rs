@@ -861,15 +861,11 @@ pub struct BestFirstCursor {
     order: HcOrdering,
     scores: Vec<Vec<i32>>,
     seq: u64,
-    /// Score charged per new timeline an action creates.
-    branch_penalty: i64,
 }
 
 struct BfItem {
-    key: (i64, u64),
+    key: (i32, i64, u64),
     hc: Hc,
-    /// New timelines its actions create.
-    class: i32,
 }
 impl PartialEq for BfItem {
     fn eq(&self, o: &Self) -> bool {
@@ -889,9 +885,8 @@ impl Ord for BfItem {
 }
 
 impl BestFirstCursor {
-    /// Actions come by summed coordinate score, minus `branch_penalty` per new timeline.
-    pub fn new(ss: SearchSpace, order: HcOrdering, scores: Vec<Vec<i32>>, branch_penalty: i64) -> Self {
-        let mut c = BestFirstCursor { heap: std::collections::BinaryHeap::new(), order, scores, seq: 0, branch_penalty };
+    pub fn new(ss: SearchSpace, order: HcOrdering, scores: Vec<Vec<i32>>) -> Self {
+        let mut c = BestFirstCursor { heap: std::collections::BinaryHeap::new(), order, scores, seq: 0 };
         let n = ss.hcs.len();
         for (k, hc) in ss.hcs.into_iter().enumerate() {
             c.push(hc, (n - 1 - k) as i32);
@@ -911,11 +906,12 @@ impl BestFirstCursor {
             }
         }
         self.seq += 1;
-        self.heap.push(BfItem { key: (bound - class as i64 * self.branch_penalty, self.seq), hc, class });
+        self.heap.push(BfItem { key: (-class, bound, self.seq), hc });
     }
 
     pub fn next(&mut self, info: &HcInfo, s: &State) -> Option<MoveSeq> {
-        while let Some(BfItem { mut hc, class, .. }) = self.heap.pop() {
+        while let Some(BfItem { key, mut hc }) = self.heap.pop() {
+            let class = -key.0;
             let pt = match info.take_point(&mut hc, &self.order) {
                 Some(p) => p,
                 None => continue,
