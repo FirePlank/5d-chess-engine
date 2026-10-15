@@ -110,6 +110,71 @@ fn main() {
             }
             writeln!(out, "{:?}", hist).unwrap();
         }
+        "puzzles" => puzzles(
+            args.get(2).map(|s| s.as_str()).unwrap_or("data/puzzles.g"),
+            args.get(3).and_then(|s| s.parse().ok()).unwrap_or(15000),
+            &mut out,
+        ),
+        "mate2" => {
+            // Exact (full-width) mate-in-1/2 check: every white first action that forces mate
+            // next turn, with each black reply and the white action that mates it.
+            for line in stdin.lock().lines() {
+                let line = line.unwrap();
+                if !line.starts_with("G ") {
+                    continue;
+                }
+                let s = parse_g_line(&line).unwrap();
+                let txt = |st: &State, a: &MoveSeq| {
+                    let act = kairos::core::action::Action::from_moveseq(a, st);
+                    let mut os = st.clone();
+                    act.moves().iter().map(|em| { let t = em.lan(&os); if let Some(n) = os.normalize_promotion(*em) { os.apply_ext::<true>(n); } t }).collect::<Vec<_>>().join(" ")
+                };
+                let (w, ss) = HcInfo::build_hc(&s);
+                let firsts: Vec<MoveSeq> = w.search(&s, ss).collect();
+                writeln!(out, "{} white actions", firsts.len()).unwrap();
+                for a in &firsts {
+                    let Some(q) = apply_seq(&s, a) else { continue };
+                    if is_mated(&q) {
+                        writeln!(out, "MATE IN 1: {}", txt(&s, a)).unwrap();
+                        continue;
+                    }
+                    let (wq, ssq) = HcInfo::build_hc(&q);
+                    let replies: Vec<MoveSeq> = wq.search(&q, ssq).collect();
+                    if replies.is_empty() {
+                        continue; // stalemate
+                    }
+                    let mut mates = Vec::new();
+                    let mut ok = true;
+                    for r in &replies {
+                        let Some(q2) = apply_seq(&q, r) else { ok = false; break };
+                        let (w2, ss2) = HcInfo::build_hc(&q2);
+                        match w2.search(&q2, ss2).find(|c| apply_seq(&q2, c).map(|q3| is_mated(&q3)).unwrap_or(false)) {
+                            Some(c) => mates.push((txt(&q, r), txt(&q2, &c))),
+                            None => { ok = false; break; }
+                        }
+                    }
+                    if ok {
+                        writeln!(out, "MATE IN 2: {}  ({} black replies)", txt(&s, a), replies.len()).unwrap();
+                        for (r, c) in mates {
+                            writeln!(out, "    {:<28} -> {}", r, c).unwrap();
+                        }
+                    }
+                }
+            }
+        }
+        "netdata" => netdata(&args[2..], &mut out),
+        "netcheck" => {
+            // Residuals of the first records of a netdata file under a net blob.
+            use kairos::engine::evalnet::{Net, NI};
+            let net = Net::from_bytes(&std::fs::read(&args[2]).unwrap()).expect("net");
+            let raw = std::fs::read(&args[3]).unwrap();
+            let f: Vec<f32> = raw.chunks_exact(4).take(4 * (NI + 4)).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
+            for r in f.chunks_exact(NI + 4) {
+                let x: [f32; NI] = r[..NI].try_into().unwrap();
+                write!(out, "{} ", net.residual(&x)).unwrap();
+            }
+            writeln!(out).unwrap();
+        }
         "abbench" => abbench(
             args.get(2).map(|s| s.as_str()).unwrap_or("data/bench_ab.g"),
             args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20),
@@ -335,7 +400,8 @@ fn main() {
                  \x20 (positions as G lines on stdin)\n  \
                  bench [file]            perft oracle\n  \
                  abbench [file] [depth]  alpha-beta node oracle (AB_NODES caps nodes per position)\n  \
-                 blunders <games.jsonl> [n] | materank <games.jsonl> [n] | depthstat <games.jsonl> [ms] | rootgen [file]"
+                 puzzles [file] [ms]     time to find each mate in data/puzzles.g
+                   blunders <games.jsonl> [n] | materank <games.jsonl> [n] | depthstat <games.jsonl> [ms] | rootgen [file]"
             );
         }
     }
@@ -587,4 +653,155 @@ fn shuffled_order(w: &HcInfo, seed: u64) -> kairos::misc::ordering::HcOrdering {
         })
         .collect();
     kairos::misc::ordering::HcOrdering::Precomputed(orders)
+}
+
+/// Mate puzzles: "# mate <n> <name>" comment lines, each followed by a G line. Reports the
+/// time and depth at which the search first reports the mate, within `ms` per puzzle.
+fn puzzles(path: &str, ms: u64, out: &mut impl Write) {
+    use kairos::engine::ab::AlphaBeta;
+    use kairos::engine::Limits;
+    let text = std::fs::read_to_string(path).expect("puzzles");
+    let mut label = String::new();
+    let mut solved = 0;
+    let mut total = 0;
+    for line in text.lines() {
+        if let Some(l) = line.strip_prefix("# mate ") {
+            label = l.to_string();
+            continue;
+        }
+        if !line.starts_with("G ") {
+            continue;
+        }
+        total += 1;
+        let want: u32 = label.split_whitespace().next().and_then(|n| n.parse().ok()).unwrap_or(0);
+        let s = parse_g_line(line).unwrap();
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let mut e = AlphaBeta::new();
+        let t0 = Instant::now();
+        let mut found: Option<(f64, String)> = None;
+        let mut last = String::new();
+        e.find_best_move(&s, &Limits { movetime: Some(ms), ..Default::default() }, &stop, &mut |m| {
+            if found.is_none() && m.contains("score mate ") && !m.contains("score mate -") {
+                found = Some((t0.elapsed().as_secs_f64(), m.clone()));
+            }
+            last = m;
+        });
+        let depth = |m: &str| m.split_whitespace().nth(1).unwrap_or("?").to_string();
+        match found {
+            Some((t, m)) => {
+                solved += 1;
+                let n = m.split_whitespace().skip_while(|w| *w != "mate").nth(1).unwrap_or("?");
+                writeln!(out, "mate {:<3} {:<45} found mate {} at depth {} in {:.2}s", want, label, n, depth(&m), t).unwrap();
+            }
+            None => writeln!(out, "mate {:<3} {:<45} not found in {:.1}s (reached depth {})", want, label, ms as f64 / 1000.0, depth(&last)).unwrap(),
+        }
+        out.flush().unwrap();
+    }
+    writeln!(out, "solved {}/{}", solved, total).unwrap();
+}
+
+/// Eval-net training records from harness JSONL games: for every position where an engine
+/// chose an action, the net inputs, the handcrafted score, the engine's reported score and
+/// the game result, all from the side to move's view, and the game number.
+///   ktools netdata out.bin games1.jsonl games2.jsonl ...
+/// Record: NI + 4 little-endian f32 (inputs, base, teacher or NaN, wdl, game).
+fn netdata(args: &[String], out: &mut impl Write) {
+    use kairos::core::variants::{apply_uci_moves, position_from_uci};
+    use kairos::engine::evalnet::{inputs, NI};
+    use kairos::engine::hce::{evaluate, tuned_weights};
+    let out_path = &args[0];
+    let mut lines: Vec<String> = Vec::new();
+    for f in &args[1..] {
+        let text = std::fs::read_to_string(f).expect("games");
+        lines.extend(text.lines().filter(|l| !l.trim().is_empty()).map(String::from));
+    }
+    let threads = 14;
+    // Base score: the evaluation the search uses (the tuned feature HCE).
+    let ep = tuned_weights();
+    let chunks: Vec<Vec<f32>> = std::thread::scope(|sc| {
+        let hs: Vec<_> = (0..threads)
+            .map(|tid| {
+                let (lines, ep) = (&lines, &ep);
+                sc.spawn(move || {
+                    let mut rec: Vec<f32> = Vec::new();
+                    let mut g = tid;
+                    while g < lines.len() {
+                        let line = &lines[g];
+                        g += threads;
+                        let (Some(pos), Some(moves), Some(score)) =
+                            (json_field(line, "position"), json_field(line, "moves"), json_field(line, "score"))
+                        else {
+                            continue;
+                        };
+                        let Ok(score) = score.parse::<f32>() else { continue };
+                        let new_first = json_field(line, "new_first") == Some("true");
+                        // Older files have no scores: label with the result only.
+                        let evs: Vec<Option<i32>> = match line.find("\"evals\":") {
+                            Some(e) => {
+                                let t = &line[e + 8..];
+                                let t = t[t.find('[').unwrap_or(0) + 1..t.find(']').unwrap_or(0)].to_string();
+                                t.split(',').map(|x| x.trim().parse().ok()).collect()
+                            }
+                            None => vec![None; json_field(line, "actions").and_then(|a| a.parse().ok()).unwrap_or(0)],
+                        };
+                        let acts: Vec<&str> = moves.split(" submit").map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                        let n_eng = evs.len();
+                        if n_eng == 0 || acts.len() < n_eng {
+                            continue;
+                        }
+                        let opening = acts.len() - n_eng;
+                        let Ok(mut s) = position_from_uci(pos) else { continue };
+                        let mut ok = true;
+                        let mut first_player = None;
+                        let mut pending: Vec<(usize, Vec<f32>, bool)> = Vec::new();
+                        for (i, a) in acts.iter().enumerate() {
+                            if i == opening {
+                                first_player = Some(s.get_present().1);
+                            }
+                            if i >= opening {
+                                let base = evaluate(&s, ep);
+                                let x = inputs(&s, base);
+                                let mut r = x.to_vec();
+                                r.push(base as f32);
+                                let t = evs[i - opening];
+                                r.push(match t {
+                                    Some(v) if v.abs() < 20000 => v as f32,
+                                    _ => f32::NAN,
+                                });
+                                pending.push((i, r, s.get_present().1));
+                            }
+                            if apply_uci_moves(&mut s, &format!("{} submit", a)).is_err() {
+                                ok = false;
+                                break;
+                            }
+                        }
+                        let Some(first) = first_player else { continue };
+                        if !ok {
+                            continue;
+                        }
+                        // NEW's colour and the result for white.
+                        let new_black = if new_first { first } else { !first };
+                        let white = if score == 0.5 { 0.5 } else if (score == 1.0) != new_black { 1.0 } else { 0.0 };
+                        for (_, mut r, stm_black) in pending {
+                            r.push(if stm_black { 1.0 - white } else { white });
+                            r.push(g as f32 - threads as f32);
+                            rec.extend(r);
+                        }
+                    }
+                    rec
+                })
+            })
+            .collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut n = 0usize;
+    for c in &chunks {
+        n += c.len() / (NI + 4);
+        for v in c {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    std::fs::write(out_path, &bytes).expect("write records");
+    writeln!(out, "{} records ({} inputs + 4) from {} games -> {}", n, NI, lines.len(), out_path).unwrap();
 }
