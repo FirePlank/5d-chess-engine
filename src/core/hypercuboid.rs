@@ -200,12 +200,13 @@ impl HcInfo {
         let mut departures: Vec<Vec<Vec4>> = vec![Vec::new(); playable.len()];
         let mut arrivals: Vec<(i32, Vec<FullMove>)> = Vec::new();
         let mut tos: Vec<Vec4> = Vec::new();
+        let mut scratch = super::multiverse::MoveList::new();
         let gen_scope = crate::misc::prof::scope(1);
         for from in s.get_all_pieces(&playable) {
             let source_axis = line_axes[&from.l()];
             let mut has_depart = false;
             tos.clear();
-            s.gen_piece_move(from, &mut tos);
+            s.multiverse().gen_piece_move_with(from, player, &mut tos, &mut scratch);
             for &to in &tos {
                 let m = FullMove::new(from, to);
                 if from.tl() != to.tl() {
@@ -235,37 +236,44 @@ impl HcInfo {
             s.normalize_promotion(super::action::ExtMove::new(m, NO_PIECE)).map(|e| e.promote_to).unwrap_or(NO_PIECE)
         };
 
+        // Royal safety per board: only royal moves, pinned pieces, en passant or a board
+        // already in check can leave the mover's royal attacked, so most results skip the
+        // full check test.
+        let mut safety_cache: Vec<(i32, i32, super::board::RoyalSafety)> = Vec::new();
+        let mut safety = |l: i32, t: i32| -> super::board::RoyalSafety {
+            if let Some(e) = safety_cache.iter().find(|e| e.0 == l && e.1 == t) {
+                return e.2;
+            }
+            let r = s.board(l, t, player).royal_safety(player);
+            safety_cache.push((l, t, r));
+            r
+        };
+        let is_royal_piece = |pc: Piece| matches!(to_white(piece_name(pc)), KING_W | ROYAL_QUEEN_W);
         for axis in 0..playable.len() {
             let l = playable[axis];
             let arriving = arrivals.iter().find(|b| b.0 == l).map(|b| &b.1);
             let mut locs: Vec<Entry> = Vec::with_capacity(1 + stays[axis].len() + departures[axis].len());
             locs.push(Entry::Null);
+            let board_t = s.get_timeline_end(l).0;
+            let rs = safety(l, board_t);
             for &m in &stays[axis] {
                 let (p, q) = (m.from, m.to);
                 let d = q - p;
                 let source = s.board(p.l(), p.t(), player);
                 let mut nb = *source;
                 let z = pmask(p.xy());
-                if source.lpawn() & z != 0 && d.x() != 0 && source.get_piece(q.xy()) == NO_PIECE {
-                    nb.set_piece(ppos(q.x(), p.y()), NO_PIECE);
-                    let piece = nb.get_piece(p.xy());
-                    nb.set_piece(q.xy(), piece);
-                    nb.set_piece(p.xy(), NO_PIECE);
+                let mut needs_test = rs.in_check || (source.royal() | rs.pinned) & z != 0;
+                if source.lpawn() & z != 0 && d.x() != 0 && source.occupied() & pmask(q.xy()) == 0 {
+                    nb.clear_square(ppos(q.x(), p.y()));
+                    nb.transfer(p.xy(), q.xy());
+                    needs_test = true;
                 } else if source.king() & z != 0 && d.x().abs() > 1 {
                     let rook_x1 = if d.x() < 0 { 0 } else { size_x - 1 };
                     let rook_x2 = q.x() + if d.x() < 0 { 1 } else { -1 };
-                    let rf = ppos(rook_x1, p.y());
-                    let rt = ppos(rook_x2, q.y());
-                    let rook = nb.get_piece(rf);
-                    nb.set_piece(rt, rook);
-                    nb.set_piece(rf, NO_PIECE);
-                    let king = nb.get_piece(p.xy());
-                    nb.set_piece(q.xy(), king);
-                    nb.set_piece(p.xy(), NO_PIECE);
+                    nb.transfer(ppos(rook_x1, p.y()), ppos(rook_x2, q.y()));
+                    nb.transfer(p.xy(), q.xy());
                 } else {
-                    let piece = nb.get_piece(p.xy());
-                    nb.set_piece(q.xy(), piece);
-                    nb.set_piece(p.xy(), NO_PIECE);
+                    nb.transfer(p.xy(), q.xy());
                 }
                 if source.lpawn() & z != 0 && (q.y() == 0 || q.y() == size_y - 1) {
                     let promotion = promo_piece(m);
@@ -273,15 +281,18 @@ impl HcInfo {
                         nb.set_piece(q.xy(), if player { to_black(promotion) } else { promotion });
                     }
                 }
-                if !has_physical_check(&nb, player) {
+                if !needs_test || !has_physical_check(&nb, player) {
                     locs.push(Entry::Physical { m, b: nb });
                 }
             }
             for &p in &departures[axis] {
                 let idx = locs.len() as Index;
-                let mut nb = *s.board(p.l(), p.t(), player);
-                nb.set_piece(p.xy(), NO_PIECE);
-                if !has_physical_check(&nb, player) {
+                let source = s.board(p.l(), p.t(), player);
+                let mut nb = *source;
+                nb.clear_square(p.xy());
+                let z = pmask(p.xy());
+                let needs_test = rs.in_check || (source.royal() | rs.pinned) & z != 0;
+                if !needs_test || !has_physical_check(&nb, player) {
                     locs.push(Entry::Departing { from: p, b: nb });
                     jump_indices.push((p, idx));
                 }
@@ -300,7 +311,8 @@ impl HcInfo {
                         }
                         let mut nb = *s.board(q.l(), q.t(), player);
                         nb.set_piece(q.xy(), pic);
-                        if !has_physical_check(&nb, player) {
+                        let needs_test = is_royal_piece(pic) || safety(q.l(), q.t()).in_check;
+                        if !needs_test || !has_physical_check(&nb, player) {
                             let fa = line_axes[&m.from.l()] as u32;
                             locs.push(Entry::Arriving { m, b: nb, idx: INVALID, fa });
                         }
@@ -325,7 +337,8 @@ impl HcInfo {
                 if let Some(dep) = find_jump(&jump_indices, m.from) {
                     let mut nb = *s.board(q.l(), q.t(), player);
                     nb.set_piece(q.xy(), pic);
-                    if !has_physical_check(&nb, player) {
+                    let needs_test = is_royal_piece(pic) || safety(q.l(), q.t()).in_check;
+                    if !needs_test || !has_physical_check(&nb, player) {
                         let fa = line_axes[&m.from.l()] as u32;
                         locs.push(Entry::Arriving { m, b: nb, idx: dep, fa });
                     }

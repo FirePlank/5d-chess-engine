@@ -124,16 +124,12 @@ enum Axes {
 /// Destination board -> destination squares, in generation order.
 pub type MoveList = Vec<(Vec4, Bitboard)>;
 
-/// Emulates `std::map<vec4, bitboard_t>`: merge by key, iterate in key order.
-#[derive(Default)]
-struct TlMap(Vec<(Vec4, Bitboard)>);
-impl TlMap {
-    #[inline]
-    fn or_insert(&mut self, k: Vec4, bb: Bitboard) {
-        match self.0.binary_search_by(|e| e.0.cmp(&k)) {
-            Ok(i) => self.0[i].1 |= bb,
-            Err(i) => self.0.insert(i, (k, bb)),
-        }
+/// Merge (k, bb) into `out[start..]`, which is kept sorted by destination board.
+#[inline]
+fn region_insert(out: &mut MoveList, start: usize, k: Vec4, bb: Bitboard) {
+    match out[start..].binary_search_by(|e| e.0.cmp(&k)) {
+        Ok(i) => out[start + i].1 |= bb,
+        Err(i) => out.insert(start + i, (k, bb)),
     }
 }
 
@@ -529,8 +525,14 @@ impl Multiverse {
     /// Every destination square of the piece on `p`, in generation order.
     pub fn gen_piece_move(&self, p: Vec4, board_color: bool, out: &mut Vec<Vec4>) {
         let mut ml = MoveList::new();
-        self.gen_moves(p, board_color, &mut ml);
-        for (r, bb) in ml {
+        self.gen_piece_move_with(p, board_color, out, &mut ml);
+    }
+
+    /// `gen_piece_move` with a caller-provided scratch buffer.
+    pub fn gen_piece_move_with(&self, p: Vec4, board_color: bool, out: &mut Vec<Vec4>, scratch: &mut MoveList) {
+        scratch.clear();
+        self.gen_moves(p, board_color, scratch);
+        for &(r, bb) in scratch.iter() {
             for pos in marked_pos(bb) {
                 out.push(Vec4::from_xy(pos, r));
             }
@@ -652,7 +654,7 @@ impl Multiverse {
         }
     }
 
-    fn gen_compound_moves(&self, p: Vec4, c: bool, tl: Axes, xy: Axes, result: &mut TlMap) {
+    fn gen_compound_moves(&self, p: Vec4, c: bool, tl: Axes, xy: Axes, out: &mut MoveList, start: usize) {
         let pos = p.xy();
         let deltas: &[Vec4] = match tl {
             Axes::Orthogonal => &ORTHOGONAL_TL,
@@ -692,7 +694,7 @@ impl Multiverse {
                 q = q + d;
                 let cc = loc & cm;
                 if cc != 0 {
-                    result.or_insert(q.tl(), cc);
+                    region_insert(out, start, q.tl(), cc);
                 } else {
                     break;
                 }
@@ -720,23 +722,20 @@ impl Multiverse {
             }
             BISHOP_W | BISHOP_B => {
                 self.sp_slides(p, c, z, &DIAGONAL_TL, |k, bb| out.push((k, bb)));
-                let mut result = TlMap::default();
-                self.gen_compound_moves(p, c, Axes::Orthogonal, Axes::Orthogonal, &mut result);
-                out.extend_from_slice(&result.0);
+                let start = out.len();
+                self.gen_compound_moves(p, c, Axes::Orthogonal, Axes::Orthogonal, out, start);
             }
             PRINCESS_W | PRINCESS_B => {
-                let mut result = TlMap::default();
-                self.sp_slides(p, c, z, &ORTHOGONAL_TL, |k, bb| result.or_insert(k, bb));
-                self.sp_slides(p, c, z, &DIAGONAL_TL, |k, bb| result.or_insert(k, bb));
-                self.gen_compound_moves(p, c, Axes::Orthogonal, Axes::Orthogonal, &mut result);
-                out.extend_from_slice(&result.0);
+                let start = out.len();
+                self.sp_slides(p, c, z, &ORTHOGONAL_TL, |k, bb| region_insert(out, start, k, bb));
+                self.sp_slides(p, c, z, &DIAGONAL_TL, |k, bb| region_insert(out, start, k, bb));
+                self.gen_compound_moves(p, c, Axes::Orthogonal, Axes::Orthogonal, out, start);
             }
             QUEEN_W | QUEEN_B | ROYAL_QUEEN_W | ROYAL_QUEEN_B => {
-                let mut result = TlMap::default();
-                self.sp_slides(p, c, z, &ORTHOGONAL_TL, |k, bb| result.or_insert(k, bb));
-                self.sp_slides(p, c, z, &DIAGONAL_TL, |k, bb| result.or_insert(k, bb));
-                self.gen_compound_moves(p, c, Axes::Both, Axes::Both, &mut result);
-                out.extend_from_slice(&result.0);
+                let start = out.len();
+                self.sp_slides(p, c, z, &ORTHOGONAL_TL, |k, bb| region_insert(out, start, k, bb));
+                self.sp_slides(p, c, z, &DIAGONAL_TL, |k, bb| region_insert(out, start, k, bb));
+                self.gen_compound_moves(p, c, Axes::Both, Axes::Both, out, start);
             }
             PAWN_W | BRAWN_W | PAWN_UW | BRAWN_UW | PAWN_B | BRAWN_B | PAWN_UB | BRAWN_UB => {
                 let black = piece_color(piece);
@@ -820,17 +819,14 @@ impl Multiverse {
                 }
             }
             UNICORN_W | UNICORN_B => {
-                let mut r1 = TlMap::default();
-                self.gen_compound_moves(p, c, Axes::Orthogonal, Axes::Diagonal, &mut r1);
-                out.extend_from_slice(&r1.0);
-                let mut r2 = TlMap::default();
-                self.gen_compound_moves(p, c, Axes::Diagonal, Axes::Orthogonal, &mut r2);
-                out.extend_from_slice(&r2.0);
+                let s1 = out.len();
+                self.gen_compound_moves(p, c, Axes::Orthogonal, Axes::Diagonal, out, s1);
+                let s2 = out.len();
+                self.gen_compound_moves(p, c, Axes::Diagonal, Axes::Orthogonal, out, s2);
             }
             DRAGON_W | DRAGON_B => {
-                let mut result = TlMap::default();
-                self.gen_compound_moves(p, c, Axes::Diagonal, Axes::Diagonal, &mut result);
-                out.extend_from_slice(&result.0);
+                let start = out.len();
+                self.gen_compound_moves(p, c, Axes::Diagonal, Axes::Diagonal, out, start);
             }
             _ => panic!(
                 "gen_superphysical_moves: Unknown piece {}{}",
