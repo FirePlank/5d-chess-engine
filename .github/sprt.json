@@ -1,0 +1,12 @@
+{
+  "name": "sep_qsearch",
+  "old": "98f8d9d4a89efa4e8f9a04f615261fc987499562",
+  "games": 16000,
+  "shards": 40,
+  "tc": "movetime 100",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}
