@@ -287,6 +287,20 @@ impl Board {
         self.umove_mask &= !(zf | zt);
     }
 
+    /// Put the piece standing on `from` of `src` onto `to` of this board (capturing).
+    /// Same result as `set_piece(to, src.get_piece(from))`.
+    #[inline(always)]
+    pub fn place_from(&mut self, to: i32, src: &Board, from: i32) {
+        let (zf, zt) = (pmask(from), pmask(to));
+        for (bb, sb) in self.bbs.iter_mut().zip(src.bbs.iter()) {
+            *bb &= !zt;
+            if sb & zf != 0 {
+                *bb |= zt;
+            }
+        }
+        self.umove_mask &= !zt;
+    }
+
     /// Empty one square.
     #[inline(always)]
     pub fn clear_square(&mut self, pos: i32) {

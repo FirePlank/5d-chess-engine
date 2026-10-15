@@ -189,21 +189,28 @@ impl HcInfo {
 
     pub fn build_hc(s: &State) -> (HcInfo, SearchSpace) {
         let _p = crate::misc::prof::scope(0);
+        let st_scope = crate::misc::prof::scope(15);
         let ts = s.get_timeline_status();
         let playable = ts.playable();
         let (_present_t, player) = s.get_present();
         let mut line_axes: BTreeMap<i32, usize> = BTreeMap::new();
+        let (lines_lo, lines_hi) = s.get_lines_range();
+        // Axis of each existing timeline (playable ones), indexed by l - lines_lo.
+        let mut axis_of = vec![usize::MAX; (lines_hi - lines_lo + 1) as usize];
         for (axis, &l) in playable.iter().enumerate() {
             line_axes.insert(l, axis);
+            axis_of[(l - lines_lo) as usize] = axis;
         }
+        let axis_of_line = |l: i32| axis_of[(l - lines_lo) as usize];
         let mut stays: Vec<Vec<FullMove>> = vec![Vec::new(); playable.len()];
         let mut departures: Vec<Vec<Vec4>> = vec![Vec::new(); playable.len()];
         let mut arrivals: Vec<(i32, Vec<FullMove>)> = Vec::new();
+        drop(st_scope);
         let mut tos: Vec<Vec4> = Vec::new();
         let mut scratch = super::multiverse::MoveList::new();
         let gen_scope = crate::misc::prof::scope(1);
         for from in s.get_all_pieces(&playable) {
-            let source_axis = line_axes[&from.l()];
+            let source_axis = axis_of_line(from.l());
             let mut has_depart = false;
             tos.clear();
             s.multiverse().gen_piece_move_with(from, player, &mut tos, &mut scratch);
@@ -227,8 +234,12 @@ impl HcInfo {
         drop(gen_scope);
         arrivals.sort_by_key(|b| b.0);
         let max_branch = departures.iter().filter(|d| !d.is_empty()).count();
-        let mut jump_indices: Vec<(Vec4, Index)> = Vec::new();
-        let find_jump = |ji: &Vec<(Vec4, Index)>, from: Vec4| ji.iter().find(|j| j.0 == from).map(|j| j.1);
+        // Departure coordinate of each source square, per axis.
+        let mut jump_tab: Vec<[Index; 64]> = vec![[INVALID; 64]; playable.len()];
+        let find_jump = |jt: &Vec<[Index; 64]>, from: Vec4| {
+            let i = jt[axis_of_line(from.l())][from.xy() as usize];
+            if i == INVALID { None } else { Some(i) }
+        };
         let (size_x, size_y) = s.get_board_size();
         let mut axis_coords: Vec<Vec<Entry>> = Vec::with_capacity(playable.len() + max_branch);
 
@@ -248,7 +259,7 @@ impl HcInfo {
             safety_cache.push((l, t, r));
             r
         };
-        let is_royal_piece = |pc: Piece| matches!(to_white(piece_name(pc)), KING_W | ROYAL_QUEEN_W);
+        let ent_scope = crate::misc::prof::scope(12);
         for axis in 0..playable.len() {
             let l = playable[axis];
             let arriving = arrivals.iter().find(|b| b.0 == l).map(|b| &b.1);
@@ -294,7 +305,7 @@ impl HcInfo {
                 let needs_test = rs.in_check || (source.royal() | rs.pinned) & z != 0;
                 if !needs_test || !has_physical_check(&nb, player) {
                     locs.push(Entry::Departing { from: p, b: nb });
-                    jump_indices.push((p, idx));
+                    jump_tab[axis][p.xy() as usize] = idx;
                 }
             }
             if let Some(arr) = arriving {
@@ -302,18 +313,19 @@ impl HcInfo {
                     let (last_t, last_c) = s.get_timeline_end(m.to.l());
                     if m.to.t() == last_t && player == last_c {
                         let (p, q) = (m.from, m.to);
-                        let mut pic = s.get_piece(p, player);
-                        if to_white(piece_name(pic)) == BRAWN_W && (q.y() == 0 || q.y() == size_y - 1) {
-                            let promotion = promo_piece(m);
-                            if promotion != NO_PIECE {
-                                pic = if player { to_black(promotion) } else { promotion };
-                            }
-                        }
+                        let src = s.board(p.l(), p.t(), player);
                         let mut nb = *s.board(q.l(), q.t(), player);
-                        nb.set_piece(q.xy(), pic);
-                        let needs_test = is_royal_piece(pic) || safety(q.l(), q.t()).in_check;
+                        let zp = pmask(p.xy());
+                        let royal = src.royal() & zp != 0;
+                        if src.lrawn() & zp != 0 && (q.y() == 0 || q.y() == size_y - 1) && promo_piece(m) != NO_PIECE {
+                            let promotion = promo_piece(m);
+                            nb.set_piece(q.xy(), if player { to_black(promotion) } else { promotion });
+                        } else {
+                            nb.place_from(q.xy(), src, p.xy());
+                        }
+                        let needs_test = royal || safety(q.l(), q.t()).in_check;
                         if !needs_test || !has_physical_check(&nb, player) {
-                            let fa = line_axes[&m.from.l()] as u32;
+                            let fa = axis_of_line(m.from.l()) as u32;
                             locs.push(Entry::Arriving { m, b: nb, idx: INVALID, fa });
                         }
                     }
@@ -322,29 +334,34 @@ impl HcInfo {
             axis_coords.push(locs);
         }
 
+        drop(ent_scope);
+        let br_scope = crate::misc::prof::scope(13);
         let new_axis = axis_coords.len();
         let mut locs: Vec<Entry> = vec![Entry::Null];
         for (_, bucket) in &arrivals {
             for &m in bucket {
                 let (p, q) = (m.from, m.to);
-                let mut pic = s.get_piece(p, player);
-                if to_white(piece_name(pic)) == BRAWN_W && (q.y() == 0 || q.y() == size_y - 1) {
-                    let promotion = promo_piece(m);
-                    if promotion != NO_PIECE {
-                        pic = if player { to_black(promotion) } else { promotion };
-                    }
-                }
-                if let Some(dep) = find_jump(&jump_indices, m.from) {
+                if let Some(dep) = find_jump(&jump_tab, m.from) {
+                    let src = s.board(p.l(), p.t(), player);
                     let mut nb = *s.board(q.l(), q.t(), player);
-                    nb.set_piece(q.xy(), pic);
-                    let needs_test = is_royal_piece(pic) || safety(q.l(), q.t()).in_check;
+                    let zp = pmask(p.xy());
+                    let royal = src.royal() & zp != 0;
+                    if src.lrawn() & zp != 0 && (q.y() == 0 || q.y() == size_y - 1) && promo_piece(m) != NO_PIECE {
+                        let promotion = promo_piece(m);
+                        nb.set_piece(q.xy(), if player { to_black(promotion) } else { promotion });
+                    } else {
+                        nb.place_from(q.xy(), src, p.xy());
+                    }
+                    let needs_test = royal || safety(q.l(), q.t()).in_check;
                     if !needs_test || !has_physical_check(&nb, player) {
-                        let fa = line_axes[&m.from.l()] as u32;
+                        let fa = axis_of_line(m.from.l()) as u32;
                         locs.push(Entry::Arriving { m, b: nb, idx: dep, fa });
                     }
                 }
             }
         }
+        drop(br_scope);
+        let _fin = crate::misc::prof::scope(14);
         let new_l = s.new_line();
         let sign = signum(new_l);
         for i in 0..max_branch {
@@ -362,7 +379,7 @@ impl HcInfo {
         for n in 0..new_axis {
             for i in 0..axis_coords[n].len() {
                 if let Entry::Arriving { m, idx, .. } = &mut axis_coords[n][i] {
-                    match find_jump(&jump_indices, m.from) {
+                    match find_jump(&jump_tab, m.from) {
                         Some(d) => *idx = d,
                         None => {
                             universe[n].erase(i as Index);
@@ -804,13 +821,16 @@ pub enum SearchMode {
 /// was built from on every call (the state may be modified between calls if restored).
 pub struct HcCursor {
     pub ss: SearchSpace,
-    pub order: HcOrdering,
+    pub order: std::rc::Rc<HcOrdering>,
     mode: SearchMode,
     problems: usize,
 }
 
 impl HcCursor {
     pub fn new(ss: SearchSpace, order: HcOrdering, mode: SearchMode) -> Self {
+        HcCursor { ss, order: std::rc::Rc::new(order), mode, problems: 0 }
+    }
+    pub fn with_shared(ss: SearchSpace, order: std::rc::Rc<HcOrdering>, mode: SearchMode) -> Self {
         HcCursor { ss, order, mode, problems: 0 }
     }
 

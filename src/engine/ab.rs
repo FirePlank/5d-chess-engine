@@ -12,9 +12,54 @@ use crate::core::hypercuboid::{Entry, HcCursor, HcInfo, SearchMode};
 use crate::core::piece::*;
 use crate::core::state::{Mark, State};
 use crate::misc::integer_set::Index;
+use crate::misc::geometry::SearchSpace;
 use crate::misc::ordering::HcOrdering;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+
+/// Legal actions of a node in heuristic order. With `merge`, each branch-count subspace gets
+/// its own cursor and the best-scoring next action across them is returned, so time-travel
+/// actions compete with the non-branching ones instead of always coming after all of them.
+struct ActionGen {
+    cursors: Vec<HcCursor>,
+    heads: Vec<Option<(i32, MoveSeq)>>,
+    filled: Vec<bool>,
+}
+
+impl ActionGen {
+    fn new(ss: SearchSpace, order: HcOrdering, merge: bool) -> Self {
+        let order = std::rc::Rc::new(order);
+        let cursors: Vec<HcCursor> = if merge {
+            ss.hcs
+                .into_iter()
+                .map(|h| HcCursor::with_shared(SearchSpace::from_vec(vec![h]), order.clone(), SearchMode::Balanced))
+                .collect()
+        } else {
+            vec![HcCursor::with_shared(ss, order, SearchMode::Balanced)]
+        };
+        let n = cursors.len();
+        ActionGen { cursors, heads: vec![None; n], filled: vec![false; n] }
+    }
+
+    fn next(&mut self, info: &HcInfo, s: &State, score: &mut dyn FnMut(&MoveSeq) -> i32) -> Option<(i32, MoveSeq)> {
+        let mut best: Option<usize> = None;
+        // Later cursors hold fewer branches: they win ties.
+        for k in (0..self.cursors.len()).rev() {
+            if !self.filled[k] {
+                self.heads[k] = self.cursors[k].next(info, s).map(|a| (score(&a), a));
+                self.filled[k] = true;
+            }
+            if let Some((sc, _)) = &self.heads[k] {
+                if best.map(|b| *sc > self.heads[b].as_ref().unwrap().0).unwrap_or(true) {
+                    best = Some(k);
+                }
+            }
+        }
+        let k = best?;
+        self.filled[k] = false;
+        self.heads[k].take()
+    }
+}
 
 pub const MATE: i32 = 30000;
 pub const INF: i32 = 32000;
@@ -50,6 +95,10 @@ pub struct AbParams {
     pub lmr_min_index: usize,
     pub tt_mb: usize,
     pub q_fastpath: bool,
+    /// Interleave time-travel actions with non-branching ones by score.
+    pub merge_branches: bool,
+    /// Extend the search one ply when the side to move is in check.
+    pub check_ext: bool,
 }
 
 impl Default for AbParams {
@@ -65,6 +114,8 @@ impl Default for AbParams {
             lmr_min_index: 4,
             tt_mb: 64,
             q_fastpath: false,
+            merge_branches: false,
+            check_ext: false,
         }
     }
 }
@@ -407,7 +458,7 @@ impl AlphaBeta {
         }
         let (info, ss) = HcInfo::build_hc(s);
         let order = self.ordering(s, &info);
-        let mut cursor = HcCursor::new(ss, order, SearchMode::Balanced);
+        let mut agen = ActionGen::new(ss, order, self.params.merge_branches);
         let mut best = if in_check { -INF } else { stand };
         let mut tried = 0;
         let mut any = false;
@@ -415,7 +466,7 @@ impl AlphaBeta {
             if self.check_abort() {
                 return 0;
             }
-            let Some(act) = cursor.next(&info, s) else { break };
+            let Some((_, act)) = agen.next(&info, s, &mut |a| self.action_score(s, a, ply)) else { break };
             any = true;
             if !in_check && !Self::is_tactical(s, &act) {
                 break;
@@ -443,7 +494,10 @@ impl AlphaBeta {
         best
     }
 
-    fn negamax(&mut self, s: &mut State, depth: i32, ply: usize, mut alpha: i32, beta: i32, pv: bool) -> i32 {
+    fn negamax(&mut self, s: &mut State, mut depth: i32, ply: usize, mut alpha: i32, beta: i32, pv: bool) -> i32 {
+        if self.params.check_ext && ply < MAX_PLY / 2 && Self::in_check(s) {
+            depth += 1;
+        }
         if depth <= 0 {
             return self.qsearch(s, ply, alpha, beta, self.params.qdepth);
         }
@@ -506,7 +560,7 @@ impl AlphaBeta {
 
         let (info, ss) = HcInfo::build_hc(s);
         let order = self.ordering(s, &info);
-        let mut cursor = HcCursor::new(ss, order, SearchMode::Balanced);
+        let mut agen = ActionGen::new(ss, order, self.params.merge_branches);
         let mut generated = 0usize;
         let mut exhausted = false;
         while searched < cap && !exhausted {
@@ -515,17 +569,16 @@ impl AlphaBeta {
                 if self.check_abort() {
                     return 0;
                 }
-                match cursor.next(&info, s) {
+                match agen.next(&info, s, &mut |a| self.action_score(s, a, ply)) {
                     None => {
                         exhausted = true;
                         break;
                     }
-                    Some(act) => {
+                    Some((sc, act)) => {
                         generated += 1;
                         if tt_action.as_ref() == Some(&act) {
                             continue;
                         }
-                        let sc = self.action_score(s, &act, ply);
                         batch.push((sc, act));
                     }
                 }
@@ -657,6 +710,8 @@ impl Engine for AlphaBeta {
             ("qdepth", Some(x)) => self.params.qdepth = x as i32,
             ("qcap", Some(x)) => self.params.qcap = x as usize,
             ("q_fastpath", _) => self.params.q_fastpath = !matches!(value, OptionValue::Bool(false)),
+            ("merge_branches", _) => self.params.merge_branches = !matches!(value, OptionValue::Bool(false)),
+            ("check_ext", _) => self.params.check_ext = !matches!(value, OptionValue::Bool(false)),
             ("batch", Some(x)) => self.params.batch = (x as usize).max(1),
             ("pv_cap_mult", Some(x)) => self.params.pv_cap_mult = x as usize,
             ("Hash", Some(x)) => {
@@ -693,7 +748,7 @@ impl Engine for AlphaBeta {
         // Root actions (all of them, up to the root cap), ordered heuristically.
         let (hc, ss) = HcInfo::build_hc(root);
         let order = self.ordering(root, &hc);
-        let mut cursor = HcCursor::new(ss, order, SearchMode::Balanced);
+        let mut agen = ActionGen::new(ss, order, self.params.merge_branches);
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
         // Enumerating every root action can take seconds with many timelines: spend at most
         // a quarter of the budget on it (always keeping at least one action).
@@ -702,11 +757,8 @@ impl Engine for AlphaBeta {
             if !roots.is_empty() && gen_deadline.map(|d| Instant::now() >= d).unwrap_or(false) {
                 break;
             }
-            match cursor.next(&hc, root) {
-                Some(a) => {
-                    let sc = self.action_score(root, &a, 0);
-                    roots.push((sc, a));
-                }
+            match agen.next(&hc, root, &mut |a| self.action_score(root, a, 0)) {
+                Some(entry) => roots.push(entry),
                 None => break,
             }
         }
