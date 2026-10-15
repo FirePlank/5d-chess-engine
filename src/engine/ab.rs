@@ -652,7 +652,7 @@ impl AlphaBeta {
                 break;
             }
         }
-        if ok && s.submit::<false>() && s.first_check(s.get_present().1).is_none() {
+        if ok && s.submit::<false>() && !s.royal_capturable(s.get_present().1) {
             return Some(mark);
         }
         s.unmake(mark);

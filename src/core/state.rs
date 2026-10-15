@@ -10,6 +10,11 @@ use super::piece::*;
 use super::promotion::*;
 use super::vec4::Vec4;
 
+thread_local! {
+    /// Line storage for the check scans of `State` queries.
+    static CHECK_BUF: std::cell::Cell<CheckBuf> = std::cell::Cell::new(CheckBuf::default());
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MateType {
     None,
@@ -369,12 +374,21 @@ impl State {
     }
 
     pub fn has_phantom_check(&self) -> bool {
-        thread_local! {
-            static BUF: std::cell::Cell<CheckBuf> = std::cell::Cell::new(CheckBuf::default());
-        }
-        BUF.with(|b| {
+        CHECK_BUF.with(|b| {
             let cp = CheckPosition::for_phantom_in(self, b.take());
             let r = cp.first_check(!self.player, true).is_some();
+            b.set(cp.into_buf());
+            r
+        })
+    }
+
+    /// Whether `attacker` can capture a royal now: `first_check(attacker).is_some()`, by
+    /// attack scans instead of move generation.
+    pub fn royal_capturable(&self, attacker: bool) -> bool {
+        CHECK_BUF.with(|b| {
+            let (lo, hi) = self.get_lines_range();
+            let cp = CheckPosition::with_range_in(self, lo, hi, b.take());
+            let r = cp.first_check(attacker, true).is_some();
             b.set(cp.into_buf());
             r
         })
