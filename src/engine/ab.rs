@@ -404,6 +404,53 @@ impl AlphaBeta {
         sc
     }
 
+    /// The first `cap` actions of `s` in the order an interior node would try them (diagnostics).
+    pub fn node_order(&self, s: &State, cap: usize) -> Vec<MoveSeq> {
+        let (info, ss) = HcInfo::build_hc(s);
+        let order = self.ordering(s, &info);
+        let mut agen = ActionGen::new(ss, order, self.params.merge_branches);
+        let mut out = Vec::new();
+        let mut exhausted = false;
+        while out.len() < cap && !exhausted {
+            let mut batch: Vec<(i32, MoveSeq)> = Vec::new();
+            while batch.len() < self.params.batch {
+                match agen.next(&info, s, &mut |a| self.action_score(s, a, 1)) {
+                    None => {
+                        exhausted = true;
+                        break;
+                    }
+                    Some(x) => batch.push(x),
+                }
+            }
+            batch.sort_by(|a, b| b.0.cmp(&a.0));
+            out.extend(batch.into_iter().map(|x| x.1));
+        }
+        out.truncate(cap);
+        if let Ok(n) = std::env::var("CHECK_FIRST").map(|v| v.parse::<usize>().unwrap_or(0)) {
+            // Experiment: stable-partition the first n actions into checking ones first.
+            let n = n.min(out.len());
+            let mut c = s.clone();
+            c.enable_undo();
+            let gives: Vec<bool> = out[..n]
+                .iter()
+                .map(|a| {
+                    let m = Self::make(&mut c, a);
+                    let g = Self::in_check(&c);
+                    c.unmake(m);
+                    g
+                })
+                .collect();
+            let (mut chk, mut rest): (Vec<MoveSeq>, Vec<MoveSeq>) = (Vec::new(), Vec::new());
+            for (a, g) in out.drain(..n).zip(gives) {
+                if g { chk.push(a) } else { rest.push(a) }
+            }
+            chk.extend(rest);
+            chk.extend(out.drain(..));
+            out = chk;
+        }
+        out
+    }
+
     fn is_tactical(s: &State, act: &MoveSeq) -> bool {
         let h = s.get_board_size().1;
         act.iter().any(|m| {
@@ -758,6 +805,17 @@ impl Engine for AlphaBeta {
             ("travel_checks", _) => self.params.travel_checks = !matches!(value, OptionValue::Bool(false)),
             ("batch", Some(x)) => self.params.batch = (x as usize).max(1),
             ("pv_cap_mult", Some(x)) => self.params.pv_cap_mult = x as usize,
+            ("root_cap", Some(x)) => self.params.root_cap = (x as usize).max(1),
+            ("lmr_min_depth", Some(x)) => self.params.lmr_min_depth = x as i32,
+            ("lmr_min_index", Some(x)) => self.params.lmr_min_index = x as usize,
+            (k, Some(x)) if k.starts_with("lmp") && k[3..].parse::<usize>().is_ok() => {
+                let i = k[3..].parse::<usize>().unwrap();
+                if i >= self.params.lmp.len() {
+                    let last = *self.params.lmp.last().unwrap();
+                    self.params.lmp.resize(i + 1, last);
+                }
+                self.params.lmp[i] = x as usize;
+            }
             ("Hash", Some(x)) => {
                 self.params.tt_mb = x as usize;
                 let entries = ((x as usize) << 20) / 64;
