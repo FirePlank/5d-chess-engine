@@ -12,7 +12,7 @@ use super::{Limits, OptionValue};
 use crate::core::action::{Action, FullMove, MoveSeq};
 use crate::core::bitboard::{marked_pos, pmask};
 use crate::core::board::Board;
-use crate::core::check_position::{BoardOverlay, CheckBuf, CheckKind, CheckPosition};
+use crate::core::check_position::{BoardOverlay, CheckBuf, CheckKind, CheckPosition, SpReach};
 use crate::core::hypercuboid::{has_physical_check, BestFirstCursor, Entry, HcCursor, HcInfo};
 use crate::core::multiverse::next_turn;
 use crate::core::piece::*;
@@ -94,6 +94,8 @@ pub struct AlphaBeta {
     seek_mate: bool,
     /// Per-node buffers, reused down the recursion.
     bufs: Vec<Box<NodeBufs>>,
+    /// Evaluation terms of recently seen boards.
+    terms: Box<hce::TermCache>,
 }
 
 // The raw stop pointer is only dereferenced during `find_best_move`, while the borrow it
@@ -248,18 +250,24 @@ struct CheckDetector<'a> {
     s: &'a State,
     checks: Option<CheckPosition<'a>>,
     buf: CheckBuf,
+    /// Superphysical reach from the next board of each line with physical moves.
+    reach: Vec<(i32, SpReach)>,
 }
 
 impl<'a> CheckDetector<'a> {
-    fn new(info: &'a HcInfo, s: &'a State, buf: CheckBuf) -> Self {
-        CheckDetector { info, s, checks: None, buf }
+    fn new(info: &'a HcInfo, s: &'a State, scratch: &mut OrderScratch) -> Self {
+        let mut reach = std::mem::take(&mut scratch.reach);
+        reach.clear();
+        CheckDetector { info, s, checks: None, buf: std::mem::take(&mut scratch.checks), reach }
     }
 
-    fn into_buf(self) -> CheckBuf {
-        match self.checks {
+    /// Give the buffers back to `scratch`.
+    fn finish(self, scratch: &mut OrderScratch) {
+        scratch.checks = match self.checks {
             Some(c) => c.into_buf(),
             None => self.buf,
-        }
+        };
+        scratch.reach = self.reach;
     }
 
     fn gives_check(&mut self, axis: usize, coord: Index) -> bool {
@@ -278,6 +286,19 @@ impl<'a> CheckDetector<'a> {
         let player = s.get_present().1;
         let mv = mb.mv;
         let at = next_turn((mv.to.t(), player));
+        if mb.departure.is_none() {
+            // A physical move: only the moved piece's reach from its line's next board counts,
+            // and that board's surroundings are the same for every move on the line.
+            let l = mv.to.l();
+            let i = match self.reach.iter().position(|r| r.0 == l) {
+                Some(i) => i,
+                None => {
+                    self.reach.push((l, checks.sp_reach(l, 2 * at.0 + at.1 as i32 + 1)));
+                    self.reach.len() - 1
+                }
+            };
+            return self.reach[i].1.attacks(mb.result, mv.to.xy());
+        }
         let arrival = BoardOverlay { l: mv.new_position(s).l(), t: at.0, c: at.1, value: mb.result };
         let mask = pmask(mv.to.xy());
         let departure = mb.departure.map(|d| {
@@ -293,6 +314,7 @@ impl<'a> CheckDetector<'a> {
 struct OrderScratch {
     sort: Vec<(i32, Index)>,
     checks: CheckBuf,
+    reach: Vec<(i32, SpReach)>,
 }
 
 /// Buffers of one search node, reused by later nodes at the same recursion depth.
@@ -322,13 +344,14 @@ impl AlphaBeta {
             stop_ptr: std::ptr::null(),
             seek_mate: false,
             bufs: Vec::new(),
+            terms: Box::default(),
         }
     }
 
     #[inline]
-    fn static_eval(&self, s: &State) -> i32 {
+    fn static_eval(&mut self, s: &State) -> i32 {
         let _p = crate::misc::prof::scope(9);
-        let sd = hce::sides(s);
+        let sd = hce::sides_with(s, &mut *self.terms);
         let f = hce::features_from(&sd, s, hce::needs_checks(&self.hce));
         let base = hce::score(&f, &self.hce, s.get_present().1);
         match super::evalnet::embedded() {
@@ -425,7 +448,7 @@ impl AlphaBeta {
             scores.resize_with(dim, Vec::new);
         }
         let fba = info.first_branch_axis();
-        let mut detector = if checks { Some(CheckDetector::new(info, s, std::mem::take(&mut scratch.checks))) } else { None };
+        let mut detector = if checks { Some(CheckDetector::new(info, s, scratch)) } else { None };
         for n in 0..dim {
             // Branch axes share entries; score them once.
             if n > fba {
@@ -452,7 +475,7 @@ impl AlphaBeta {
             o.extend(v.iter().map(|x| x.1));
         }
         if let Some(d) = detector {
-            scratch.checks = d.into_buf();
+            d.finish(scratch);
         }
     }
 

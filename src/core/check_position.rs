@@ -71,6 +71,92 @@ fn v_of(t: Turn) -> i32 {
     2 * t.0 + t.1 as i32
 }
 
+/// The boards along one (t, l) direction, for compound slides (as `scan_compound_sliders`
+/// collects them).
+#[derive(Clone, Copy, Default)]
+struct CompoundRay {
+    count: usize,
+    occupied: [Bitboard; 8],
+    royal: [Bitboard; 8],
+    any_royal: Bitboard,
+}
+
+impl CompoundRay {
+    /// Whether a piece on `src` sliding with `diagonal` (else orthogonal) square steps along
+    /// this ray captures a royal.
+    #[inline]
+    fn hits(&self, src: i32, diagonal: bool) -> bool {
+        if self.any_royal == 0 {
+            return false;
+        }
+        let mask_fn: fn(i32, i32) -> Bitboard = if diagonal { bishop_copy_mask } else { rook_copy_mask };
+        let (mut occupied, mut royals) = (0u64, 0u64);
+        for n in 1..=self.count {
+            let mask = mask_fn(src, n as i32);
+            occupied |= mask & self.occupied[n];
+            royals |= mask & self.royal[n];
+        }
+        if self.count < 7 {
+            occupied |= mask_fn(src, self.count as i32 + 1);
+        }
+        royals != 0 && royals & if diagonal { bishop_attack(src, occupied) } else { rook_attack(src, occupied) } != 0
+    }
+}
+
+/// Superphysical reach of single pieces from one board: per movement component, the squares
+/// from which a piece of the board's side captures an enemy royal on another board. Answers
+/// the same question as a `gives_check` scan of that one piece, for every square at once.
+pub struct SpReach {
+    pure_orth: Bitboard,
+    pure_diag: Bitboard,
+    king: Bitboard,
+    knight: Bitboard,
+    pawn: Bitboard,
+    brawn: Bitboard,
+    /// `ORTHOGONAL_TL` then `DIAGONAL_TL`.
+    rays: [CompoundRay; 7],
+}
+
+impl SpReach {
+    /// Whether the piece on `sq` of `b` (the board this reach was computed for, or one that
+    /// differs from it only in its own pieces) captures an enemy royal superphysically.
+    pub fn attacks(&self, b: &Board, sq: i32) -> bool {
+        let z = pmask(sq);
+        if b.lrook() & z != 0 && self.pure_orth & z != 0 {
+            return true;
+        }
+        if b.lbishop() & z != 0 && self.pure_diag & z != 0 {
+            return true;
+        }
+        let (bishop, unicorn, dragon) = (b.lbishop() & z != 0, b.lunicorn() & z != 0, b.ldragon() & z != 0);
+        if bishop || unicorn {
+            for ray in &self.rays[..3] {
+                if (bishop && ray.hits(sq, false)) || (unicorn && ray.hits(sq, true)) {
+                    return true;
+                }
+            }
+        }
+        if unicorn || dragon {
+            for ray in &self.rays[3..] {
+                if (unicorn && ray.hits(sq, false)) || (dragon && ray.hits(sq, true)) {
+                    return true;
+                }
+            }
+        }
+        (b.lking() & z != 0 && self.king & z != 0)
+            || (b.lknight() & z != 0 && self.knight & z != 0)
+            || (b.lpawn() & z != 0 && self.pawn & z != 0)
+            || (b.lrawn() & z != 0 && self.brawn & z != 0)
+    }
+}
+
+/// Squares with a king-step (or no step) to a square of `r`.
+#[inline]
+fn king_spread(r: Bitboard) -> Bitboard {
+    let h = r | shift_east(r) | shift_west(r);
+    h | shift_north(h) | shift_south(h)
+}
+
 impl<'a> CheckPosition<'a> {
     pub fn new(s: &'a State) -> Self {
         let (a, b) = s.get_lines_range();
@@ -239,6 +325,64 @@ impl<'a> CheckPosition<'a> {
             self.lines[(sources[i] - self.first_line) as usize] = saved[i];
         }
         result
+    }
+
+    /// Superphysical reach of single pieces of the side to move on line `l` at half-turn `v`
+    /// (as a source board placed there would see the rest of this position).
+    pub fn sp_reach(&self, l: i32, v: i32) -> SpReach {
+        let c = v & 1 != 0;
+        let p0 = Vec4::new(0, 0, v >> 1, l);
+        let royals_at = |d: Vec4| self.board_at(p0 + d, c).map(|b| b.royal() & b.hostile(c)).unwrap_or(0);
+        let pure = |dirs: &[Vec4]| -> Bitboard {
+            let mut a = 0;
+            for &d in dirs {
+                let mut reach = !0u64;
+                let mut q = p0 + d;
+                while reach != 0 {
+                    let Some(b) = self.board_at(q, c) else { break };
+                    a |= reach & b.royal() & b.hostile(c);
+                    reach &= !b.occupied();
+                    q = q + d;
+                }
+            }
+            a
+        };
+        let mut rays = [CompoundRay::default(); 7];
+        for (ray, &d) in rays.iter_mut().zip(ORTHOGONAL_TL.iter().chain(DIAGONAL_TL.iter())) {
+            let mut q = p0 + d;
+            while ray.count < 7 {
+                let Some(b) = self.board_at(q, c) else { break };
+                ray.count += 1;
+                ray.occupied[ray.count] = b.occupied();
+                ray.royal[ray.count] = b.royal() & b.hostile(c);
+                ray.any_royal |= ray.royal[ray.count];
+                q = q + d;
+            }
+        }
+        let mut king = 0;
+        let mut knight = 0;
+        for d in ORTHOGONAL_TL {
+            king |= king_spread(royals_at(d));
+            let r1 = royals_at(d);
+            let e2 = shift_east(shift_east(r1));
+            let w2 = shift_west(shift_west(r1));
+            knight |= shift_north(shift_north(r1)) | shift_south(shift_south(r1)) | e2 | w2;
+            let r2 = royals_at(d * 2);
+            knight |= shift_north(r2) | shift_south(r2) | shift_east(r2) | shift_west(r2);
+        }
+        for d in DIAGONAL_TL {
+            king |= king_spread(royals_at(d));
+        }
+        for d in SP_KNIGHT {
+            knight |= royals_at(d);
+        }
+        let forward_l = if c { 1 } else { -1 };
+        let pawn = royals_at(Vec4::new(0, 0, -1, forward_l)) | royals_at(Vec4::new(0, 0, 1, forward_l));
+        // Sources whose forward square (or side squares) is in `r`.
+        let behind = |r: Bitboard| if c { shift_north(r) } else { shift_south(r) };
+        let rf = royals_at(Vec4::new(0, 0, 0, forward_l));
+        let brawn = behind(rf) | shift_east(rf) | shift_west(rf) | behind(royals_at(Vec4::new(0, 0, -1, 0)));
+        SpReach { pure_orth: pure(&ORTHOGONAL_TL), pure_diag: pure(&DIAGONAL_TL), king, knight, pawn, brawn, rays }
     }
 
     /// `gives_check` scanning only the overlaid boards' pieces on `mask`.

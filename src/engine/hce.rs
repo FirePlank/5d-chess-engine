@@ -368,7 +368,8 @@ fn board_extra(b: &Board, extra: &mut [[i32; ex::COUNT]; 2], h: i32) {
     }
 }
 
-fn board_sides(b: &Board, side: &mut [[i32; si::COUNT]; 2], active: bool, w: i32, h: i32) {
+/// Per-side terms of one active board.
+fn board_sides(b: &Board, side: &mut [[i32; si::COUNT]; 2], w: i32, h: i32) {
     let colors = [b.white() & !b.black(), b.black() & !b.white()];
     let kinds = [
         b.pawn(),
@@ -382,14 +383,10 @@ fn board_sides(b: &Board, side: &mut [[i32; si::COUNT]; 2], active: bool, w: i32
         b.dragon(),
         b.common_king(),
     ];
-    let base = if active { si::MAT_A } else { si::MAT_I };
     for c in 0..2 {
         for k in 0..10 {
-            side[c][base + k] += (kinds[k] & colors[c]).count_ones() as i32;
+            side[c][si::MAT_A + k] += (kinds[k] & colors[c]).count_ones() as i32;
         }
-    }
-    if !active {
-        return;
     }
     let groups = [b.knight(), b.bishop(), b.rook(), b.queen() | b.princess(), b.unicorn() | b.dragon() | b.common_king()];
     let att = [side_attacks(b, false), side_attacks(b, true)];
@@ -432,7 +429,79 @@ fn board_sides(b: &Board, side: &mut [[i32; si::COUNT]; 2], active: bool, w: i32
     }
 }
 
+/// One board's contribution to `Sides` while its timeline is active (its material counts are
+/// also what it contributes while inactive).
+#[derive(Clone, Copy)]
+pub struct BoardTerms {
+    side: [[i32; si::COUNT]; 2],
+    extra: [[i32; ex::COUNT]; 2],
+    heavy: i32,
+}
+
+impl BoardTerms {
+    const ZERO: BoardTerms = BoardTerms { side: [[0; si::COUNT]; 2], extra: [[0; ex::COUNT]; 2], heavy: 0 };
+}
+
+pub fn board_terms(b: &Board, w: i32, h: i32) -> BoardTerms {
+    let mut t = BoardTerms::ZERO;
+    board_sides(b, &mut t.side, w, h);
+    board_extra(b, &mut t.extra, h);
+    t.heavy = (b.queen() | b.bishop() | b.princess()).count_ones() as i32;
+    t
+}
+
+/// Where `sides` gets each board's terms.
+pub trait TermSource {
+    fn terms(&mut self, b: &Board, w: i32, h: i32) -> &BoardTerms;
+}
+
+/// Terms computed on every request.
+struct Direct(BoardTerms);
+impl TermSource for Direct {
+    fn terms(&mut self, b: &Board, w: i32, h: i32) -> &BoardTerms {
+        self.0 = board_terms(b, w, h);
+        &self.0
+    }
+}
+
+/// Board terms memoized by board contents (direct-mapped; a hit is an exact board match).
+pub struct TermCache {
+    size: (i32, i32),
+    slots: Vec<(Board, bool, BoardTerms)>,
+}
+
+impl Default for TermCache {
+    fn default() -> Self {
+        TermCache { size: (0, 0), slots: vec![(Board::default(), false, BoardTerms::ZERO); 1 << 12] }
+    }
+}
+
+impl TermSource for TermCache {
+    #[inline]
+    fn terms(&mut self, b: &Board, w: i32, h: i32) -> &BoardTerms {
+        if self.size != (w, h) {
+            self.size = (w, h);
+            self.slots.iter_mut().for_each(|e| e.1 = false);
+        }
+        let mut k = 0x9e3779b97f4a7c15u64;
+        for x in b.raw_bbs() {
+            k = (k ^ x).wrapping_mul(0xbf58476d1ce4e5b9);
+            k ^= k >> 29;
+        }
+        let i = (k >> 52) as usize & (self.slots.len() - 1);
+        let e = &mut self.slots[i];
+        if !e.1 || e.0 != *b {
+            *e = (*b, true, board_terms(b, w, h));
+        }
+        &e.2
+    }
+}
+
 pub fn sides(s: &State) -> Sides {
+    sides_with(s, &mut Direct(BoardTerms::ZERO))
+}
+
+pub fn sides_with(s: &State, src: &mut impl TermSource) -> Sides {
     let mut sd = Sides { side: [[0; si::COUNT]; 2], heavy: 0, active: 0, inactive: 0, mandatory: 0, extra: [[0; ex::COUNT]; 2] };
     let (l_min, l_max) = s.get_lines_range();
     let (amin, amax) = s.get_active_range();
@@ -442,13 +511,25 @@ pub fn sides(s: &State) -> Sides {
         let (t, c) = s.get_timeline_end(l);
         let b = s.board(l, t, c);
         let active = l >= amin && l <= amax;
-        board_sides(b, &mut sd.side, active, w, h);
+        let bt = src.terms(b, w, h);
         if active {
-            board_extra(b, &mut sd.extra, h);
-            sd.heavy += (b.queen() | b.bishop() | b.princess()).count_ones() as i32;
+            for c in 0..2 {
+                for i in 0..si::COUNT {
+                    sd.side[c][i] += bt.side[c][i];
+                }
+                for i in 0..ex::COUNT {
+                    sd.extra[c][i] += bt.extra[c][i];
+                }
+            }
+            sd.heavy += bt.heavy;
             sd.active += 1;
             sd.mandatory += ((t, c) == present) as i32;
         } else {
+            for c in 0..2 {
+                for k in 0..10 {
+                    sd.side[c][si::MAT_I + k] += bt.side[c][si::MAT_A + k];
+                }
+            }
             sd.inactive += 1;
         }
     }
