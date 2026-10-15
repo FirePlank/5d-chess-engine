@@ -271,7 +271,13 @@ impl AlphaBeta {
     #[inline]
     fn static_eval(&self, s: &State) -> i32 {
         let _p = crate::misc::prof::scope(9);
-        hce::evaluate(s, &self.hce)
+        let sd = hce::sides(s);
+        let f = hce::features_from(&sd, s, hce::needs_checks(&self.hce));
+        let base = hce::score(&f, &self.hce, s.get_present().1);
+        match super::evalnet::embedded() {
+            Some(net) => base + net.residual(&super::evalnet::inputs_from(&sd, s, base)),
+            None => base,
+        }
     }
 
     #[inline]
