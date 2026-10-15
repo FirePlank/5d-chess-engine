@@ -31,7 +31,7 @@ const LMP: [usize; 5] = [0, 16, 24, 32, 40];
 /// Multiplier for the PV-node action cap.
 const PV_CAP_MULT: usize = 3;
 /// Root actions considered.
-const ROOT_CAP: usize = 1000;
+const ROOT_CAP: usize = 4000;
 /// Actions generated (and sorted by action score) at a time at interior nodes.
 const BATCH: usize = 12;
 const QDEPTH: i32 = 3;
