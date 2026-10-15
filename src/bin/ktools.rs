@@ -640,7 +640,7 @@ fn main() {
                             problems.push(format!("ply {} mate {} before a played action", ply, mate_name(mate)));
                         }
                         if !is_legal_action(&before, &act) {
-                            problems.push(format!("ply {} action not legal: {}", ply, seq_string(&act)));
+                            problems.push(format!("ply {} action not legal: {}", ply, seq_string(&MoveSeq::from(&act[..]))));
                         }
                         if !s.submit::<false>() {
                             problems.push(format!("ply {} cannot submit", ply));
@@ -751,7 +751,7 @@ fn json_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     }
 }
 
-fn apply_seq(s: &State, a: &MoveSeq) -> Option<State> {
+fn apply_seq(s: &State, a: &[kairos::core::action::FullMove]) -> Option<State> {
     let mut c = s.clone();
     for fm in a {
         if !c.apply_move::<false>(*fm) {

@@ -844,7 +844,7 @@ impl HcInfo {
     }
 
     pub fn to_action(&self, p: &Point) -> MoveSeq {
-        let mut mvs = Vec::new();
+        let mut mvs = MoveSeq::new();
         for &(_, i) in &self.line_axes {
             match self.entry(i, p[i]) {
                 Entry::Physical { m, .. } | Entry::Arriving { m, .. } => mvs.push(*m),

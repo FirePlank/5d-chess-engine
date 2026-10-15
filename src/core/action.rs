@@ -11,7 +11,205 @@ pub struct FullMove {
     pub to: Vec4,
 }
 
-pub type MoveSeq = Vec<FullMove>;
+const SEQ_INLINE: usize = 3;
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+union SeqData {
+    inline: [FullMove; SEQ_INLINE],
+    heap: *mut FullMove,
+}
+
+/// The moves of an action, one per moved timeline. Up to three are stored inline; longer
+/// actions spill to the heap. All-zero bytes are a valid empty sequence.
+pub struct MoveSeq {
+    len: u32,
+    /// Heap capacity; 0 while the moves are inline.
+    cap: u32,
+    data: SeqData,
+}
+
+// SAFETY: the heap block is owned exclusively, like a `Vec`'s.
+unsafe impl Send for MoveSeq {}
+unsafe impl Sync for MoveSeq {}
+
+impl MoveSeq {
+    pub const fn new() -> Self {
+        MoveSeq { len: 0, cap: 0, data: SeqData { inline: [FullMove { from: Vec4(0), to: Vec4(0) }; SEQ_INLINE] } }
+    }
+
+    /// Whether the moves live on the heap.
+    #[inline(always)]
+    pub fn spilled(&self) -> bool {
+        self.cap != 0
+    }
+
+    #[inline(always)]
+    pub fn push(&mut self, m: FullMove) {
+        let n = self.len as usize;
+        if self.cap == 0 {
+            if n < SEQ_INLINE {
+                // SAFETY: inline storage is active while `cap == 0`.
+                unsafe { self.data.inline[n] = m };
+                self.len += 1;
+                return;
+            }
+            let mut v = Vec::with_capacity(2 * SEQ_INLINE + 2);
+            // SAFETY: as above.
+            v.extend_from_slice(unsafe { &self.data.inline });
+            v.push(m);
+            self.set_vec(v);
+            return;
+        }
+        // SAFETY: `heap`, `len` and `cap` describe a live allocation made by a `Vec`.
+        let mut v = unsafe { Vec::from_raw_parts(self.data.heap, n, self.cap as usize) };
+        v.push(m);
+        self.set_vec(v);
+    }
+
+    fn set_vec(&mut self, v: Vec<FullMove>) {
+        let mut v = std::mem::ManuallyDrop::new(v);
+        self.data.heap = v.as_mut_ptr();
+        self.len = v.len() as u32;
+        self.cap = v.capacity() as u32;
+    }
+
+    pub fn pop(&mut self) -> Option<FullMove> {
+        if self.len == 0 {
+            return None;
+        }
+        self.len -= 1;
+        Some(self.as_slice()[self.len as usize])
+    }
+
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    /// Replace the contents with `src` (keeping any heap storage).
+    #[inline]
+    pub fn assign(&mut self, src: &[FullMove]) {
+        if self.cap == 0 && src.len() <= SEQ_INLINE {
+            // SAFETY: inline storage is active while `cap == 0`.
+            unsafe { self.data.inline[..src.len()].copy_from_slice(src) };
+            self.len = src.len() as u32;
+            return;
+        }
+        self.clear();
+        for &m in src {
+            self.push(m);
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_slice(&self) -> &[FullMove] {
+        // SAFETY: the active storage holds `len` initialized moves.
+        unsafe {
+            if self.cap == 0 {
+                &self.data.inline[..self.len as usize]
+            } else {
+                std::slice::from_raw_parts(self.data.heap, self.len as usize)
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub fn as_mut_slice(&mut self) -> &mut [FullMove] {
+        // SAFETY: as above.
+        unsafe {
+            if self.cap == 0 {
+                &mut self.data.inline[..self.len as usize]
+            } else {
+                std::slice::from_raw_parts_mut(self.data.heap, self.len as usize)
+            }
+        }
+    }
+}
+
+impl Drop for MoveSeq {
+    fn drop(&mut self) {
+        if self.cap != 0 {
+            // SAFETY: the block came from a `Vec` with this capacity.
+            drop(unsafe { Vec::from_raw_parts(self.data.heap, self.len as usize, self.cap as usize) });
+        }
+    }
+}
+
+impl Default for MoveSeq {
+    fn default() -> Self {
+        MoveSeq::new()
+    }
+}
+
+impl Clone for MoveSeq {
+    fn clone(&self) -> Self {
+        let mut s = MoveSeq::new();
+        s.assign(self);
+        s
+    }
+    fn clone_from(&mut self, src: &Self) {
+        self.assign(src);
+    }
+}
+
+impl std::ops::Deref for MoveSeq {
+    type Target = [FullMove];
+    #[inline(always)]
+    fn deref(&self) -> &[FullMove] {
+        self.as_slice()
+    }
+}
+
+impl std::ops::DerefMut for MoveSeq {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut [FullMove] {
+        self.as_mut_slice()
+    }
+}
+
+impl PartialEq for MoveSeq {
+    #[inline]
+    fn eq(&self, o: &Self) -> bool {
+        self.as_slice() == o.as_slice()
+    }
+}
+impl Eq for MoveSeq {}
+
+impl std::hash::Hash for MoveSeq {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        self.as_slice().hash(h)
+    }
+}
+
+impl fmt::Debug for MoveSeq {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self.as_slice(), f)
+    }
+}
+
+impl FromIterator<FullMove> for MoveSeq {
+    fn from_iter<I: IntoIterator<Item = FullMove>>(it: I) -> Self {
+        let mut s = MoveSeq::new();
+        for m in it {
+            s.push(m);
+        }
+        s
+    }
+}
+
+impl From<&[FullMove]> for MoveSeq {
+    fn from(v: &[FullMove]) -> Self {
+        v.iter().copied().collect()
+    }
+}
+
+impl<'a> IntoIterator for &'a MoveSeq {
+    type Item = &'a FullMove;
+    type IntoIter = std::slice::Iter<'a, FullMove>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().iter()
+    }
+}
 
 pub mod special {
     pub const NONE: u8 = 0;

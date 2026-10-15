@@ -62,13 +62,16 @@ const NMP_DIV: i32 = 3;
 const DEFAULT_HASH_MB: usize = 64;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 enum Bound {
+    /// An unused slot.
+    Empty = 0,
     Exact,
     Lower,
     Upper,
 }
 
-#[derive(Clone)]
+/// All-zero bytes are an empty entry.
 struct TtEntry {
     key: u64,
     depth: i16,
@@ -77,11 +80,49 @@ struct TtEntry {
     action: MoveSeq,
 }
 
+/// The transposition table: zero-allocated, so creating or clearing it costs nothing until
+/// slots are used.
+struct TtTable {
+    entries: Vec<TtEntry>,
+    /// Some stored action spilled to the heap (entries then need dropping one by one).
+    spilled: bool,
+}
+
+impl TtTable {
+    fn new(mb: usize) -> Self {
+        Self::with_len(((mb << 20) / 64).next_power_of_two())
+    }
+
+    /// An empty table of `n` slots.
+    fn with_len(n: usize) -> Self {
+        let layout = std::alloc::Layout::array::<TtEntry>(n).expect("tt size");
+        // SAFETY: an all-zero `TtEntry` is valid (empty bound, empty inline action), and the
+        // block is allocated with the layout `Vec` uses for this capacity.
+        let entries = unsafe {
+            let p = std::alloc::alloc_zeroed(layout) as *mut TtEntry;
+            if p.is_null() {
+                std::alloc::handle_alloc_error(layout);
+            }
+            Vec::from_raw_parts(p, n, n)
+        };
+        TtTable { entries, spilled: false }
+    }
+}
+
+impl Drop for TtTable {
+    fn drop(&mut self) {
+        if !self.spilled {
+            // SAFETY: no entry owns heap memory, so nothing is leaked by skipping their drops.
+            unsafe { self.entries.set_len(0) };
+        }
+    }
+}
+
 pub struct AlphaBeta {
     hce: hce::Weights,
     /// Exchange values for the per-board capture search at quiescent leaves.
     local_vals: super::local::Values,
-    tt: Vec<Option<TtEntry>>,
+    tt: TtTable,
     history: Vec<i32>,
     killers: Vec<[Option<MoveSeq>; 2]>,
     nodes: u64,
@@ -127,10 +168,6 @@ fn mate_from_tt(score: i32, ply: usize) -> i32 {
     } else {
         score
     }
-}
-
-fn tt_table(mb: usize) -> Vec<Option<TtEntry>> {
-    vec![None; ((mb << 20) / 64).next_power_of_two()]
 }
 
 /// Static piece values for capture ordering (MVV-LVA).
@@ -334,7 +371,7 @@ impl AlphaBeta {
         AlphaBeta {
             local_vals: super::local::values_from(&hce[hce::fi::MAT_A..hce::fi::MAT_A + 10]),
             hce,
-            tt: tt_table(DEFAULT_HASH_MB),
+            tt: TtTable::new(DEFAULT_HASH_MB),
             history: vec![0; 1 << 16],
             killers: vec![[None, None]; MAX_PLY + 1],
             nodes: 0,
@@ -362,21 +399,24 @@ impl AlphaBeta {
 
     #[inline]
     fn tt_slot(&self, key: u64) -> usize {
-        (key as usize) & (self.tt.len() - 1)
+        (key as usize) & (self.tt.entries.len() - 1)
     }
 
     fn tt_probe(&self, key: u64) -> Option<&TtEntry> {
-        self.tt[self.tt_slot(key)].as_ref().filter(|e| e.key == key)
+        let e = &self.tt.entries[self.tt_slot(key)];
+        if e.bound != Bound::Empty && e.key == key { Some(e) } else { None }
     }
 
     fn tt_store(&mut self, key: u64, depth: i32, bound: Bound, score: i32, action: &MoveSeq) {
         let slot = self.tt_slot(key);
-        let replace = match &self.tt[slot] {
-            None => true,
-            Some(e) => e.key != key || depth as i16 >= e.depth - 1 || bound == Bound::Exact,
-        };
-        if replace {
-            self.tt[slot] = Some(TtEntry { key, depth: depth as i16, bound, score, action: action.clone() });
+        let e = &mut self.tt.entries[slot];
+        if e.bound == Bound::Empty || e.key != key || depth as i16 >= e.depth - 1 || bound == Bound::Exact {
+            e.key = key;
+            e.depth = depth as i16;
+            e.bound = bound;
+            e.score = score;
+            e.action.assign(action);
+            self.tt.spilled |= e.action.spilled();
         }
     }
 
@@ -798,7 +838,7 @@ impl AlphaBeta {
         }
 
         let mut best = -INF;
-        let mut best_action: MoveSeq = Vec::new();
+        let mut best_action = MoveSeq::new();
         let mut searched = 0usize;
         let cap = {
             let base = LMP[(depth as usize).min(LMP.len() - 1)];
@@ -993,9 +1033,7 @@ fn action_text(s: &State, act: &MoveSeq) -> String {
 
 impl AlphaBeta {
     pub fn new_game(&mut self) {
-        for e in self.tt.iter_mut() {
-            *e = None;
-        }
+        self.tt = TtTable::with_len(self.tt.entries.len());
         for h in self.history.iter_mut() {
             *h = 0;
         }
@@ -1005,7 +1043,7 @@ impl AlphaBeta {
     pub fn set_option(&mut self, key: &str, value: &OptionValue) -> bool {
         match (key, value.as_f64()) {
             ("Hash", Some(mb)) => {
-                self.tt = tt_table((mb as usize).max(1));
+                self.tt = TtTable::new((mb as usize).max(1));
                 true
             }
             _ => false,
