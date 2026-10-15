@@ -108,17 +108,21 @@ struct BuildScratch {
     ml: MoveList,
     /// Departure coordinate of each source square, per axis.
     jump_tab: Vec<[Index; 64]>,
-    safety: Vec<(i32, i32, RoyalSafety)>,
+    /// (build stamp, per-board royal safety table).
+    safety: (u32, Vec<(u32, RoyalSafety)>),
     group_slots: GroupSlots,
 }
 
 #[derive(Default)]
 struct AxisGroups {
     nonjump: IntegerSet,
-    /// (departure axis, departure coordinate, arrivals depending on it)
+    /// (departure axis, departure coordinate, arrivals depending on it); the first
+    /// `dep_len` are in use (the rest keep their storage).
     by_dep: Vec<(u32, Index, IntegerSet)>,
-    /// (departure axis, all arrivals from it)
+    dep_len: usize,
+    /// (departure axis, all arrivals from it); the first `from_len` are in use.
     by_from: Vec<(u32, IntegerSet)>,
+    from_len: usize,
 }
 
 /// Position of each departure's (and departure axis') group while one `AxisGroups` is
@@ -150,9 +154,9 @@ impl GroupSlots {
 impl AxisGroups {
     /// Group `entries` (their arrivals come from `axes` departure axes).
     fn rebuild(&mut self, entries: &[Entry], axes: usize, slots: &mut GroupSlots) {
-        self.nonjump = IntegerSet::new();
-        self.by_dep.clear();
-        self.by_from.clear();
+        self.nonjump.clear();
+        self.dep_len = 0;
+        self.from_len = 0;
         slots.begin(axes);
         let stamp = slots.stamp;
         for (i, e) in entries.iter().enumerate() {
@@ -164,14 +168,28 @@ impl AxisGroups {
                     // (departure axis, departure square) identifies the departure coordinate.
                     let slot = &mut slots.dep[fa as usize * 64 + m.from.xy() as usize];
                     if slot.0 != stamp {
-                        *slot = (stamp, self.by_dep.len() as u32);
-                        self.by_dep.push((fa, idx, IntegerSet::new()));
+                        *slot = (stamp, self.dep_len as u32);
+                        if self.dep_len == self.by_dep.len() {
+                            self.by_dep.push((fa, idx, IntegerSet::new()));
+                        } else {
+                            let e = &mut self.by_dep[self.dep_len];
+                            (e.0, e.1) = (fa, idx);
+                            e.2.clear();
+                        }
+                        self.dep_len += 1;
                     }
                     self.by_dep[slot.1 as usize].2.insert(i);
                     let slot = &mut slots.from[fa as usize];
                     if slot.0 != stamp {
-                        *slot = (stamp, self.by_from.len() as u32);
-                        self.by_from.push((fa, IntegerSet::new()));
+                        *slot = (stamp, self.from_len as u32);
+                        if self.from_len == self.by_from.len() {
+                            self.by_from.push((fa, IntegerSet::new()));
+                        } else {
+                            let e = &mut self.by_from[self.from_len];
+                            e.0 = fa;
+                            e.1.clear();
+                        }
+                        self.from_len += 1;
                     }
                     self.by_from[slot.1 as usize].1.insert(i);
                 }
@@ -378,14 +396,24 @@ impl HcInfo {
         // Royal safety per board: only royal moves, pinned pieces, en passant or a board
         // already in check can leave the mover's royal attacked, so most results skip the
         // full check test.
-        safety.clear();
+        // Memoized per board, by (line, turn) (entries stamped with this build).
+        let nt = (lines_lo..=lines_hi).map(|l| s.get_timeline_end(l).0).max().unwrap_or(0) as usize + 1;
+        let need = (lines_hi - lines_lo + 1) as usize * nt;
+        if safety.1.len() < need {
+            safety.1.resize(need, (0, RoyalSafety { in_check: false, pinned: 0 }));
+        }
+        safety.0 = safety.0.wrapping_add(1);
+        if safety.0 == 0 {
+            safety.1.iter_mut().for_each(|e| e.0 = 0);
+            safety.0 = 1;
+        }
+        let stamp = safety.0;
         let mut safety = |l: i32, t: i32| -> RoyalSafety {
-            if let Some(e) = safety.iter().find(|e| e.0 == l && e.1 == t) {
-                return e.2;
+            let e = &mut safety.1[(l - lines_lo) as usize * nt + t as usize];
+            if e.0 != stamp {
+                *e = (stamp, s.board(l, t, player).royal_safety(player));
             }
-            let r = s.board(l, t, player).royal_safety(player);
-            safety.push((l, t, r));
-            r
+            e.1
         };
         let ent_scope = crate::misc::prof::scope(12);
         if axis_coords.len() < np {
@@ -590,7 +618,7 @@ impl HcInfo {
             // Arrivals whose departure left the hypercuboid can never be paired.
             if n < self.new_axis {
                 let mut ghost: Option<IntegerSet> = None;
-                for (fa, dep, set) in &grp.by_dep {
+                for (fa, dep, set) in &grp.by_dep[..grp.dep_len] {
                     if !hc[*fa as usize].contains(*dep) && set.intersects(&hc[n]) {
                         ghost.get_or_insert_with(IntegerSet::new).or_assign(set);
                     }
@@ -601,7 +629,7 @@ impl HcInfo {
             } else {
                 let gs = branch_ghosts.get_or_insert_with(|| {
                     let mut g = IntegerSet::new();
-                    for (fa, dep, set) in &grp.by_dep {
+                    for (fa, dep, set) in &grp.by_dep[..grp.dep_len] {
                         if !hc[*fa as usize].contains(*dep) {
                             g.or_assign(set);
                         }
@@ -616,7 +644,7 @@ impl HcInfo {
             let live = &hc[n];
             let need_nonjump = live.intersects(&grp.nonjump);
             let mut needed = need_nonjump as usize;
-            for (fa, set) in &grp.by_from {
+            for (fa, set) in &grp.by_from[..grp.from_len] {
                 // An edge already claimed from the other endpoint keeps its first pairing.
                 if edge_refs[*fa as usize * dim + n] == INVALID && set.intersects(live) {
                     want[*fa as usize] = true;

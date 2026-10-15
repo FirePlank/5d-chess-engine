@@ -270,7 +270,7 @@ impl State {
         if d.tl() == Vec4::ZERO {
             let b = *self.m.board(p.l(), p.t(), player);
             let z = pmask(p.xy());
-            let nb = if b.lpawn() & z != 0 && d.x() != 0 && b.get_piece(q.xy()) == NO_PIECE {
+            let nb = if b.lpawn() & z != 0 && d.x() != 0 && b.occupied() & pmask(q.xy()) == 0 {
                 b.replace_piece(ppos(q.x(), p.y()), NO_PIECE).move_piece(p.xy(), q.xy())
             } else if b.lpawn() & z != 0 && (q.y() == 0 || q.y() == size_y - 1) {
                 if self.promotions == PromotionOptions::NONE {
@@ -289,38 +289,14 @@ impl State {
             self.append(p.l(), nb);
         } else if (q.t(), player) == self.m.get_timeline_end(q.l()) {
             let b = *self.m.board(p.l(), p.t(), player);
-            let pic = piece_name(b.get_piece(p.xy()));
             self.append(p.l(), b.replace_piece(p.xy(), NO_PIECE));
-            let z = pmask(p.xy());
-            let cb = *self.m.board(q.l(), q.t(), player);
-            let nb = if b.lrawn() & z != 0 && (q.y() == 0 || q.y() == size_y - 1) {
-                if self.promotions == PromotionOptions::NONE {
-                    cb.replace_piece(q.xy(), pic)
-                } else {
-                    let promoted = if player { to_black(promote_to) } else { promote_to };
-                    cb.replace_piece(q.xy(), promoted)
-                }
-            } else {
-                cb.replace_piece(q.xy(), pic)
-            };
+            let nb = self.arrival_board(&b, fm, promote_to);
             self.append(q.l(), nb);
         } else {
             let b = *self.m.board(p.l(), p.t(), player);
-            let pic = piece_name(b.get_piece(p.xy()));
             self.append(p.l(), b.replace_piece(p.xy(), NO_PIECE));
-            let xb = *self.m.board(q.l(), q.t(), player);
             let (t, c) = next_turn((q.t(), player));
-            let z = pmask(p.xy());
-            let nb = if b.lrawn() & z != 0 && (q.y() == 0 || q.y() == size_y - 1) {
-                if self.promotions == PromotionOptions::NONE {
-                    xb.replace_piece(q.xy(), pic)
-                } else {
-                    let promoted = if player { to_black(promote_to) } else { promote_to };
-                    xb.replace_piece(q.xy(), promoted)
-                }
-            } else {
-                xb.replace_piece(q.xy(), pic)
-            };
+            let nb = self.arrival_board(&b, fm, promote_to);
             let nl = self.new_line();
             if self.track {
                 self.ops.push(Op::Insert(nl, self.m.ranges()));
@@ -332,6 +308,20 @@ impl State {
             }
         }
         true
+    }
+
+    /// The board a piece jumping from `src` lands on: its target board with the piece (or
+    /// the piece a brawn promotes to) on the destination square.
+    fn arrival_board(&self, src: &Board, fm: FullMove, promote_to: Piece) -> Board {
+        let (p, q) = (fm.from, fm.to);
+        let (_, size_y) = self.m.get_board_size();
+        let mut nb = *self.m.board(q.l(), q.t(), self.player);
+        if src.lrawn() & pmask(p.xy()) != 0 && (q.y() == 0 || q.y() == size_y - 1) && self.promotions != PromotionOptions::NONE {
+            nb.set_piece(q.xy(), if self.player { to_black(promote_to) } else { promote_to });
+        } else {
+            nb.place_from(q.xy(), src, p.xy());
+        }
+        nb
     }
 
     pub fn normalize_promotion(&self, mut mv: ExtMove) -> Option<ExtMove> {

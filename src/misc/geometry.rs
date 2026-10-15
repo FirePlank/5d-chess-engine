@@ -15,7 +15,7 @@ pub struct Hc {
 thread_local! {
     static HC_POOL: std::cell::RefCell<Vec<Vec<u64>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
-const HC_POOL_MAX: usize = 1 << 12;
+const HC_POOL_MAX: usize = 1 << 16;
 
 /// A word buffer holding a copy of `src` (from the pool when one is free).
 #[inline]

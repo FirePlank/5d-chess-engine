@@ -361,8 +361,7 @@ impl Board {
     #[inline]
     pub fn move_piece(&self, from: i32, to: i32) -> Board {
         let mut b = *self;
-        b.set_piece(to, self.get_piece(from));
-        b.set_piece(from, NO_PIECE);
+        b.transfer(from, to);
         b
     }
 
