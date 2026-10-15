@@ -52,7 +52,7 @@ fn lmr(depth: i32, index: usize) -> i32 {
 const CHECK_BONUS: i32 = 30_000;
 /// Reverse futility pruning: at non-PV nodes up to this depth, return the static eval when
 /// it beats beta by RFP_MARGIN per ply.
-const RFP_DEPTH: i32 = 2;
+const RFP_DEPTH: i32 = 3;
 const RFP_MARGIN: i32 = 200;
 /// Null move (a pass, i.e. a phantom turn): at non-PV nodes from this depth, when the static
 /// eval is at least beta, search the pass with depth reduced by NMP_R + depth / NMP_DIV.
