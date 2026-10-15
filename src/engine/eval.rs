@@ -48,7 +48,7 @@ impl Default for EvalParams {
             common_king: 300,
             inactive_weight: 8,
             timeline_slot: 30,
-            timeline_slot_scaled: 0,
+            timeline_slot_scaled: 300,
             tempo: 15,
             center_knight: 8,
             center_bishop: 5,
