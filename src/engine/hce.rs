@@ -6,7 +6,7 @@ use crate::core::board::Board;
 use crate::core::check_position::CheckPosition;
 use crate::core::state::State;
 
-pub const NF: usize = 53;
+pub const NF: usize = 55;
 
 /// Feature indices.
 pub mod fi {
@@ -58,6 +58,11 @@ pub mod fi {
     pub const ISOLATED: usize = 50;
     pub const KING_PROX: usize = 51;
     pub const UNDEVELOPED: usize = 52;
+    /// Own non-pawn pieces on neighbouring timelines' latest boards within two squares of
+    /// an enemy royal (they can strike across timelines).
+    pub const KING_PROX_5D: usize = 53;
+    /// Own queens within two squares of an enemy royal on its board.
+    pub const QUEEN_PROX: usize = 54;
 }
 
 pub const FEATURE_NAMES: [&str; NF] = [
@@ -68,6 +73,7 @@ pub const FEATURE_NAMES: [&str; NF] = [
     "tl_slots_heavy", "k_holes", "k_knights", "k_open_orth", "k_open_diag", "k_shield", "k_zone_att", "mob_knight",
     "mob_bishop", "mob_rook", "mob_queen", "mob_king", "hanging", "royal_att", "tempo", "active_lines",
     "checks_5d", "sp_checks", "mandatory", "passed", "doubled", "isolated", "king_prox", "undeveloped",
+    "king_prox_5d", "queen_prox",
 ];
 
 pub type Features = [i32; NF];
@@ -96,51 +102,59 @@ pub fn default_weights() -> Weights {
 /// Weights used by the alpha-beta search with `use_hce` (Texel-tuned, see bin/tune.rs).
 pub fn tuned_weights() -> Weights {
     weights_by_name(&[
-        ("mat_a_pawn", 143.7),
+        ("mat_a_pawn", 180.1),
         ("mat_a_brawn", 150.0),
-        ("mat_a_knight", -206.1),
-        ("mat_a_bishop", 414.5),
-        ("mat_a_rook", 372.7),
+        ("mat_a_knight", 79.2),
+        ("mat_a_bishop", 974.4),
+        ("mat_a_rook", 630.4),
         ("mat_a_queen", 1250.0),
         ("mat_a_princess", 900.0),
         ("mat_a_unicorn", 250.0),
         ("mat_a_dragon", 150.0),
         ("mat_a_cking", 300.0),
-        ("mat_i_pawn", -134.1),
+        ("mat_i_pawn", 75.1),
         ("mat_i_brawn", 75.0),
-        ("mat_i_knight", 14.2),
-        ("mat_i_bishop", 275.1),
-        ("mat_i_rook", -34.9),
-        ("mat_i_queen", 1276.4),
+        ("mat_i_knight", 339.0),
+        ("mat_i_bishop", 870.7),
+        ("mat_i_rook", 393.3),
+        ("mat_i_queen", 1173.5),
         ("mat_i_princess", 450.0),
         ("mat_i_unicorn", 125.0),
         ("mat_i_dragon", 75.0),
         ("mat_i_cking", 150.0),
-        ("cent_knight", 77.4),
-        ("cent_bishop", 106.1),
-        ("cent_rook", -10.3),
-        ("cent_queen", -32.2),
+        ("cent_knight", 119.5),
+        ("cent_bishop", 59.3),
+        ("cent_rook", -64.3),
+        ("cent_queen", -54.8),
         ("cent_other", 2.0),
-        ("pawn_adv", 11.1),
-        ("pawn_near", -265.5),
-        ("king_cent", -308.8),
-        ("tl_slots", 1915.8),
-        ("tl_slots_heavy", 37.5),
-        ("k_holes", 157.4),
-        ("k_knights", 2511.5),
-        ("k_open_orth", -323.7),
-        ("k_open_diag", -3.4),
-        ("k_shield", 832.8),
-        ("k_zone_att", -337.9),
-        ("mob_knight", 72.4),
-        ("mob_bishop", 51.7),
-        ("mob_rook", -1.5),
-        ("mob_queen", 155.9),
-        ("mob_king", -299.6),
-        ("hanging", -24.1),
-        ("royal_att", -2985.0),
-        ("tempo", 734.8),
-        ("active_lines", 75.5),
+        ("pawn_adv", 43.4),
+        ("pawn_near", -198.7),
+        ("king_cent", -258.9),
+        ("tl_slots", 2901.0),
+        ("tl_slots_heavy", -14.5),
+        ("k_holes", -44.8),
+        ("k_knights", 2334.4),
+        ("k_open_orth", -353.5),
+        ("k_open_diag", -1.4),
+        ("k_shield", 883.4),
+        ("k_zone_att", -426.3),
+        ("mob_knight", 20.4),
+        ("mob_bishop", 57.9),
+        ("mob_rook", -11.3),
+        ("mob_queen", 224.0),
+        ("mob_king", -158.9),
+        ("hanging", -30.3),
+        ("royal_att", -2133.4),
+        ("tempo", 430.8),
+        ("active_lines", -32.1),
+        ("checks_5d", 0.0),
+        ("sp_checks", 0.0),
+        ("mandatory", 533.6),
+        ("passed", -148.4),
+        ("doubled", -49.3),
+        ("isolated", -60.2),
+        ("king_prox", 1151.3),
+        ("undeveloped", -345.3),
     ])
 }
 
@@ -301,7 +315,9 @@ pub mod ex {
     pub const KING_PROX: usize = 3;
     /// Own knights and bishops still on the back rank.
     pub const UNDEVELOPED: usize = 4;
-    pub const COUNT: usize = 5;
+    pub const KING_PROX_5D: usize = 5;
+    pub const QUEEN_PROX: usize = 6;
+    pub const COUNT: usize = 7;
 }
 
 /// Squares within king distance 2.
@@ -341,7 +357,9 @@ fn board_extra(b: &Board, extra: &mut [[i32; ex::COUNT]; 2], h: i32) {
         }
         let pieces = me & !b.lpawn() & !b.royal();
         for k in marked_pos(b.royal() & them) {
-            f[ex::KING_PROX] += (ring2(k) & pieces).count_ones() as i32;
+            let r = ring2(k);
+            f[ex::KING_PROX] += (r & pieces).count_ones() as i32;
+            f[ex::QUEEN_PROX] += (r & b.queen() & me).count_ones() as i32;
         }
         let back = if c == 0 { 0xff } else { 0xffu64 << (8 * (h - 1)) };
         f[ex::UNDEVELOPED] += ((b.knight() | b.bishop()) & me & back).count_ones() as i32;
@@ -432,6 +450,26 @@ pub fn sides(s: &State) -> Sides {
             sd.inactive += 1;
         }
     }
+    // Pieces on neighbouring timelines near each active royal.
+    for l in amin..=amax {
+        let (t, c) = s.get_timeline_end(l);
+        let b = s.board(l, t, c);
+        for col in 0..2usize {
+            let mine = if col == 0 { b.white() & !b.black() } else { b.black() & !b.white() };
+            for k in marked_pos(b.royal() & mine) {
+                let r = ring2(k);
+                for l2 in (l - 2).max(l_min)..=(l + 2).min(l_max) {
+                    if l2 == l {
+                        continue;
+                    }
+                    let (t2, c2) = s.get_timeline_end(l2);
+                    let b2 = s.board(l2, t2, c2);
+                    let enemy = if col == 0 { b2.black() & !b2.white() } else { b2.white() & !b2.black() };
+                    sd.extra[1 - col][ex::KING_PROX_5D] += (r & enemy & !b2.lpawn() & !b2.royal()).count_ones() as i32;
+                }
+            }
+        }
+    }
     let (l0_min, l0_max) = s.get_initial_lines_range();
     let white_created = l_max - l0_max;
     let black_created = l0_min - l_min;
@@ -491,6 +529,8 @@ pub fn features_from(sd: &Sides, s: &State, checks: bool) -> Features {
     f[fi::ISOLATED] = e(ex::ISOLATED);
     f[fi::KING_PROX] = e(ex::KING_PROX);
     f[fi::UNDEVELOPED] = e(ex::UNDEVELOPED);
+    f[fi::KING_PROX_5D] = e(ex::KING_PROX_5D);
+    f[fi::QUEEN_PROX] = e(ex::QUEEN_PROX);
     f
 }
 
