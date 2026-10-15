@@ -34,6 +34,8 @@ const PV_CAP_MULT: usize = 3;
 const ROOT_CAP: usize = 1000;
 /// Actions generated (and sorted by action score) at a time at interior nodes.
 const BATCH: usize = 12;
+const QDEPTH: i32 = 3;
+const QCAP: usize = 10;
 const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
@@ -569,17 +571,23 @@ impl AlphaBeta {
         if Self::in_check(s) { -(MATE - ply as i32) } else { 0 }
     }
 
-    fn qsearch(&mut self, s: &mut State, ply: usize, alpha: i32, beta: i32) -> i32 {
+    fn qsearch(&mut self, s: &mut State, ply: usize, mut alpha: i32, beta: i32, qd: i32) -> i32 {
         self.nodes += 1;
         if self.check_abort() {
             return 0;
         }
         let stand = self.static_eval(s);
         let in_check = Self::in_check(s);
-        if !in_check && (stand >= beta || ply >= MAX_PLY) {
-            return stand;
+        // Royal captures are threatened: standing pat is unsound, so search evasions.
+        if !in_check {
+            if stand >= beta {
+                return stand;
+            }
+            alpha = alpha.max(stand);
         }
-        let _ = alpha;
+        if qd <= 0 || ply >= MAX_PLY {
+            return if in_check { stand } else { alpha };
+        }
         if !in_check {
             // Moves on different boards don't interact (barring jumps between boards), so
             // the pending captures resolve board by board and their gains add up.
@@ -595,13 +603,39 @@ impl AlphaBeta {
             }
             return stand + gain;
         }
-        // In check at a leaf: only whether any legal action exists matters (none is mate);
-        // otherwise the static eval, which already charges for the attacked royal, stands.
         let (info, ss) = HcInfo::build_hc(s);
-        if info.search(s, ss).next().is_none() {
+        // In check: search the evasions.
+        let mut agen = HcCursor::new(ss, self.node_ordering(s, &info, false).order);
+        let mut best = -INF;
+        let mut any = false;
+        let mut tried = 0;
+        while tried < QCAP {
+            if self.check_abort() {
+                return 0;
+            }
+            let Some(act) = agen.next(&info, s) else { break };
+            any = true;
+            tried += 1;
+            let mark = Self::make(s, &act);
+            let v = -self.qsearch(s, ply + 1, -beta, -alpha, qd - 1);
+            s.unmake(mark);
+            if self.aborted {
+                return 0;
+            }
+            if v > best {
+                best = v;
+                if v > alpha {
+                    alpha = v;
+                    if v >= beta {
+                        break;
+                    }
+                }
+            }
+        }
+        if !any {
             return Self::terminal_score(s, ply);
         }
-        stand
+        best
     }
 
     /// Search one remembered action (TT move or killer) with PVS; returns its score.
@@ -621,7 +655,7 @@ impl AlphaBeta {
 
     fn negamax(&mut self, s: &mut State, depth: i32, ply: usize, mut alpha: i32, beta: i32, pv: bool) -> i32 {
         if depth <= 0 {
-            return self.qsearch(s, ply, alpha, beta);
+            return self.qsearch(s, ply, alpha, beta, QDEPTH);
         }
         self.nodes += 1;
         if self.check_abort() {
