@@ -1,0 +1,12 @@
+{
+  "name": "reactivate_keep",
+  "old": "db34b9c40f6698dcf62de6a389a655b298c14581",
+  "games": 12000,
+  "shards": 40,
+  "tc": "movetime 100",
+  "elo0": -5,
+  "elo1": 0,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}

@@ -425,7 +425,10 @@ impl AlphaBeta {
         let mut allowed: Vec<(usize, IntegerSet)> = Vec::new();
         for l in lo..=hi {
             let Some(n) = info.line_to_axis(l) else { continue };
-            if l >= amin && l <= amax && s.get_timeline_end(l) == present {
+            // A board of ours at or before the present stays: on an inactive timeline, a branch
+            // can reactivate it mid-action and make it mandatory.
+            let (t, c) = s.get_timeline_end(l);
+            if c == present.1 && t <= present.0 {
                 continue;
             }
             let set = IntegerSet::singleton(0);
