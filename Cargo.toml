@@ -37,6 +37,15 @@ codegen-units = 1
 panic = "unwind"
 debug = false
 
+# Fast to build, still optimized: `cargo test`, tools and experiments.
+[profile.dev]
+opt-level = 3
+debug = false
+incremental = true
+
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.profiling]
 inherits = "release"
 debug = true

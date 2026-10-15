@@ -240,7 +240,7 @@ impl HcInfo {
             let i = jt[axis_of_line(from.l())][from.xy() as usize];
             if i == INVALID { None } else { Some(i) }
         };
-        let (size_x, size_y) = s.get_board_size();
+        let (_, size_y) = s.get_board_size();
         let mut axis_coords: Vec<Vec<Entry>> = Vec::with_capacity(playable.len() + max_branch);
 
         let promo_piece = |m: FullMove| -> Piece {
@@ -279,8 +279,8 @@ impl HcInfo {
                     nb.transfer(p.xy(), q.xy());
                     needs_test = true;
                 } else if source.king() & z != 0 && d.x().abs() > 1 {
-                    let rook_x1 = if d.x() < 0 { 0 } else { size_x - 1 };
-                    let rook_x2 = q.x() + if d.x() < 0 { 1 } else { -1 };
+                    let rook_x1 = source.first_occupied_x(p.x(), p.y(), d.x().signum());
+                    let rook_x2 = p.x() + d.x().signum();
                     nb.transfer(ppos(rook_x1, p.y()), ppos(rook_x2, q.y()));
                     nb.transfer(p.xy(), q.xy());
                 } else {
@@ -387,6 +387,17 @@ impl HcInfo {
                     }
                 }
             }
+        }
+        // The search only tests same-board checks on boards the action creates. A royal already
+        // attacked on the same board of an opponent-to-move board stays capturable whatever the
+        // mover does, so no action is legal (unreachable by legal play; set-up positions only).
+        if dimension > 0
+            && (lines_lo..=lines_hi).any(|l| {
+                let (t, c) = s.get_timeline_end(l);
+                c != player && has_physical_check(s.board(l, t, c), player)
+            })
+        {
+            universe[0] = IntegerSet::new();
         }
         let mut hc_n_lines = universe.clone();
         let mut non_null = IntegerSet::new();
