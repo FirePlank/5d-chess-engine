@@ -13,7 +13,7 @@ use crate::core::hypercuboid::{BestFirstCursor, Entry, HcCursor, HcInfo, SearchM
 use crate::core::bitboard::*;
 use crate::core::piece::*;
 use crate::core::state::{Mark, State};
-use crate::misc::integer_set::Index;
+use crate::misc::integer_set::{Index, IntegerSet};
 use crate::misc::geometry::SearchSpace;
 use crate::misc::ordering::HcOrdering;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -134,6 +134,18 @@ pub struct AbParams {
     pub check_order_depth: i32,
     /// Enumerate actions best-first by summed semimove scores (interior nodes and root).
     pub best_first: bool,
+    /// Reverse futility pruning: at non-PV nodes with depth <= rfp_depth, not in check,
+    /// return the static eval when it beats beta by rfp_margin per ply (0 = off).
+    pub rfp_depth: i32,
+    pub rfp_margin: i32,
+    /// Evaluate with the feature HCE (`hce::tuned_weights`) instead of `eval::evaluate`.
+    pub use_hce: bool,
+    /// Order root actions by the static eval after them (plus the ordering score / 16)
+    /// before the first iteration.
+    pub root_static: bool,
+    /// Quiescence enumerates only captures/promotions plus one quiet filler per board,
+    /// best-first, so different captures are tried instead of one capture with many fillers.
+    pub q_restrict: bool,
 }
 
 impl Default for AbParams {
@@ -152,10 +164,15 @@ impl Default for AbParams {
             merge_branches: false,
             check_ext: false,
             travel_checks: false,
-            check_order: 0,
+            check_order: 3,
             check_bonus: 30_000,
             check_order_depth: 64,
-            best_first: false,
+            best_first: true,
+            rfp_depth: 0,
+            rfp_margin: 200,
+            use_hce: false,
+            root_static: false,
+            q_restrict: false,
         }
     }
 }
@@ -163,6 +180,7 @@ impl Default for AbParams {
 pub struct AlphaBeta {
     pub params: AbParams,
     pub eval: EvalParams,
+    pub hce: super::hce::Weights,
     tt: Vec<Option<TtEntry>>,
     history: Vec<i32>,
     killers: Vec<[Option<MoveSeq>; 2]>,
@@ -302,6 +320,7 @@ impl AlphaBeta {
         AlphaBeta {
             params,
             eval,
+            hce: super::hce::tuned_weights(),
             tt: vec![None; entries.next_power_of_two()],
             history: vec![0; 1 << 16],
             killers: vec![[None, None]; MAX_PLY + 1],
@@ -310,6 +329,16 @@ impl AlphaBeta {
             node_limit: None,
             aborted: false,
             stop_ptr: std::ptr::null(),
+        }
+    }
+
+    #[inline]
+    fn static_eval(&self, s: &State) -> i32 {
+        if self.params.use_hce {
+            let _p = crate::misc::prof::scope(9);
+            super::hce::evaluate(s, &self.hce)
+        } else {
+            evaluate(s, &self.eval)
         }
     }
 
@@ -429,6 +458,46 @@ impl AlphaBeta {
             scores.push(sc);
         }
         (HcOrdering::Precomputed(orders), scores)
+    }
+
+    /// Quiescence search space: per axis the captures and promotions, departures (for
+    /// capturing travels), nulls, and the best quiet coordinate as filler.
+    fn q_space(&self, s: &State, info: &HcInfo, ss: SearchSpace, order: &HcOrdering) -> SearchSpace {
+        let u = info.get_universe();
+        let h = s.get_board_size().1;
+        let mut allowed: Vec<IntegerSet> = Vec::with_capacity(u.dimension());
+        for n in 0..u.dimension() {
+            if n > info.first_branch_axis() {
+                let first = allowed[info.first_branch_axis()].clone();
+                allowed.push(first);
+                continue;
+            }
+            let mut set = IntegerSet::new();
+            let mut filler = false;
+            order.for_each(n, &u[n], |i| match info.entry(n, i) {
+                Entry::Null | Entry::Departing { .. } => set.insert(i),
+                Entry::Physical { m, .. } | Entry::Arriving { m, .. } => {
+                    let (pc, victim) = mover_victim(s, m);
+                    let promo = (pc == PAWN_W || pc == BRAWN_W) && (m.to.y() == 0 || m.to.y() == h - 1);
+                    if victim != NO_PIECE || promo || !filler {
+                        filler |= victim == NO_PIECE && !promo;
+                        set.insert(i);
+                    }
+                }
+            });
+            allowed.push(set);
+        }
+        let mut out = SearchSpace::default();
+        'hc: for mut hc in ss.hcs {
+            for n in 0..hc.dimension() {
+                hc[n].and_assign(&allowed[n]);
+                if hc[n].is_empty() {
+                    continue 'hc;
+                }
+            }
+            out.hcs.push(hc);
+        }
+        out
     }
 
     /// Action generator for an interior node or the root.
@@ -592,7 +661,7 @@ impl AlphaBeta {
         if self.check_abort() {
             return 0;
         }
-        let stand = evaluate(s, &self.eval);
+        let stand = self.static_eval(s);
         let in_check = Self::in_check(s);
         // Royal captures are threatened: standing pat is unsound, so search evasions.
         if !in_check {
@@ -609,8 +678,13 @@ impl AlphaBeta {
             return stand;
         }
         let (info, ss) = HcInfo::build_hc(s);
-        let order = self.ordering(s, &info, false);
-        let mut agen = ActionGen::new(ss, order, self.params.merge_branches);
+        let mut agen = if self.params.q_restrict && !in_check {
+            let (order, scores) = self.ordering_scores(s, &info, false);
+            let qs = self.q_space(s, &info, ss, &order);
+            ActionGen::with_scores(qs, order, Some(scores), false)
+        } else {
+            ActionGen::new(ss, self.ordering(s, &info, false), self.params.merge_branches)
+        };
         let mut best = if in_check { -INF } else { stand };
         let mut tried = 0;
         let mut any = false;
@@ -658,7 +732,7 @@ impl AlphaBeta {
             return 0;
         }
         if ply >= MAX_PLY {
-            return evaluate(s, &self.eval);
+            return self.static_eval(s);
         }
         // Mate distance pruning.
         let alpha0 = alpha;
@@ -676,6 +750,13 @@ impl AlphaBeta {
             }
             if !e.action.is_empty() {
                 tt_action = Some(e.action.clone());
+            }
+        }
+
+        if !pv && depth <= self.params.rfp_depth && beta.abs() < MATE - 1000 && !Self::in_check(s) {
+            let e = self.static_eval(s);
+            if e - self.params.rfp_margin * depth >= beta {
+                return e;
             }
         }
 
@@ -784,7 +865,7 @@ impl AlphaBeta {
         }
         if searched == 0 {
             // Only the TT action existed but failed validation; fall back to static eval.
-            return evaluate(s, &self.eval);
+            return self.static_eval(s);
         }
         let bound = if best > alpha0 { Bound::Exact } else { Bound::Upper };
         self.tt_store(key, depth, bound, mate_to_tt(best, ply), &best_action);
@@ -869,6 +950,11 @@ impl Engine for AlphaBeta {
             ("check_order", Some(x)) => self.params.check_order = x as u8,
             ("check_bonus", Some(x)) => self.params.check_bonus = x as i32,
             ("check_order_depth", Some(x)) => self.params.check_order_depth = x as i32,
+            ("rfp_depth", Some(x)) => self.params.rfp_depth = x as i32,
+            ("rfp_margin", Some(x)) => self.params.rfp_margin = x as i32,
+            ("q_restrict", _) => self.params.q_restrict = !matches!(value, OptionValue::Bool(false)),
+            ("root_static", _) => self.params.root_static = !matches!(value, OptionValue::Bool(false)),
+            ("use_hce", _) => self.params.use_hce = !matches!(value, OptionValue::Bool(false)),
             ("best_first", _) => self.params.best_first = !matches!(value, OptionValue::Bool(false)),
             ("root_cap", Some(x)) => self.params.root_cap = (x as usize).max(1),
             ("lmr_min_depth", Some(x)) => self.params.lmr_min_depth = x as i32,
@@ -930,6 +1016,13 @@ impl Engine for AlphaBeta {
         }
         if roots.is_empty() {
             return None;
+        }
+        if self.params.root_static {
+            for (sc, act) in roots.iter_mut() {
+                let mark = Self::make(&mut work, act);
+                *sc = -self.static_eval(&work) + *sc / 16;
+                work.unmake(mark);
+            }
         }
         roots.sort_by(|a, b| b.0.cmp(&a.0));
         let mut best: MoveSeq = roots[0].1.clone();
