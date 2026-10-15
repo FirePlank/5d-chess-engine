@@ -10,6 +10,7 @@
 set -euo pipefail
 NAME=$1 BASE_SHA=$2 PATCH=$3 GAMES=$4 TC=${5:-movetime 100} E0=${6:-0} E1=${7:-5}
 R=$(git rev-parse --show-toplevel); W="$R/../5d-sprt-branch"
+[ "$PATCH" = "-" ] || PATCH=$(realpath "$PATCH")
 mkdir -p "$R/games/sprt"
 ghr() { local o; for _ in $(seq 40); do o=$("$@") && { echo "$o"; return 0; }; sleep 30; done; return 1; }
 REPO=$(ghr gh repo view --json nameWithOwner -q .nameWithOwner)
