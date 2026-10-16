@@ -687,6 +687,10 @@ pub trait TermSource {
     fn sac_root(&self) -> Option<&super::sac::RootTravels> {
         None
     }
+    /// Whether the f7 sac table's terms apply (`sac::turn_zero`).
+    fn sac_on(&self) -> bool {
+        true
+    }
 }
 
 /// Terms computed on every request.
@@ -705,6 +709,8 @@ pub struct TermCache {
     past: Vec<(u64, [i32; 2])>,
     /// The winning travels of the current search's root.
     pub sac_root: super::sac::RootTravels,
+    /// Whether the f7 sac table's terms apply to the current search (`sac::turn_zero`).
+    pub sac_on: bool,
 }
 
 impl Default for TermCache {
@@ -714,6 +720,7 @@ impl Default for TermCache {
             slots: vec![(Board::default(), false, BoardTerms::ZERO); 1 << 12],
             past: vec![(0, [0; 2]); 1 << 14],
             sac_root: super::sac::RootTravels::default(),
+            sac_on: false,
         }
     }
 }
@@ -731,6 +738,10 @@ impl TermSource for TermCache {
     #[inline]
     fn sac_root(&self) -> Option<&super::sac::RootTravels> {
         Some(&self.sac_root)
+    }
+    #[inline]
+    fn sac_on(&self) -> bool {
+        self.sac_on
     }
     #[inline]
     fn terms(&mut self, b: &Board, w: i32, h: i32) -> &BoardTerms {
@@ -837,7 +848,7 @@ pub fn sides_with(s: &State, src: &mut impl TermSource) -> Sides {
         }
     }
     royal_5d(s, &mut sd, src, &atts);
-    if super::sac::active() {
+    if super::sac::active() && src.sac_on() {
         sac_terms(s, &mut sd, src);
     }
     let (l0_min, l0_max) = s.get_initial_lines_range();
