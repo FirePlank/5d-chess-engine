@@ -98,6 +98,28 @@ pub struct HcInfo {
     /// from that timeline's next board, in scan order, when it is the only moved timeline
     /// and still holds all of the opponent's pieces.
     lone_checks: std::cell::RefCell<Vec<(bool, Vec<FullMove>)>>,
+    /// The same for points moving several timelines (filled on demand, cleared by `rebuild`).
+    env_checks: std::cell::RefCell<EnvChecks>,
+}
+
+/// See `HcInfo::moves_may_check`.
+#[derive(Default)]
+struct EnvChecks {
+    boards_known: bool,
+    /// Per existing axis: its timeline's next board at its worst.
+    boards: Vec<Board>,
+    /// Per existing axis: (known, the checks from its timeline's next board).
+    checks: Vec<(bool, Vec<FullMove>)>,
+    /// The timelines that may give check after the last point tested (ascending).
+    maybe: Vec<i32>,
+}
+
+/// See `HcInfo::lone_move_may_check`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MayCheck {
+    NoCheck,
+    All,
+    Lines,
 }
 
 #[derive(Default)]
@@ -408,6 +430,7 @@ impl HcInfo {
             scratch,
             all_lines_mine,
             lone_checks,
+            env_checks,
         } = self;
         let BuildScratch { playable, departures, arrivals, sorted, line_counts, ml, jump_tab, safety, arrival_ok, group_slots } = scratch;
         let present = s.get_present();
@@ -717,6 +740,9 @@ impl HcInfo {
         *new_axis = np;
         *all_lines_mine = (lines_lo..=lines_hi).all(|l| s.get_timeline_end(l).1 == player);
         lone_checks.get_mut().iter_mut().for_each(|e| e.0 = false);
+        let env = env_checks.get_mut();
+        env.boards_known = false;
+        env.checks.iter_mut().for_each(|e| e.0 = false);
         if !defer_branch {
             self.materialize_branch(s);
         }
@@ -1005,20 +1031,29 @@ impl HcInfo {
         Some(problem)
     }
 
-    /// False when `p` moves a single existing timeline (physically) and none of the checks
-    /// its next board could give survives the move; true when the full test is needed.
-    fn lone_move_may_check(&self, st: &State, p: &Point, lo: i32, hi: i32, buf: &mut CheckBuf) -> bool {
+    /// Whether a check is possible after `p`: `NoCheck` when `p` moves existing timelines
+    /// only and none of the checks their next boards could give survives the move (see
+    /// `moves_may_check` for several), `Lines` when only the timelines in
+    /// `env_checks.maybe` may give one. Only for contexts whose timelines all end on the
+    /// mover's turn, where the moved timelines' next boards are the only ones the opponent
+    /// moves on.
+    fn lone_move_may_check(&self, st: &State, p: &Point, lo: i32, hi: i32, buf: &mut CheckBuf) -> MayCheck {
         let mut moved = None;
+        let mut moved_lines = 0;
         for &(l, axis) in &self.line_axes {
             if !self.entry(axis, p[axis]).is_null() {
-                if axis >= self.new_axis || moved.is_some() {
-                    return true;
+                if axis >= self.new_axis {
+                    return MayCheck::All;
                 }
-                moved = Some((l, axis));
+                moved_lines += 1;
+                moved.get_or_insert((l, axis));
             }
         }
-        let Some((l, axis)) = moved else { return true };
-        let Entry::Physical { b: result, .. } = self.entry(axis, p[axis]) else { return true };
+        let Some((l, axis)) = moved else { return MayCheck::All };
+        if moved_lines > 1 {
+            return if self.moves_may_check(st, p, lo, hi, buf) { MayCheck::Lines } else { MayCheck::NoCheck };
+        }
+        let Entry::Physical { b: result, .. } = self.entry(axis, p[axis]) else { return MayCheck::All };
         let c = self.player;
         let mut cache = self.lone_checks.borrow_mut();
         if cache.len() < self.new_axis {
@@ -1037,7 +1072,66 @@ impl HcInfo {
             *known = true;
         }
         let attackers = result.hostile(c);
-        checks.iter().any(|m| attackers & pmask(m.from.xy()) != 0)
+        if checks.iter().any(|m| attackers & pmask(m.from.xy()) != 0) { MayCheck::All } else { MayCheck::NoCheck }
+    }
+
+    /// `lone_move_may_check` for a point moving several existing timelines (and no new one).
+    /// Each moved timeline's checks are found once per build from its next board with every
+    /// opponent piece in place, against the other playable timelines' next boards at their
+    /// worst: present, holding the mover's royals on every square any of their semimoves
+    /// leaves one on, and nothing else. Whatever an actual point's boards hold there, a check
+    /// it allows either is one of those or runs into one of those royals first, so a point
+    /// with no surviving attacker among them gives no check. The moved timelines with a
+    /// surviving attacker are left in `env_checks.maybe`.
+    fn moves_may_check(&self, st: &State, p: &Point, lo: i32, hi: i32, buf: &mut CheckBuf) -> bool {
+        let c = self.player;
+        let mut env = self.env_checks.borrow_mut();
+        let EnvChecks { boards_known, boards, checks, maybe } = &mut *env;
+        if !*boards_known {
+            boards.clear();
+            for n in 0..self.new_axis {
+                let mut royals = 0;
+                for i in 1..self.axis_coords[n].len() {
+                    let b = self.axis_coords[n][i].board();
+                    royals |= b.royal() & b.hostile(!c);
+                }
+                let mut b = Board::default();
+                for sq in marked_pos(royals) {
+                    b.set_piece(sq, if c { KING_B } else { KING_W });
+                }
+                boards.push(b);
+            }
+            *boards_known = true;
+        }
+        if checks.len() < self.new_axis {
+            checks.resize_with(self.new_axis, Default::default);
+        }
+        maybe.clear();
+        for &(l, axis) in &self.line_axes {
+            if axis >= self.new_axis || self.entry(axis, p[axis]).is_null() {
+                continue;
+            }
+            let (known, found) = &mut checks[axis];
+            if !*known {
+                let mut cp = CheckPosition::with_range_in(st, lo, hi, std::mem::take(buf));
+                for &(l2, n) in &self.line_axes {
+                    if n >= self.new_axis {
+                        continue;
+                    }
+                    let t2 = st.get_timeline_end(l2).0;
+                    cp.add_board(l2, next_turn((t2, c)), if n == axis { st.board(l2, t2, c) } else { &boards[n] });
+                }
+                found.clear();
+                cp.checks_into(!c, false, found);
+                *buf = cp.into_buf();
+                *known = true;
+            }
+            let attackers = self.entry(axis, p[axis]).board().hostile(c);
+            if found.iter().any(|m| attackers & pmask(m.from.xy()) != 0) {
+                maybe.push(l);
+            }
+        }
+        !maybe.is_empty()
     }
 
     pub fn find_checks(&self, st: &State, p: &Point, hc: &Hc, buf: &mut CheckBuf) -> Option<Slice> {
@@ -1047,7 +1141,8 @@ impl HcInfo {
             lo = lo.min(first);
             hi = hi.max(last);
         }
-        if self.all_lines_mine && !self.lone_move_may_check(st, p, lo, hi, buf) {
+        let may = if self.all_lines_mine { self.lone_move_may_check(st, p, lo, hi, buf) } else { MayCheck::All };
+        if may == MayCheck::NoCheck {
             return None;
         }
         let mut newstate = CheckPosition::with_range_in(st, lo, hi, std::mem::take(buf));
@@ -1059,7 +1154,12 @@ impl HcInfo {
             let (old_t, _) = loc.tl();
             newstate.add_board(l, next_turn((old_t, c)), loc.board());
         }
-        let Some(check) = newstate.first_check(!c, false) else {
+        // Timelines that cannot give check need no scan (`first_check` scans by timeline).
+        let first = match may {
+            MayCheck::Lines => newstate.first_check_in(!c, &self.env_checks.borrow().maybe),
+            _ => newstate.first_check(!c, false),
+        };
+        let Some(check) = first else {
             *buf = newstate.into_buf();
             return None;
         };

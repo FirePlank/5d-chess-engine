@@ -415,6 +415,24 @@ impl<'a> CheckPosition<'a> {
         r
     }
 
+    /// `first_check(attacker, false)` when every other timeline is known to give no check:
+    /// only `lines` (ascending, not empty) are scanned.
+    pub fn first_check_in(&self, attacker: bool, lines: &[i32]) -> Option<FullMove> {
+        debug_assert!(!lines.is_empty() && lines.windows(2).all(|w| w[0] < w[1]));
+        let mut r = None;
+        self.scan(
+            attacker,
+            false,
+            &mut |m| {
+                r = Some(m);
+                true
+            },
+            lines,
+            true,
+        );
+        r
+    }
+
     pub fn checks(&self, attacker: bool, include_physical: bool) -> Vec<FullMove> {
         let mut r = Vec::new();
         self.checks_into(attacker, include_physical, &mut r);
