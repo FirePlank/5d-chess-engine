@@ -66,15 +66,6 @@ const RFP_MARGIN: i32 = 200;
 const NMP_MIN_DEPTH: i32 = 3;
 const NMP_R: i32 = 2;
 const NMP_DIV: i32 = 4;
-/// What a softmate (in check, and every legal action creates a timeline) costs the softmated
-/// side in quiescence, where the attacker's follow-up is not searched (internal units).
-const SOFTMATE_PENALTY: i32 = 1000;
-
-/// `v` less the softmate penalty `pen` (mate scores stay as they are).
-#[inline]
-fn less_penalty(v: i32, pen: i32) -> i32 {
-    if v.abs() > MATE - 1000 { v } else { v - pen }
-}
 const DEFAULT_HASH_MB: usize = 64;
 /// Static evaluations are kept within +-EVAL_MAX, well clear of mate scores.
 const EVAL_MAX: i32 = 20000;
@@ -1033,55 +1024,6 @@ impl AlphaBeta {
         None
     }
 
-    /// Whether `act` creates a timeline: some move lands on a board that is not the last one
-    /// of its timeline.
-    fn branches(s: &State, act: &MoveSeq) -> bool {
-        let player = s.get_present().1;
-        act.iter().any(|m| s.get_timeline_end(m.to.l()) != (m.to.t(), player))
-    }
-
-    /// Whether one of the remembered actions `acts` is legal in `s` and creates no timeline
-    /// (so `s` is no softmate).
-    fn ordinary_known(s: &mut State, acts: &[MoveSeq]) -> bool {
-        acts.iter().any(|a| {
-            !Self::branches(s, a)
-                && match Self::make_checked(s, a) {
-                    Some(mark) => {
-                        s.unmake(mark);
-                        true
-                    }
-                    None => false,
-                }
-        })
-    }
-
-    /// Build the evasions of a quiescence node into `nb` (ordered by `node_ordering`).
-    fn q_build(&self, s: &State, nb: &mut NodeBufs) {
-        let NodeBufs { info, evasions, order, evasion_scores, .. } = nb;
-        evasions.ss = info.rebuild(s, true);
-        // The branch axes are only ordered once some hypercuboid needs their order.
-        let fba = info.first_branch_axis();
-        self.node_ordering(s, info, false, order, evasions.order.axes_mut(), evasion_scores, 0..fba, BranchOrder::Now);
-        evasions.branch_pending = fba < info.dimension();
-    }
-
-    /// The next evasion of `q_build`'s cursor (the ones creating no timeline come first). Err
-    /// when interrupted.
-    fn q_next(&self, s: &State, nb: &mut NodeBufs) -> Result<Option<MoveSeq>, ()> {
-        loop {
-            let NodeBufs { info, evasions, order, evasion_scores, .. } = &mut *nb;
-            let fba = info.first_branch_axis();
-            // (Quiescence leaves the history alone, so ordering later gives the same order.)
-            let next = evasions.next_with(info, s, &mut |o| self.node_ordering(s, info, false, order, o, evasion_scores, fba..fba + 1, BranchOrder::Now));
-            match next {
-                Err(NeedBranch) => info.materialize_branch(s),
-                // Out of time, not out of evasions.
-                Ok(None) if interrupted() => return Err(()),
-                Ok(a) => return Ok(a),
-            }
-        }
-    }
-
     /// Owned copy of the position after `act` (for PV reporting).
     fn child(s: &State, act: &MoveSeq) -> State {
         let mut c = s.clone();
@@ -1141,7 +1083,7 @@ impl AlphaBeta {
     /// `known_check`: whether `s` is in check, when the caller already knows.
     /// Evasions that raise alpha inside the window extend the PV table (mates end in them);
     /// in a null window none can, so only PV windows pay for it.
-    fn qsearch(&mut self, s: &mut State, ply: usize, mut alpha: i32, mut beta: i32, qd: i32, known_check: Option<bool>) -> i32 {
+    fn qsearch(&mut self, s: &mut State, ply: usize, mut alpha: i32, beta: i32, qd: i32, known_check: Option<bool>) -> i32 {
         self.nodes += 1;
         self.pv_clear(ply);
         // Only the in-check evasion search below can return a mate score.
@@ -1154,32 +1096,7 @@ impl AlphaBeta {
         // Royal captures are threatened: standing pat is unsound, so search evasions (the
         // static evaluation only matters at the depth limit).
         if in_check && leaf {
-            let e = self.static_eval(s);
-            // A softmate costs the penalty here too (see the evasion search below).
-            if ply < MAX_PLY {
-                let k = self.qkillers[ply].clone();
-                if Self::ordinary_known(s, k.as_slice()) {
-                    return e;
-                }
-                let mut b = self.bufs.pop().unwrap_or_default();
-                self.q_build(s, &mut b);
-                let first = self.q_next(s, &mut b);
-                self.bufs.push(b);
-                match first {
-                    Err(()) => {
-                        self.aborted = true;
-                        return 0;
-                    }
-                    Ok(None) => {
-                        // No evasion: mated.
-                        self.proven = true;
-                        return -(MATE - ply as i32);
-                    }
-                    Ok(Some(a)) if Self::branches(s, &a) => return less_penalty(e, SOFTMATE_PENALTY),
-                    Ok(Some(_)) => {}
-                }
-            }
-            return e;
+            return self.static_eval(s);
         }
         if !in_check {
             let stand = self.static_eval(s);
@@ -1211,53 +1128,11 @@ impl AlphaBeta {
         // Mate proof: the best reply's, and every reply's with all evasions searched.
         let (mut best_proven, mut all_proven) = (false, true);
         let mut qkiller = if ply <= MAX_PLY { self.qkillers[ply].clone() } else { None };
-        // Softmate: a legal killer creating no timeline rules it out; otherwise the first
-        // evasion decides (the ones creating no timeline come first).
-        let mut k_mark = None;
-        if let Some(k) = qkiller.as_ref().filter(|k| !Self::branches(s, k)) {
-            k_mark = Self::make_checked(s, k);
-            if k_mark.is_none() {
-                qkiller = None;
-            }
-        }
-        let mut nb: Option<Box<NodeBufs>> = None;
-        let mut peeked: Option<MoveSeq> = None;
-        let mut softmate = false;
-        if k_mark.is_none() {
-            let mut b = self.bufs.pop().unwrap_or_default();
-            self.q_build(s, &mut b);
-            match self.q_next(s, &mut b) {
-                Err(()) => {
-                    self.bufs.push(b);
-                    self.aborted = true;
-                    return 0;
-                }
-                Ok(None) => {
-                    // No evasion: mated.
-                    self.bufs.push(b);
-                    self.proven = true;
-                    return -(MATE - ply as i32);
-                }
-                Ok(Some(a)) => {
-                    softmate = Self::branches(s, &a);
-                    peeked = Some(a);
-                }
-            }
-            nb = Some(b);
-        }
-        // The attacker's follow-up to the evasions of a softmate is not searched here: the
-        // softmated side pays the penalty (the evasions are searched in the shifted window).
-        let pen = if softmate { SOFTMATE_PENALTY } else { 0 };
-        alpha += pen;
-        beta += pen;
         if let Some(k) = qkiller.take() {
-            if let Some(mark) = k_mark.take().or_else(|| Self::make_checked(s, &k)) {
+            if let Some(mark) = Self::make_checked(s, &k) {
                 let v = -self.qsearch(s, ply + 1, -beta, -alpha, qd - 1, None);
                 s.unmake(mark);
                 if self.aborted {
-                    if let Some(b) = nb {
-                        self.bufs.push(b);
-                    }
                     return 0;
                 }
                 // Searched: skipped when the evasions come round to it.
@@ -1270,10 +1145,7 @@ impl AlphaBeta {
                 if v > alpha {
                     alpha = v;
                     if v >= beta {
-                        if let Some(b) = nb {
-                            self.bufs.push(b);
-                        }
-                        return less_penalty(v, pen);
+                        return v;
                     }
                     if let Some(k) = &qkiller {
                         self.pv_update(ply, k);
@@ -1282,30 +1154,36 @@ impl AlphaBeta {
             }
         }
         // Search the evasions.
-        let mut nb = match nb {
-            Some(b) => b,
-            None => {
-                let mut b = self.bufs.pop().unwrap_or_default();
-                self.q_build(s, &mut b);
-                b
-            }
-        };
+        let mut nb = self.bufs.pop().unwrap_or_default();
+        {
+            let NodeBufs { info, evasions, order, evasion_scores, .. } = &mut *nb;
+            evasions.ss = info.rebuild(s, true);
+            // The branch axes are only ordered once some hypercuboid needs their order.
+            let fba = info.first_branch_axis();
+            self.node_ordering(s, info, false, order, evasions.order.axes_mut(), evasion_scores, 0..fba, BranchOrder::Now);
+            evasions.branch_pending = fba < info.dimension();
+        }
         let aborted = 'search: {
             while tried < QCAP {
                 if self.check_abort() {
                     break 'search true;
                 }
-                let next = match peeked.take() {
-                    Some(a) => Ok(Some(a)),
-                    None => self.q_next(s, &mut nb),
-                };
+                let NodeBufs { info, evasions, order, evasion_scores, .. } = &mut *nb;
+                let fba = info.first_branch_axis();
+                // (Quiescence leaves the history alone, so ordering later gives the same order.)
+                let next = evasions.next_with(info, s, &mut |o| self.node_ordering(s, info, false, order, o, evasion_scores, fba..fba + 1, BranchOrder::Now));
                 let Some(act) = (match next {
                     Ok(a) => a,
-                    Err(()) => {
+                    Err(NeedBranch) => {
+                        info.materialize_branch(s);
+                        continue;
+                    }
+                }) else {
+                    if interrupted() {
+                        // Out of time, not out of evasions.
                         self.aborted = true;
                         break 'search true;
                     }
-                }) else {
                     // Every evasion was searched.
                     break 'search false;
                 };
@@ -1351,7 +1229,7 @@ impl AlphaBeta {
             return -(MATE - ply as i32);
         }
         self.proven = mate_proven(best, best_proven, all_proven);
-        less_penalty(best, pen)
+        best
     }
 
     /// Search one remembered action (TT move or killer) with PVS; returns its score.
