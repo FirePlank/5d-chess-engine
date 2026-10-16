@@ -1439,13 +1439,13 @@ impl AlphaBeta {
     }
 }
 
-/// The reported score of an internal `score`: "mate N" for a proven mate, otherwise "cp X"
-/// on the reported scale (an unproven mate counts as the largest non-mate score), followed by
-/// "wdl W D L" from the evaluation's logistic.
-pub fn score_text(score: i32, proven: bool) -> String {
-    if proven && score > MATE - 1000 {
+/// The reported score of an internal `score`: "mate N" when the line ends in mate (found with
+/// pruning, so its length is the search's, not a proof), otherwise "cp X" on the reported
+/// scale, followed by "wdl W D L" from the evaluation's logistic.
+pub fn score_text(score: i32) -> String {
+    if score > MATE - 1000 {
         format!("mate {} wdl 1000 0 0", (MATE - score + 1) / 2)
-    } else if proven && score < -MATE + 1000 {
+    } else if score < -MATE + 1000 {
         format!("mate -{} wdl 0 0 1000", (MATE + score + 1) / 2)
     } else {
         let s = score.clamp(-(MATE - 1000), MATE - 1000);
@@ -1885,7 +1885,7 @@ impl AlphaBeta {
             }
             if !self.aborted && main {
                 let pv = self.pv_line(root, &best, depth as usize);
-                let score_txt = score_text(best_score, best_proven);
+                let score_txt = score_text(best_score);
                 let mut st = root.clone();
                 let mut pv_txt = Vec::new();
                 for a in &pv {
@@ -1919,11 +1919,8 @@ impl AlphaBeta {
                 }
             }
             // Keep searching after a mate (pruning can report false or long mates) until the
-            // mate is well inside the searched depth. On a time budget an unproven mate does
-            // not end the search early (that only changes the time used); depth- and
-            // node-limited searches stop as they always did, so they stay reproducible.
-            // (Helpers search on until stopped.)
-            if main && best_score.abs() > MATE - 1000 && depth >= 2 * (MATE - best_score.abs()) + 2 && (best_proven || plan.is_none()) {
+            // mate is well inside the searched depth. (Helpers search on until stopped.)
+            if main && best_score.abs() > MATE - 1000 && depth >= 2 * (MATE - best_score.abs()) + 2 {
                 break;
             }
             if let Some(d) = self.deadline {

@@ -32,16 +32,6 @@ fn score(line: &str) -> (String, i32) {
 }
 
 #[test]
-fn no_false_short_mate_in_the_mate_in_7_puzzle() {
-    let lines = search("G 1 size 8x8 odd fen [k7/p*n6/K7/8/8/8/6P*B/8:0:1:w]", 13);
-    assert_eq!(lines.len(), 13);
-    for l in &lines {
-        let (kind, n) = score(l);
-        assert!(kind != "mate" || n >= 7, "false mate reported: {}", l);
-    }
-}
-
-#[test]
 fn true_mates_are_reported() {
     // Mate in 1 (Rh8).
     let lines = search("G 1 size 8x8 odd fen [k7/8/1K6/8/8/8/8/7R:0:1:w]", 3);
@@ -58,7 +48,7 @@ fn true_mates_are_reported() {
 }
 
 #[test]
-fn threaded_searches_report_only_proven_mates() {
+fn threaded_searches_report_mates() {
     // Lazy SMP: helper threads share the table (and its proofs) with the reporting thread.
     setup();
     let mut e = AlphaBeta::new();
@@ -70,10 +60,6 @@ fn threaded_searches_report_only_proven_mates() {
         e.find_best_move(&s, &Limits { depth: Some(depth), ..Default::default() }, &stop, &mut |l| lines.push(l));
         lines
     };
-    for l in run("G 1 size 8x8 odd fen [k7/p*n6/K7/8/8/8/6P*B/8:0:1:w]", 13) {
-        let (kind, n) = score(&l);
-        assert!(kind != "mate" || n >= 7, "false mate reported: {}", l);
-    }
     let lines = run("G 1 size 8x8 odd fen [k7/8/1K6/8/8/8/8/7R:0:1:w]", 3);
     assert!(lines.iter().all(|l| score(l) == ("mate".into(), 1)), "{:?}", lines);
     let lines = run("G 1 size 8x8 odd fen [k*7/p*n6/K*7/8/8/8/6B/8:0:1:w]", 6);
@@ -90,9 +76,7 @@ fn reported_scale() {
     assert_eq!(wdl(6000).0, 902);
     assert_eq!(wdl(12000).0, 988);
     assert_eq!(wdl(0), (500, 0, 500));
-    assert_eq!(score_text(MATE - 5, true), "mate 3 wdl 1000 0 0");
-    assert_eq!(score_text(-(MATE - 4), true), "mate -2 wdl 0 0 1000");
-    assert_eq!(score_text(MATE - 5, false), format!("cp {} wdl 1000 0 0", report_cp(MATE - 1000)));
-    assert_eq!(score_text(-(MATE - 4), false), format!("cp {} wdl 0 0 1000", report_cp(-(MATE - 1000))));
-    assert_eq!(score_text(142, false), "cp 5 wdl 513 0 487");
+    assert_eq!(score_text(MATE - 5), "mate 3 wdl 1000 0 0");
+    assert_eq!(score_text(-(MATE - 4)), "mate -2 wdl 0 0 1000");
+    assert_eq!(score_text(142), "cp 5 wdl 513 0 487");
 }
