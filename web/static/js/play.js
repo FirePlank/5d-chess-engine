@@ -5,7 +5,7 @@
 import { Rules } from './kairos.js';
 import { LocalPlay } from './local-play.js';
 import { lanText } from './input.js';
-import { $, $$, el, toast, fmtClock, fmtScore, fmtNodes, store, confirmDialog } from './util.js';
+import { $, $$, el, toast, fmtClock, store, confirmDialog } from './util.js';
 
 export class Play {
   constructor(app) {
@@ -261,15 +261,8 @@ export class Play {
     if (this.active) this.show();
   }
 
-  onThinking(info) {
-    this.thinking = info;
-    if (!this.active) return;
-    const g = this.state && this.state.game;
-    if (!g || !g.thinking) return;
-    const engineBlack = g.humanColor === 'w';
-    const score = info.cp != null ? { cp: engineBlack ? -info.cp : info.cp } : info.mate != null ? { mate: engineBlack ? -info.mate : info.mate } : null;
-    $('#play-thinking').textContent = `Depth ${info.depth ?? '-'} · ${fmtScore(score)}${info.nps ? ' · ' + fmtNodes(info.nps) + ' nodes/s' : ''}`;
-  }
+  /** The engine's progress (depth, score, speed) is not shown while playing: it would give the game away. */
+  onThinking() {}
 
   showSetup(on) {
     this.wantSetup = on;
