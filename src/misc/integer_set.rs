@@ -287,6 +287,17 @@ impl IntegerSet {
         self.grow((v >> 6) as usize + 1);
         Bits::insert(self, v);
     }
+    /// Insert {0, ..., n-1}.
+    pub fn insert_below(&mut self, n: Index) {
+        let full = n as usize / 64;
+        let tail = n as usize % 64;
+        self.grow(full + (tail != 0) as usize);
+        let w = self.words_mut();
+        w[..full].fill(u64::MAX);
+        if tail != 0 {
+            w[full] |= (1u64 << tail) - 1;
+        }
+    }
     /// Union with `o` (any size).
     pub fn or_assign(&mut self, o: &Bits) {
         self.grow(o.used_words());
@@ -360,6 +371,10 @@ mod tests {
         assert_eq!(t.iter().collect::<Vec<_>>(), vec![300]);
         assert_eq!(s.and(&r).iter().collect::<Vec<_>>(), vec![3, 70, 129]);
         assert_eq!(s.max(), Some(300));
+        let mut u = IntegerSet::singleton(200);
+        u.insert_below(130);
+        assert_eq!(u.len(), 131);
+        assert!(u.contains(129) && !u.contains(130) && u.contains(200));
         assert!(IntegerSet::singleton(5) == IntegerSet::from_bits(&IntegerSet::range(6).and(&IntegerSet::singleton(5))));
     }
 }

@@ -139,6 +139,11 @@ struct BuildScratch {
     safety: (u32, Vec<(u32, u32, u32)>),
     /// Per arrival (in `arrivals` order): whether its result is safe for the mover.
     arrival_ok: Vec<u8>,
+    /// Per axis: its first departure or arrival coordinate (the null and physical ones
+    /// come first).
+    first_jump: Vec<usize>,
+    /// (axis, coordinate) of the existing-axis arrivals whose departure was filtered out.
+    orphans: Vec<(usize, Index)>,
     group_slots: GroupSlots,
 }
 
@@ -358,17 +363,20 @@ impl GroupSlots {
 }
 
 impl AxisGroups {
-    /// Group `entries` (their arrivals come from `axes` departure axes).
-    fn rebuild(&mut self, entries: &[Entry], axes: usize, slots: &mut GroupSlots) {
+    /// Group `entries`, the null and physical ones first (`first_jump` of them), then the
+    /// departures and arrivals (which come from `axes` departure axes).
+    fn rebuild(&mut self, entries: &[Entry], first_jump: usize, axes: usize, slots: &mut GroupSlots) {
+        debug_assert!(entries[..first_jump].iter().all(|e| matches!(e, Entry::Null | Entry::Physical { .. })));
         self.nonjump.clear();
+        self.nonjump.insert_below(first_jump as Index);
         self.dep_len = 0;
         self.from_len = 0;
         slots.begin(axes);
         let stamp = slots.stamp;
-        for (i, e) in entries.iter().enumerate() {
+        for (i, e) in entries.iter().enumerate().skip(first_jump) {
             let i = i as Index;
             match e {
-                Entry::Physical { .. } | Entry::Null => self.nonjump.insert(i),
+                Entry::Physical { .. } | Entry::Null => unreachable!("non-jump entry after the jumps"),
                 Entry::Arriving { m, idx, fa, .. } if *idx != INVALID => {
                     let (fa, idx) = (*fa, *idx);
                     // (departure axis, departure square) identifies the departure coordinate.
@@ -630,7 +638,20 @@ impl HcInfo {
             lone_checks,
             env_checks,
         } = self;
-        let BuildScratch { playable, departures, arrivals, sorted, line_counts, ml, jump_tab, safety, arrival_ok, group_slots } = scratch;
+        let BuildScratch {
+            playable,
+            departures,
+            arrivals,
+            sorted,
+            line_counts,
+            ml,
+            jump_tab,
+            safety,
+            arrival_ok,
+            first_jump,
+            orphans,
+            group_slots,
+        } = scratch;
         let present = s.get_present();
         let player = present.1;
         let (lines_lo, lines_hi) = s.get_lines_range();
@@ -778,12 +799,11 @@ impl HcInfo {
         if axis_coords.len() < np {
             axis_coords.resize_with(np, Vec::new);
         }
+        // The departures first, so each arrival finds its departure coordinate.
+        first_jump.clear();
         for axis in 0..np {
-            let l = playable[axis];
-            let lo = arrivals.partition_point(|a| a.0 < l);
-            let hi = arrivals.partition_point(|a| a.0 <= l);
             let locs = &mut axis_coords[axis];
-            let (end_t, end_c) = s.get_timeline_end(l);
+            first_jump.push(locs.len());
             for &p in &departures[axis] {
                 let idx = locs.len() as Index;
                 if memo.departure_safe(p) {
@@ -793,14 +813,30 @@ impl HcInfo {
                     jump_tab[axis][p.xy() as usize] = idx;
                 }
             }
-            // Arrivals onto this line's last board (when it is the mover's).
+        }
+        // Arrivals onto each line's last board (when it is the mover's); the ones whose
+        // departure was filtered out lose their coordinate.
+        orphans.clear();
+        for axis in 0..np {
+            let l = playable[axis];
+            let (end_t, end_c) = s.get_timeline_end(l);
+            if player != end_c {
+                continue;
+            }
+            let lo = arrivals.partition_point(|a| a.0 < l);
+            let hi = arrivals.partition_point(|a| a.0 <= l);
+            let locs = &mut axis_coords[axis];
             let target = s.board(l, end_t, player);
             for k in lo..hi {
                 let (_, m, mover, royal) = arrivals[k];
-                if m.to.t() == end_t && player == end_c && arrival_safe(k, m, royal, arrival_ok, &mut memo) {
+                if m.to.t() == end_t && arrival_safe(k, m, royal, arrival_ok, &mut memo) {
                     let victim = target.kind(m.to.xy());
                     let fa = axis_of_line(axis_of, m.from.l()) as u32;
-                    locs.push(Entry::Arriving { m, b: arrival_board(s, m), idx: INVALID, fa, mover, victim });
+                    let idx = find_jump(jump_tab, axis_of, m.from).unwrap_or(INVALID);
+                    if idx == INVALID {
+                        orphans.push((axis, locs.len() as Index));
+                    }
+                    locs.push(Entry::Arriving { m, b: arrival_board(s, m), idx, fa, mover, victim });
                 }
             }
         }
@@ -838,19 +874,9 @@ impl HcInfo {
         let dimension = np + max_branch;
         let n_branch = branch_moves.len() + 1;
         universe.set_ranges(dimension, |n| if n < np { axis_coords[n].len() } else { n_branch });
-        // Branch arrivals were only admitted with a live departure; existing-axis arrivals
-        // lose their coordinate when their departure was filtered out.
-        for n in 0..np {
-            for i in 0..axis_coords[n].len() {
-                if let Entry::Arriving { m, idx, .. } = &mut axis_coords[n][i] {
-                    match find_jump(jump_tab, axis_of, m.from) {
-                        Some(d) => *idx = d,
-                        None => {
-                            universe[n].erase(i as Index);
-                        }
-                    }
-                }
-            }
+        // (Branch arrivals were only admitted with a live departure.)
+        for &(n, i) in orphans.iter() {
+            universe[n].erase(i);
         }
         // The search only tests same-board checks on boards the action creates. A royal already
         // attacked on the same board of an opponent-to-move board stays capturable whatever the
@@ -886,9 +912,9 @@ impl HcInfo {
             groups.resize_with(np + 1, AxisGroups::default);
         }
         for n in 0..np {
-            groups[n].rebuild(&axis_coords[n], np, group_slots);
+            groups[n].rebuild(&axis_coords[n], first_jump[n], np, group_slots);
         }
-        groups[np].rebuild(branch_entries, np, group_slots);
+        groups[np].rebuild(branch_entries, 1, np, group_slots);
         *info_player = player;
         *dim = dimension;
         *new_axis = np;
@@ -914,7 +940,7 @@ impl HcInfo {
             self.branch_entries.push(Entry::Arriving { m, b: arrival_board(s, m), idx: dep, fa, mover, victim });
         }
         let np = self.new_axis;
-        self.groups[np].rebuild(&self.branch_entries, np, &mut self.scratch.group_slots);
+        self.groups[np].rebuild(&self.branch_entries, 1, np, &mut self.scratch.group_slots);
         self.branch_ready = true;
     }
 
