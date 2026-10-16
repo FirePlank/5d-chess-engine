@@ -1,0 +1,12 @@
+{
+  "name": "net_all",
+  "old": "2f9c43eaa44ea2e57fde88e6273a37d1394fc348",
+  "games": 12000,
+  "shards": 40,
+  "tc": "tc 10+0.1",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}
