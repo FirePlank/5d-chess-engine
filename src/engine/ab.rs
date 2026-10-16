@@ -869,6 +869,42 @@ impl AlphaBeta {
         mark
     }
 
+    /// `act` holds a move that neither creates a timeline nor lands on an active board in the
+    /// present the action leaves (e.g. a spatial move on a board the action's jumps left in
+    /// the future, or a jump between future or inactive boards): a wasted commitment, since
+    /// that board waits unchanged until the present reaches it, and the action without the
+    /// move is legal too. Leaves `s` as it was; an action that cannot be played here is not
+    /// wasted (the caller's own checks reject it).
+    fn wastes_moves(s: &mut State, act: &MoveSeq) -> bool {
+        if act.len() < 2 {
+            return false;
+        }
+        let player = s.get_present().1;
+        // A move creates a timeline when it lands on a board that is not its timeline's end.
+        let branches: Vec<bool> = act.iter().map(|m| s.get_timeline_end(m.to.l()) != (m.to.t(), player)).collect();
+        if branches.iter().all(|&b| !b) {
+            return false;
+        }
+        let mark = s.mark();
+        let mut ok = true;
+        for &m in act {
+            if s.get_board_ptr(m.from.l(), m.from.t(), player).is_none()
+                || s.get_timeline_end(m.from.l()) != (m.from.t(), player)
+                || !s.apply_move::<false>(m)
+            {
+                ok = false;
+                break;
+            }
+        }
+        let present = s.apparent_present().0;
+        let (amin, amax) = s.get_active_range();
+        s.unmake(mark);
+        ok && act.iter().zip(&branches).any(|(m, &b)| {
+            let l = m.to.l();
+            !b && !(l >= amin && l <= amax && m.to.t() <= present)
+        })
+    }
+
     /// Play a remembered action (TT/killer) only if it is legal in `s`.
     fn make_checked(s: &mut State, act: &MoveSeq) -> Option<Mark> {
         let _p = crate::misc::prof::scope(11);
@@ -993,7 +1029,7 @@ impl AlphaBeta {
         let (mut best_proven, mut all_proven) = (false, true);
         let mut qkiller = if ply <= MAX_PLY { self.qkillers[ply].clone() } else { None };
         if let Some(k) = qkiller.take() {
-            if let Some(mark) = Self::make_checked(s, &k) {
+            if let Some(mark) = (!Self::wastes_moves(s, &k)).then(|| Self::make_checked(s, &k)).flatten() {
                 let v = -self.qsearch(s, ply + 1, -beta, -alpha, qd - 1, None);
                 s.unmake(mark);
                 if self.aborted {
@@ -1045,6 +1081,9 @@ impl AlphaBeta {
                 };
                 if qkiller.as_ref() == Some(&act) {
                     qkiller = None;
+                    continue;
+                }
+                if Self::wastes_moves(s, &act) {
                     continue;
                 }
                 any = true;
@@ -1186,6 +1225,9 @@ impl AlphaBeta {
             remembered.extend(self.killers[ply].iter().flatten().filter(|k| tt_action.as_ref() != Some(*k)).cloned());
         }
         for (k, act) in remembered.into_iter().enumerate() {
+            if Self::wastes_moves(s, &act) {
+                continue;
+            }
             let Some(mark) = Self::make_checked(s, &act) else { continue };
             // The TT action keeps the node's PV status; killers after it are null-window.
             let v = if k == 0 && tt_action.is_some() {
@@ -1267,6 +1309,9 @@ impl AlphaBeta {
                                 // Only reached when the TT action failed validation (searched
                                 // ones are in `pre_tried`): it stays unsearched.
                                 skipped = true;
+                                continue;
+                            }
+                            if Self::wastes_moves(s, &act) {
                                 continue;
                             }
                             batch.push((self.action_score(s, &act, ply), act));
@@ -1599,6 +1644,9 @@ impl AlphaBeta {
         let mut agen = BestFirstCursor::default();
         self.start_actions(root, &hc, &mut agen, &mut OrderScratch::default(), Self::without_future(root, &hc, &ss), false);
         let mut full = Some(ss);
+        // A scratch copy for the wasted-move test (`wastes_moves` leaves it as it was).
+        let mut probe = root.clone();
+        probe.enable_undo();
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
         // Enumerating every root action can take seconds with many timelines: spend at most
         // a quarter of the budget on it (always keeping at least one action), and stop at once
@@ -1610,6 +1658,7 @@ impl AlphaBeta {
                 break;
             }
             match agen.next(&hc, root) {
+                Some(a) if Self::wastes_moves(&mut probe, &a) => {}
                 Some(a) => roots.push((self.action_score(root, &a, 0), a)),
                 None if roots.is_empty() && full.is_some() => agen.restart(&hc, full.take().unwrap()),
                 None => {
