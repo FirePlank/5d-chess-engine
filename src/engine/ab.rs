@@ -37,9 +37,6 @@ const ROOT_CAP: usize = 1000;
 const BATCH: usize = 12;
 const QDEPTH: i32 = 3;
 const QCAP: usize = 10;
-/// Score of a node whose searched actions all get mated while others were pruned: lost, but
-/// not a proven mate (just inside the non-mate range).
-const UNPROVEN_MATED: i32 = -(MATE - 1001);
 const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
@@ -817,7 +814,6 @@ impl AlphaBeta {
         let mut best = -INF;
         let mut any = false;
         let mut tried = 0;
-        let mut all_tried = false;
         let aborted = 'search: {
             while tried < QCAP {
                 if self.check_abort() {
@@ -834,7 +830,6 @@ impl AlphaBeta {
                         continue;
                     }
                 }) else {
-                    all_tried = true;
                     break;
                 };
                 any = true;
@@ -864,10 +859,6 @@ impl AlphaBeta {
         if !any {
             // Only reached in check: mated.
             return -(MATE - ply as i32);
-        }
-        // Mated in every evasion tried is only a mate when every evasion was tried.
-        if !all_tried && best <= -(MATE - 1000) {
-            return UNPROVEN_MATED;
         }
         best
     }
@@ -1089,10 +1080,6 @@ impl AlphaBeta {
         if searched == 0 {
             // Only the TT action existed but failed validation; fall back to static eval.
             return self.static_eval(s);
-        }
-        // Pruned actions might escape: a mate is only claimed when every action was searched.
-        if !exhausted && best <= -(MATE - 1000) {
-            best = UNPROVEN_MATED;
         }
         let bound = if best > alpha0 { Bound::Exact } else { Bound::Upper };
         self.tt_store(key, depth, bound, mate_to_tt(best, ply), &best_action);
