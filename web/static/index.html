@@ -46,6 +46,7 @@
         <button class="tool" id="tool-zoom-in" title="Zoom in (+)" aria-label="Zoom in"><svg><use href="#i-plus"/></svg></button>
         <button class="tool" id="tool-zoom-out" title="Zoom out (−)" aria-label="Zoom out"><svg><use href="#i-minus"/></svg></button>
         <button class="tool" id="tool-flip" title="Flip board (F)" aria-label="Flip board"><svg><use href="#i-flip"/></svg></button>
+        <button class="tool" id="tool-autosubmit" title="Auto-submit" aria-label="Auto-submit actions"><svg><use href="#i-send"/></svg></button>
       </div>
       <div class="draft-bar hidden" id="draft-bar">
         <div class="draft-moves" id="draft-moves"></div>
@@ -56,6 +57,7 @@
         </div>
         <div class="draft-hint" id="draft-hint"></div>
       </div>
+      <div class="mv-hud" id="mv-hud" aria-live="polite"></div>
       <div class="coord-chip" id="coord-chip"></div>
       <div class="toast-host" id="toasts" aria-live="polite"></div>
     </div>
@@ -296,6 +298,7 @@
     <symbol id="i-flip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v18M7 21l-4-4M7 21l4-4M17 21V3M17 3l-4 4M17 3l4 4"/></symbol>
     <symbol id="i-upload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></symbol>
     <symbol id="i-share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 5l7 7-7 7M4 12h15"/><path d="M4 5v4M4 15v4" opacity=".55"/></symbol>
     <symbol id="i-flag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22V4M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
     <symbol id="i-first" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 5v14M17 6l-6 6 6 6"/></symbol>

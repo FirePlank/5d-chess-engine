@@ -1,6 +1,6 @@
 // Building an action on the board: select a piece, click a target, repeat on every board you
 // must (or want to) play, then submit. Shared by the analysis board and play mode.
-import { $, el, toast } from './util.js';
+import { $, el, toast, store } from './util.js';
 
 export class MoveInput {
   constructor(board) {
@@ -9,8 +9,25 @@ export class MoveInput {
     this.draft = [];
     this.selected = null;
     this.targets = [];
-    this.autoSubmit = true;
+    // Like the Steam game, an action waits for Submit; auto-submit (toolbar) sends a lone
+    // action as soon as nothing else can be played.
+    this.autoSubmit = store('autoSubmit') === true;
+    this.peek = false;
     board.onSquare = (sq) => this.click(sq);
+    const tool = $('#tool-autosubmit');
+    const showTool = () => {
+      tool.classList.toggle('on', this.autoSubmit);
+      tool.title = this.autoSubmit
+        ? 'Auto-submit is on: an action is sent once nothing else can be played (click to turn off)'
+        : 'Auto-submit is off: press Submit or Enter after every action, like the Steam game (click to turn on)';
+    };
+    tool.onclick = () => {
+      this.autoSubmit = !this.autoSubmit;
+      store('autoSubmit', this.autoSubmit);
+      showTool();
+      toast(this.autoSubmit ? 'Auto-submit on' : 'Auto-submit off: press Submit (Enter) after each action');
+    };
+    showTool();
     $('#draft-undo').onclick = () => this.undo();
     $('#draft-reset').onclick = () => this.clear();
     $('#draft-submit').onclick = () => this.submit();
@@ -26,7 +43,8 @@ export class MoveInput {
     this.draft = [];
     this.selected = null;
     this.targets = [];
-    this.board.setOverlay({ selected: null, targets: [] });
+    this.peek = false;
+    this.board.setOverlay({ selected: null, targets: [], targetColor: null, peek: false });
     this.renderBar(null);
   }
 
@@ -42,39 +60,52 @@ export class MoveInput {
     const v = this.view();
     this.board.setView(v, { follow });
     this.renderBar(v);
+    renderHud(v);
     if (this.source.onView) this.source.onView(v, this.draft);
     return v;
   }
 
+  /**
+   * A click on the board: select one of your pieces on a playable board and move it, or
+   * click any other piece on a board of its own colour (an opponent's piece on a board your
+   * action just made, say) to see where it could go. Seeing moves never plays anything.
+   */
   click(sq) {
     const s = this.source;
-    if (!s || !s.canMove()) {
-      if (sq && s && s.blocked) s.blocked();
-      return;
-    }
+    if (!s) return;
     if (!sq) return this.deselect();
-    if (this.selected) {
+    const canMove = s.canMove();
+    if (this.selected && !this.peek && canMove) {
       const tgt = this.targets.find((t) => t[0] === sq.l && t[1] === sq.t && t[2] === sq.x && t[3] === sq.y && sq.c === this.board.view.player);
       if (tgt) return this.move(this.selected, tgt);
     }
     const from = [sq.l, sq.t, sq.x, sq.y];
-    if (this.selected && this.selected.l === sq.l && this.selected.t === sq.t && this.selected.x === sq.x && this.selected.y === sq.y) return this.deselect();
-    if (!this.board.isInteresting(sq)) return this.deselect();
+    if (this.selected && this.selected.l === sq.l && this.selected.v === sq.v && this.selected.x === sq.x && this.selected.y === sq.y) return this.deselect();
+    const own = canMove && this.board.isInteresting(sq);
+    const peek = !own && this.board.isPeekable(sq);
+    if (!own && !peek) {
+      if (!canMove && s.blocked && this.board.isInteresting(sq)) s.blocked();
+      return this.deselect();
+    }
     let targets = [];
     try {
-      targets = s.rules.call({ cmd: 'targets', node: s.node(), draft: this.draft, from }).targets;
+      const req = { cmd: 'targets', node: s.node(), draft: this.draft, from };
+      if (peek) req.color = sq.c;
+      targets = s.rules.call(req).targets;
     } catch (e) {
       toast(e.message, { error: true });
     }
     this.selected = { ...sq };
     this.targets = targets;
-    this.board.setOverlay({ selected: this.selected, targets });
+    this.peek = peek;
+    this.board.setOverlay({ selected: this.selected, targets, targetColor: peek ? sq.c : null, peek });
   }
 
   deselect() {
     this.selected = null;
     this.targets = [];
-    this.board.setOverlay({ selected: null, targets: [] });
+    this.peek = false;
+    this.board.setOverlay({ selected: null, targets: [], targetColor: null, peek: false });
   }
 
   move(sel, tgt) {
@@ -147,7 +178,7 @@ export class MoveInput {
     const hint = $('#draft-hint');
     $('#draft-submit').disabled = !v.canSubmit;
     if (v.canSubmit) {
-      hint.textContent = 'Ready: submit, or keep playing on other boards you may move on.';
+      hint.textContent = 'Ready: Submit (Enter), or keep playing other boards. Click any piece to see its moves.';
       hint.classList.remove('bad');
     } else {
       hint.textContent = v.submitError ? cap(v.submitError) : '';
@@ -155,6 +186,34 @@ export class MoveInput {
       if (/every board on the present/.test(v.submitError || '')) hint.textContent = 'Play a move on every highlighted board on the present, then submit.';
     }
   }
+}
+
+/**
+ * The present and timeline advantage, as in the Steam game: timelines each side has created,
+ * who leads, and whether the side to move would get an active timeline by branching now (a
+ * side may lead the other by one active timeline; further ones are inactive).
+ */
+export function renderHud(v) {
+  const hud = $('#mv-hud');
+  if (!v) return hud.replaceChildren();
+  const side = v.player ? 'Black' : 'White';
+  const dot = (black) => el('i', { class: 'side-dot ' + (black ? 'black' : 'white') });
+  const present = el('span', { class: 'hud-item', title: 'The present: the earliest turn among the active timelines. Every active board on it must be played.' },
+    dot(v.player), el('b', { text: `Present T${v.present}` }), el('span', { class: 'muted', text: `${side} to move` }));
+  const white = v.lines[1] - v.initialLines[1];
+  const black = v.initialLines[0] - v.lines[0];
+  const inactive = (v.active[0] - v.lines[0]) + (v.lines[1] - v.active[1]);
+  const lead = white - black;
+  const adv = lead > 0 ? `White +${lead}` : lead < 0 ? `Black +${-lead}` : 'Even';
+  const mine = v.player ? black : white, theirs = v.player ? white : black;
+  const next = mine <= theirs ? 'active' : 'inactive';
+  const items = [present];
+  if (white || black || inactive) {
+    items.push(el('span', { class: 'hud-item', title: `Timelines created: White ${white}, Black ${black}. A side may lead by one active timeline; ${inactive} timeline(s) are inactive. A new timeline by ${side} now would be ${next}.` },
+      el('b', { text: 'Timelines' }), el('span', { text: `W ${white} · B ${black}` }), el('b', { text: adv }),
+      el('span', { class: 'muted', text: inactive ? `${inactive} inactive` : `next ${side[0]} branch ${next}` })));
+  }
+  hud.replaceChildren(...items);
 }
 
 function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }

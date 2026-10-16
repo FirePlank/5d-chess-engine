@@ -364,8 +364,25 @@ impl Game {
 
     /// Destination squares of the piece at `from` in the draft position.
     pub fn targets(&self, id: usize, draft: &[ExtMove], from: Vec4) -> Result<Vec<Vec4>, String> {
+        self.piece_targets(id, draft, from, None)
+    }
+
+    /// Destinations of the piece at `from` on the board of colour `color` (default: the side to
+    /// move, on a playable board). With the other colour this previews a move the opponent could
+    /// make from that board (e.g. on a board this action just created); nothing is played.
+    pub fn piece_targets(&self, id: usize, draft: &[ExtMove], from: Vec4, color: Option<bool>) -> Result<Vec<Vec4>, String> {
         let s = self.draft_state(id, draft)?;
         let player = s.get_present().1;
+        if let Some(c) = color.filter(|&c| c != player) {
+            let Some(b) = s.get_board_ptr(from.l(), from.t(), c) else { return Ok(Vec::new()) };
+            let p = b.get_piece(from.xy());
+            if p == NO_PIECE || p == crate::core::piece::WALL_PIECE || crate::core::piece::piece_color(p) != c {
+                return Ok(Vec::new());
+            }
+            let mut out = Vec::new();
+            s.multiverse().gen_piece_move(from, c, &mut out);
+            return Ok(out);
+        }
         if s.get_board_ptr(from.l(), from.t(), player).is_none() || s.get_timeline_end(from.l()) != (from.t(), player) {
             return Ok(Vec::new());
         }
