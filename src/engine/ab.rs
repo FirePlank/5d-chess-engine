@@ -775,38 +775,6 @@ impl AlphaBeta {
 
     /// Moves on boards the side to move doesn't have to play (ahead of the present, or on
     /// inactive timelines) are left out: only the null coordinate stay on those axes.
-    /// The root's space: like `without_future`, but pieces on optional boards may still travel
-    /// back in time (their departures stay), since a jump from the future can defend or attack
-    /// the present (parallel defence, buffer timelines).
-    fn with_future_departures(s: &State, info: &HcInfo, ss: &SearchSpace) -> SearchSpace {
-        let present = s.get_present();
-        let (amin, amax) = s.get_active_range();
-        let (lo, hi) = s.get_lines_range();
-        let optional: Vec<usize> = (lo..=hi)
-            .filter(|&l| !(l >= amin && l <= amax && s.get_timeline_end(l) == present))
-            .filter_map(|l| info.line_to_axis(l))
-            .collect();
-        if optional.is_empty() {
-            return ss.clone();
-        }
-        let mut out = SearchSpace::default();
-        'hc: for hc in &ss.hcs {
-            let mut h = hc.clone();
-            for &n in &optional {
-                let keep: Vec<Index> = (0..info.axis_len(n) as Index)
-                    .filter(|&i| hc[n].contains(i) && (i == 0 || matches!(info.entry(n, i), Entry::Departing { .. })))
-                    .collect();
-                let Some((&first, rest)) = keep.split_first() else { continue 'hc };
-                h[n].assign_singleton(first);
-                for &i in rest {
-                    h[n].insert(i);
-                }
-            }
-            out.hcs.push(h);
-        }
-        out
-    }
-
     fn without_future(s: &State, info: &HcInfo, ss: &SearchSpace) -> SearchSpace {
         let present = s.get_present();
         let (amin, amax) = s.get_active_range();
@@ -1688,7 +1656,7 @@ impl AlphaBeta {
         // Root actions (all of them, up to the root cap), ordered heuristically.
         let (hc, ss) = HcInfo::build_hc(root);
         let mut agen = BestFirstCursor::default();
-        self.start_actions(root, &hc, &mut agen, &mut OrderScratch::default(), Self::with_future_departures(root, &hc, &ss), false);
+        self.start_actions(root, &hc, &mut agen, &mut OrderScratch::default(), Self::without_future(root, &hc, &ss), false);
         let mut full = Some(ss);
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
         // Enumerating every root action can take seconds with many timelines: spend at most
