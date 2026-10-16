@@ -4,7 +4,7 @@ pub const NAMES: [&str; 20] = [
     "build_hc", "hc_movegen", "take_point", "jump+present", "find_checks", "space_ops",
     "ordering", "state_clone", "qsearch", "eval", "in_check", "tt_validate",
     "hc_entries", "hc_branch", "hc_finish", "hc_status", "local_captures", "null_move",
-    "spare1", "spare2",
+    "hc_physical", "hc_jumps",
 ];
 
 #[cfg(feature = "prof")]
