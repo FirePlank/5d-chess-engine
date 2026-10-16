@@ -6,7 +6,7 @@ use crate::core::board::Board;
 use crate::core::check_position::CheckPosition;
 use crate::core::state::State;
 
-pub const NF: usize = 80;
+pub const NF: usize = 75;
 
 /// Feature indices.
 pub mod fi {
@@ -75,15 +75,6 @@ pub mod fi {
     /// Time-travel exposure of the squares next to enemy royals (`ex::F7_WEAK` ..= `ex::KN_CHECKS`),
     /// white's minus black's.
     pub const F7: usize = 70;
-    /// The f7 sac table (`sac`), white's minus black's: created timelines whose latest board
-    /// is a known local mate for the side (and how close the mate is: 12 - plies), winning
-    /// travels it can play now (and those of the side to move, + for white to move), and open
-    /// routes to winning travel targets.
-    pub const SAC_LINE: usize = 75;
-    pub const SAC_CLOSE: usize = 76;
-    pub const SAC_NOW: usize = 77;
-    pub const SAC_NOW_STM: usize = 78;
-    pub const SAC_OPEN: usize = 79;
 }
 
 pub const FEATURE_NAMES: [&str; NF] = [
@@ -97,7 +88,6 @@ pub const FEATURE_NAMES: [&str; NF] = [
     "king_prox_5d", "queen_prox", "travel_past", "travel_now", "travel_backed", "weak_sq", "open_orth5",
     "open_diag5", "open_multi5", "king_off", "king_off_new", "low_flight", "exiled", "inactive_royal_att",
     "travel_stm", "tl_slots_threat", "tl_slots_stm", "f7_weak", "f7_open", "f7_qreach", "f7_broute", "kn_checks",
-    "sac_line", "sac_close", "sac_now", "sac_now_stm", "sac_open",
 ];
 
 pub type Features = [i32; NF];
@@ -201,14 +191,6 @@ pub fn tuned_weights() -> Weights {
         ("f7_qreach", 103.1),
         ("f7_broute", 69.8),
         ("kn_checks", 203.5),
-        // Set by hand (untuned; see `split_sac`): a local mate in the sac table outweighs the
-        // cost of the created timeline and the piece given, a winning travel on hand a bit
-        // less.
-        ("sac_line", 5000.0),
-        ("sac_close", 200.0),
-        ("sac_now", 2000.0),
-        ("sac_now_stm", 1500.0),
-        ("sac_open", 300.0),
     ])
 }
 
@@ -416,12 +398,7 @@ pub mod ex {
     pub const F7_BROUTE: usize = 10;
     /// Knight checks available against enemy royals (Nh3-g5+ in the f7 attack).
     pub const KN_CHECKS: usize = 11;
-    /// The f7 sac table (`fi::SAC_LINE` ..).
-    pub const SAC_LINE: usize = 12;
-    pub const SAC_CLOSE: usize = 13;
-    pub const SAC_NOW: usize = 14;
-    pub const SAC_OPEN: usize = 15;
-    pub const COUNT: usize = 16;
+    pub const COUNT: usize = 12;
 }
 
 /// Squares within king distance 2.
@@ -620,11 +597,6 @@ pub trait TermSource {
         None
     }
     fn past_put(&mut self, _key: u64, _v: [i32; 2]) {}
-    /// Memoized `sac::win_targets` results by `sac::targets_key`.
-    fn sac_get(&mut self, _key: u64) -> Option<super::sac::Targets> {
-        None
-    }
-    fn sac_put(&mut self, _key: u64, _v: super::sac::Targets) {}
 }
 
 /// Terms computed on every request.
@@ -641,7 +613,6 @@ pub struct TermCache {
     size: (i32, i32),
     slots: Vec<(Board, bool, BoardTerms)>,
     past: Vec<(u64, [i32; 2])>,
-    sac: Vec<(u64, super::sac::Targets)>,
 }
 
 impl Default for TermCache {
@@ -650,7 +621,6 @@ impl Default for TermCache {
             size: (0, 0),
             slots: vec![(Board::default(), false, BoardTerms::ZERO); 1 << 12],
             past: vec![(0, [0; 2]); 1 << 14],
-            sac: vec![(0, super::sac::Targets::default()); 1 << 12],
         }
     }
 }
@@ -664,15 +634,6 @@ impl TermSource for TermCache {
     #[inline]
     fn past_put(&mut self, key: u64, v: [i32; 2]) {
         self.past[(key >> 50) as usize] = (key, v);
-    }
-    #[inline]
-    fn sac_get(&mut self, key: u64) -> Option<super::sac::Targets> {
-        let e = &self.sac[(key >> 52) as usize];
-        if e.0 == key && key != 0 { Some(e.1) } else { None }
-    }
-    #[inline]
-    fn sac_put(&mut self, key: u64, v: super::sac::Targets) {
-        self.sac[(key >> 52) as usize] = (key, v);
     }
     #[inline]
     fn terms(&mut self, b: &Board, w: i32, h: i32) -> &BoardTerms {
@@ -755,49 +716,12 @@ pub fn sides_with(s: &State, src: &mut impl TermSource) -> Sides {
         }
     }
     royal_5d(s, &mut sd, src, &atts);
-    if super::sac::active() {
-        sac_terms(s, &mut sd, src);
-    }
     let (l0_min, l0_max) = s.get_initial_lines_range();
     let white_created = l_max - l0_max;
     let black_created = l0_min - l_min;
     sd.side[0][si::SLOTS] = (1 + black_created - white_created).clamp(0, 4);
     sd.side[1][si::SLOTS] = (1 + white_created - black_created).clamp(0, 4);
     sd
-}
-
-/// The f7 sac table's terms (`ex::SAC_LINE` ..) of the active timelines.
-fn sac_terms(s: &State, sd: &mut Sides, src: &mut impl TermSource) {
-    use super::sac;
-    let m = s.multiverse();
-    let (amin, amax) = s.get_active_range();
-    let (l0, l1) = s.get_initial_lines_range();
-    for l in amin..=amax {
-        if l < l0 || l > l1 {
-            if let Some((attacker, plies)) = sac::line_win(m, l) {
-                let e = &mut sd.extra[attacker as usize];
-                e[ex::SAC_LINE] += 1;
-                e[ex::SAC_CLOSE] += 12 - (plies as i32).min(11);
-            }
-        }
-        for ci in 0..2 {
-            let c = ci == 1;
-            let key = sac::targets_key(m, l, c);
-            let wt = match src.sac_get(key) {
-                Some(w) => w,
-                None => {
-                    let w = sac::win_targets(m, l, c);
-                    src.sac_put(key, w);
-                    w
-                }
-            };
-            if wt.now_q | wt.now_b != 0 {
-                let (now, open) = sac::line_terms(m, l, c, &wt);
-                sd.extra[ci][ex::SAC_NOW] += now;
-                sd.extra[ci][ex::SAC_OPEN] += open;
-            }
-        }
-    }
 }
 
 // ------------------------------------------------------------------ 5D royal danger
@@ -1223,12 +1147,6 @@ pub fn features_from(sd: &Sides, s: &State, checks: bool) -> Features {
     for k in 0..=ex::KN_CHECKS - ex::F7_WEAK {
         f[fi::F7 + k] = e(ex::F7_WEAK + k);
     }
-    let capped = |i: usize, cap: i32| sd.extra[0][i].min(cap) - sd.extra[1][i].min(cap);
-    f[fi::SAC_LINE] = capped(ex::SAC_LINE, 2);
-    f[fi::SAC_CLOSE] = capped(ex::SAC_CLOSE, 22);
-    f[fi::SAC_NOW] = capped(ex::SAC_NOW, 1);
-    f[fi::SAC_NOW_STM] = sign * sd.extra[stm as usize][ex::SAC_NOW].min(1);
-    f[fi::SAC_OPEN] = capped(ex::SAC_OPEN, 3);
     for k in 0..=si::INACTIVE_ROYAL_ATT - si::TRAVEL_PAST {
         f[fi::DANGER_5D + k] = d(si::TRAVEL_PAST + k);
     }
@@ -1248,16 +1166,6 @@ const DANGER_CAP: i32 = 6;
 #[inline]
 fn royal_danger(f: &[i32; si::COUNT]) -> i32 {
     (f[si::ROYAL_ATT] + f[si::TRAVEL_PAST] + f[si::TRAVEL_NOW] + f[si::WEAK_SQ] + f[si::LOW_FLIGHT] + f[si::KING_OFF]).min(DANGER_CAP)
-}
-
-/// Move the f7 sac table's features (`fi::SAC_LINE` ..) out of `f` into the returned vector:
-/// the search adds their score after the eval net's correction, which never saw them.
-pub fn split_sac(f: &mut Features) -> Features {
-    let mut s = [0i32; NF];
-    for i in fi::SAC_LINE..=fi::SAC_OPEN {
-        s[i] = std::mem::take(&mut f[i]);
-    }
-    s
 }
 
 /// Weights from (feature name, value) pairs; unnamed features get zero.
