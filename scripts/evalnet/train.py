@@ -15,7 +15,7 @@ import struct
 import numpy as np
 import torch
 
-NI = 89
+NI = 113
 
 
 def load(paths):
@@ -24,7 +24,7 @@ def load(paths):
         a = np.fromfile(p, dtype=np.float32).reshape(-1, NI + 4)
         a[:, NI + 3] += k * 1e6  # game ids unique across files
         parts.append(a)
-    return np.concatenate(parts)
+    return parts[0] if len(parts) == 1 else np.concatenate(parts)
 
 
 def fit_k(base, wdl):
@@ -82,13 +82,24 @@ def main():
 
     games = np.unique(game)
     val_games = set(rng.choice(games, size=max(1, len(games) // 10), replace=False).tolist())
-    is_val = np.array([g in val_games for g in game])
-    mean = x[~is_val].mean(0)
-    std = np.maximum(x[~is_val].std(0), 0.05)
+    is_val = np.isin(game, np.array(sorted(val_games), dtype=game.dtype))
+    # Input statistics over the training rows, and the normalized inputs, in chunks (the
+    # records can take more memory than a few copies of them allow).
+    chunk = 1 << 20
+    s1, s2, n = np.zeros(NI), np.zeros(NI), 0
+    for s in range(0, len(x), chunk):
+        xx = x[s:s + chunk][~is_val[s:s + chunk]].astype(np.float64)
+        s1 += xx.sum(0)
+        s2 += (xx * xx).sum(0)
+        n += len(xx)
+    mean = (s1 / n).astype(np.float32)
+    std = np.maximum(np.sqrt(np.maximum(s2 / n - (s1 / n) ** 2, 0)), 0.05).astype(np.float32)
 
     dev = 'cuda' if torch.cuda.is_available() else 'cpu'
     T = lambda v: torch.tensor(v, dtype=torch.float32, device=dev)
-    X = T((x - mean) / std)
+    X = torch.empty((len(x), NI), dtype=torch.float32, device=dev)
+    for s in range(0, len(x), chunk):
+        X[s:s + chunk] = torch.from_numpy(((x[s:s + chunk] - mean) / std).astype(np.float32)).to(dev)
     B, Y = T(base), T(target)
     tr = torch.tensor(np.nonzero(~is_val)[0], device=dev)
     va = torch.tensor(np.nonzero(is_val)[0], device=dev)

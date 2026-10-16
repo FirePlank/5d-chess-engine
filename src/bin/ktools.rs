@@ -228,6 +228,49 @@ fn main() {
                 }
             }
         }
+        "evalpos" => {
+            // evalpos <file.g> [ms] : static evaluation breakdown (white's view) and a short
+            // search of each G line.
+            use kairos::engine::hce;
+            let ms: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1000);
+            let text = std::fs::read_to_string(&args[2]).expect("positions");
+            for line in text.lines().filter(|l| l.starts_with("G ")) {
+                let s = parse_g_line(line).unwrap();
+                let w = hce::tuned_weights();
+                let sd = hce::sides(&s);
+                let f = hce::features_from(&sd, &s, false);
+                let black = s.get_present().1;
+                let base = hce::score(&f, &w, black);
+                let res = kairos::engine::evalnet::embedded()
+                    .map(|n| n.residual(&kairos::engine::evalnet::inputs_from(&sd, &s, base)))
+                    .unwrap_or(0);
+                let sg = if black { -1 } else { 1 };
+                writeln!(out, "present {:?}: hce {} net residual {} total {} (white's view)", s.get_present(), sg * base, sg * res, sg * (base + res)).unwrap();
+                let mut terms: Vec<(f32, usize)> =
+                    (0..hce::NF).filter(|&i| f[i] != 0).map(|i| (w[i] * f[i] as f32, i)).collect();
+                terms.sort_by(|a, b| b.0.abs().total_cmp(&a.0.abs()));
+                for (v, i) in terms.iter().take(14) {
+                    write!(out, " {}={}({:+.0})", hce::FEATURE_NAMES[*i], f[*i], v).unwrap();
+                }
+                writeln!(out).unwrap();
+                write!(out, " 5D (white, black):").unwrap();
+                for i in hce::si::TRAVEL_PAST..hce::si::COUNT {
+                    let (a, b) = (sd.side[0][i], sd.side[1][i]);
+                    if a != 0 || b != 0 {
+                        write!(out, " {}=({},{})", hce::FEATURE_NAMES[hce::fi::DANGER_5D + i - hce::si::TRAVEL_PAST], a, b).unwrap();
+                    }
+                }
+                writeln!(out).unwrap();
+                if ms > 0 {
+                    let mut e = kairos::engine::ab::AlphaBeta::new();
+                    let stop = std::sync::atomic::AtomicBool::new(false);
+                    let limits = kairos::engine::Limits { movetime: Some(ms), ..Default::default() };
+                    let mut last = String::new();
+                    let best = e.find_best_move(&s, &limits, &stop, &mut |m| last = m);
+                    writeln!(out, "  search {}ms: {} | {}", ms, best.map(|a| a.to_string()).unwrap_or_default(), last).unwrap();
+                }
+            }
+        }
         "netdata" => netdata(&args[2..], &mut out),
         "netcheck" => {
             // Residuals of the first records of a netdata file under a net blob.
