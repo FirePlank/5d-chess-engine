@@ -41,7 +41,7 @@ const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
-const ROOT_LMR_MIN_INDEX: usize = 10;
+const ROOT_LMR_MIN_INDEX: usize = 6;
 
 /// Late move reduction for the `index`-th action at `depth`: 1 + ln(depth) ln(index) / 3.
 #[inline]
