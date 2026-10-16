@@ -57,7 +57,7 @@ const ROOT_FUTURE_MATE_MS: u64 = 50;
 /// changes inside the first window (bench positions, depth 4 on); the maximum is Apeiron's
 /// 1000/60 of it.
 const ASP_MIN_DEPTH: i32 = 2;
-const ASP_WINDOW: i32 = 750;
+const ASP_WINDOW: i32 = 1500;
 const ASP_FAIL_MULT: i32 = 4;
 const ASP_MAX_WINDOW: i32 = ASP_WINDOW * 1000 / 60;
 const ASP_MAX_TRIES: i32 = 4;
