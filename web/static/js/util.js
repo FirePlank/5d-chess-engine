@@ -25,24 +25,67 @@ export function toast(msg, { error = false, ms = 3200 } = {}) {
   setTimeout(() => t.remove(), ms);
 }
 
-/** Engine score (White's view): "+1.23", "−0.40", "#3", "#−2". Units are hundredths. */
-export function fmtScore(s) {
-  if (!s) return '—';
-  // Recorded mates (SPRT writes ±20000) carry no distance.
-  if (s.mate != null && s.recorded) return s.mate > 0 ? '+#' : '−#';
-  if (s.mate != null) return s.mate > 0 ? `#${s.mate}` : `#−${-s.mate}`;
-  if (s.cp == null) return '—';
-  const v = s.cp / 100;
-  const t = Math.abs(v).toFixed(Math.abs(v) >= 10 ? 1 : 2);
-  return v > 0 ? `+${t}` : v < 0 ? `−${t}` : '0.00';
+/**
+ * In-app confirmation: resolves true when the user confirms, false on Cancel, Esc or a click
+ * outside. `danger` styles the confirm button as destructive.
+ */
+export function confirmDialog(title, { text = '', ok = 'OK', danger = false } = {}) {
+  const dlg = $('#dlg-confirm');
+  $('#confirm-title').textContent = title;
+  $('#confirm-text').textContent = text;
+  $('#confirm-text').classList.toggle('hidden', !text);
+  const btn = $('#confirm-ok');
+  btn.textContent = ok;
+  btn.classList.toggle('danger', danger);
+  return new Promise((resolve) => {
+    // Settle from the controls themselves (not the dialog's close event).
+    const handlers = [
+      [btn, 'click', (e) => { e.preventDefault(); done(true); }],
+      [$('#confirm-cancel'), 'click', (e) => { e.preventDefault(); done(false); }],
+      [dlg, 'cancel', (e) => { e.preventDefault(); done(false); }],
+      [dlg, 'click', (e) => { if (e.target === dlg) done(false); }],
+    ];
+    const done = (v) => {
+      for (const [node, ev, fn] of handlers) node.removeEventListener(ev, fn);
+      if (dlg.open) dlg.close();
+      resolve(v);
+    };
+    for (const [node, ev, fn] of handlers) node.addEventListener(ev, fn);
+    dlg.showModal();
+    btn.focus();
+  });
 }
 
-/** Winning chances in [-1, 1] for White (for the bar and the graph). */
+/**
+ * Kairos scores are in internal units, not centipawns: a pawn is about 142 (src/engine/hce.rs,
+ * mat_a_pawn) and a queen 1250. Numbers are shown in pawns; the bar and the graph use the
+ * win probability of the engine tuner's logistic, p = 1 / (1 + exp(-0.004 * score))
+ * (src/bin/tune.rs, --k 0.004), i.e. K = 250 units.
+ */
+export const PAWN_UNITS = 142;
+export const LOGISTIC_K = 250;
+
+/** Engine score (White's view) in pawns: "+2.3", "-0.4", "0.0"; mates "#3" / "#-2". */
+export function fmtScore(s) {
+  if (!s) return '-';
+  // Recorded mates (SPRT writes ±20000) carry no distance.
+  if (s.mate != null && s.recorded) return s.mate > 0 ? '+#' : '-#';
+  if (s.mate != null) return s.mate > 0 ? `#${s.mate}` : `#-${-s.mate}`;
+  if (s.cp == null) return '-';
+  const v = Math.round((s.cp / PAWN_UNITS) * 10) / 10;
+  return v > 0 ? `+${v.toFixed(1)}` : v < 0 ? `-${(-v).toFixed(1)}` : '0.0';
+}
+
+/** White's win probability in [0, 1]. */
+export function winProbability(s) {
+  if (!s) return 0.5;
+  if (s.mate != null) return s.mate > 0 ? 1 : 0;
+  return 1 / (1 + Math.exp(-(s.cp || 0) / LOGISTIC_K));
+}
+
+/** The same as an advantage in [-1, 1] (0 = even), for the bar and the graph. */
 export function winChance(s) {
-  if (!s) return 0;
-  if (s.mate != null) return s.mate > 0 ? 1 : -1;
-  const cp = Math.max(-2500, Math.min(2500, s.cp || 0));
-  return 2 / (1 + Math.exp(-0.0022 * cp)) - 1;
+  return 2 * winProbability(s) - 1;
 }
 
 /** A recorded engine score (mover's view, ±20000 = mate) as {cp|mate} for White. */

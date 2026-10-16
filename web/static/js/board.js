@@ -90,12 +90,12 @@ export class MultiverseView {
     const cs = getComputedStyle(document.documentElement);
     const v = (n) => cs.getPropertyValue(n).trim();
     this.colors = {
-      bg: v('--board-bg'), lane: v('--board-lane'), laneInactive: v('--board-lane-inactive'), text: v('--board-grid-text'),
-      light: v('--board-light'), dark: v('--board-dark'), frameW: v('--board-frame-white'), frameB: v('--board-frame-black'),
-      outline: v('--board-frame-outline'), present: v('--board-present'), presentEdge: v('--board-present-edge'),
-      branch: v('--board-branch'), last: v('--board-last'), select: v('--board-select'), targetDot: v('--board-target'),
-      check: v('--board-check'), arrowW: v('--board-arrow-w'), arrowB: v('--board-arrow-b'), pv: v('--board-arrow-pv'),
-      draft: v('--board-draft'), accent: v('--accent'), font: getComputedStyle(document.body).fontFamily,
+      bg: v('--mv-bg'), lane: v('--mv-lane'), text: v('--mv-text'), textStrong: v('--mv-text-strong'),
+      frameW: v('--mv-frame-w'), frameB: v('--mv-frame-b'), outline: v('--mv-outline'), present: v('--mv-present'),
+      branch: v('--mv-branch'), inactive: parseFloat(v('--mv-inactive')) || 0.5,
+      light: v('--sq-light'), dark: v('--sq-dark'), last: v('--hl-last'), select: v('--hl-select'), target: v('--hl-target'),
+      draft: v('--hl-draft'), check: v('--hl-check'), arMove: v('--ar-move'), arCheck: v('--ar-check'), arPv: v('--ar-pv'),
+      arDraft: v('--ar-draft'), accent: v('--accent'), font: getComputedStyle(document.body).fontFamily,
     };
     this.redraw();
   }
@@ -164,14 +164,23 @@ export class MultiverseView {
     const s = Math.max(2, Math.min(maxScale, (this.w - 2 * padX) / Math.max(1, x1 - x0), (this.h - 2 * padY) / Math.max(1, y1 - y0)));
     this.moveTo({ x: (x0 + x1) / 2, y: (y0 + y1) / 2, s }, animate);
   }
-  /** Everything in view; if that would make squares too small to read, the present instead. */
+  /**
+   * The whole multiverse in view. With `readable` (on load), a multiverse too long to show at a
+   * readable size keeps every timeline in view around the present.
+   */
   fit(animate = true, readable = false) {
     if (!this.w) return;
     this.fitted = true;
     const [x0, y0, x1, y1] = this.bounds();
-    const s = Math.min((this.w - 96) / (x1 - x0 + 2), (this.h - 112) / (y1 - y0 + 2));
-    if (readable && s < 14 && this.view) return this.goPresent(animate);
-    this.frame(x0 - 1.5, y0 - 1.5, x1 + 0.5, y1 + 0.5, animate, 60);
+    const sx = (this.w - 80) / (x1 - x0 + 2), sy = (this.h - 72) / (y1 - y0 + 2);
+    const MIN = 4;
+    if (!readable || Math.min(sx, sy) >= MIN) return this.frame(x0 - 1.5, y0 - 1.5, x1 + 0.5, y1 + 0.5, animate, 60);
+    const s = Math.max(MIN, Math.min(sy, 18));
+    // The present a little left of centre, so the boards after it show too; never past the end.
+    const vw = this.w / s;
+    const present = this.view ? this.boardX(2 * this.view.present + this.view.player) + this.bw / 2 : x1;
+    const x = Math.min(present + vw * 0.15, x1 + 1 - vw / 2);
+    this.moveTo({ x, y: (y0 + y1) / 2, s }, animate);
   }
   /** Show the boards on the present, as large as they fit. */
   goPresent(animate = true) {
@@ -202,18 +211,17 @@ export class MultiverseView {
     this.target = { x: wx - (sx - this.w / 2) / s, y: wy - (sy - this.h / 2) / s, s };
     this.redraw();
   }
-  /** Pan just enough that a world rectangle is visible. */
+  /**
+   * Keep a world rectangle comfortably in view: when it leaves the middle of the view, centre
+   * on it (or, if it is wider than the view, show its right end: the latest turns).
+   */
   ensureVisible(x0, y0, x1, y1) {
     const c = this.target || this.cam;
-    const vw = this.w / c.s, vh = this.h / c.s;
-    const m = 1.2;
+    const vw = this.w / c.s, vh = (this.h - 24) / c.s;
+    const mx = vw * 0.1, my = vh * 0.1;
     let { x, y } = c;
-    if (x1 - x0 + 2 * m > vw) x = (x0 + x1) / 2;
-    else if (x0 - m < x - vw / 2) x = x0 - m + vw / 2;
-    else if (x1 + m > x + vw / 2) x = x1 + m - vw / 2;
-    if (y1 - y0 + 2 * m > vh) y = (y0 + y1) / 2;
-    else if (y0 - m < y - vh / 2) y = y0 - m + vh / 2;
-    else if (y1 + m > y + vh / 2) y = y1 + m - vh / 2;
+    if (x0 < x - vw / 2 + mx || x1 > x + vw / 2 - mx) x = x1 - x0 > vw - 2 * mx ? x1 + mx - vw / 2 : (x0 + x1) / 2;
+    if (y0 < y - vh / 2 + my || y1 > y + vh / 2 - my) y = (y0 + y1) / 2;
     if (x !== c.x || y !== c.y) this.moveTo({ x, y, s: c.s });
   }
 
@@ -400,7 +408,6 @@ export class MultiverseView {
     if (!this.view) return;
     const v = this.view;
     const s = this.cam.s;
-    // World transform.
     ctx.setTransform(dpr * s, 0, 0, dpr * s, dpr * (this.w / 2 - this.cam.x * s), dpr * (this.h / 2 - this.cam.y * s));
     const [vx0, vy0] = this.toWorld(0, 0);
     const [vx1, vy1] = this.toWorld(this.w, this.h);
@@ -408,134 +415,121 @@ export class MultiverseView {
     const [lMin, lMax] = v.lines;
     const [aMin, aMax] = v.active;
     const presentV = 2 * v.present + v.player;
-    const maxV = Math.max(...v.timelines.map((t) => 2 * t.end[0] + t.end[1]), presentV) + 1;
+    const firstV = Math.min(...v.timelines.map((t) => 2 * t.start[0] + t.start[1]));
+    const lastV = Math.max(...v.timelines.map((t) => 2 * t.end[0] + t.end[1]), presentV);
+    const px1 = 1 / s; // one screen pixel in world units
 
-    // Timeline lanes.
+    // Timeline lanes: every other line faintly shaded, like table rows.
+    const laneX0 = this.boardX(firstV) - GAP_X / 2, laneX1 = this.boardX(lastV + 1) - GAP_X / 2;
+    ctx.fillStyle = C.lane;
     for (let l = lMin; l <= lMax; l++) {
+      if ((l & 1) === 0) continue;
       const y = this.boardY(l) - GAP_Y / 2;
       if (y > vy1 || y + this.py < vy0) continue;
-      const tl = this.timelines.get(l);
-      ctx.fillStyle = tl && tl.active ? C.lane : C.laneInactive;
-      const x0 = this.boardX(Math.min(...v.timelines.map((t) => 2 * t.start[0] + t.start[1]))) - GAP_X;
-      ctx.fillRect(x0, y + 0.15, this.boardX(maxV) - x0, this.py - 0.3);
+      ctx.fillRect(laneX0, y, laneX1 - laneX0, this.py);
     }
-    // The present.
+    // The present: a faint column over the active timelines.
     {
-      const lo = Math.min(this.boardY(aMin), this.boardY(aMax)) - GAP_Y * 0.42;
-      const hi = Math.max(this.boardY(aMin), this.boardY(aMax)) + this.bh + GAP_Y * 0.42;
-      const x = this.boardX(presentV) - GAP_X * 0.38;
-      const wdt = this.bw + GAP_X * 0.76;
+      const ya = this.boardY(aMin), yb = this.boardY(aMax);
+      const lo = Math.min(ya, yb) - GAP_Y / 2, hi = Math.max(ya, yb) + this.bh + GAP_Y / 2;
       ctx.fillStyle = C.present;
-      roundRect(ctx, x, lo, wdt, hi - lo, 0.6);
-      ctx.fill();
+      ctx.fillRect(this.boardX(presentV) - GAP_X / 2, lo, this.px, hi - lo);
     }
-    // Branch connectors: from the board a timeline branched off to its first board.
+    // Branch connectors and timeline continuity, behind the boards.
     ctx.strokeStyle = C.branch;
-    ctx.lineWidth = Math.max(0.12, 2 / s);
+    ctx.lineWidth = Math.max(0.06, 1.25 * px1);
+    ctx.beginPath();
     for (const [l, from, t, c] of v.branches || []) {
       const v1 = 2 * t + c;
       const x0 = this.boardX(v1 - 1) + this.bw, y0 = this.boardY(from) + this.bh / 2;
       const x1 = this.boardX(v1), y1 = this.boardY(l) + this.bh / 2;
-      ctx.beginPath();
       ctx.moveTo(x0, y0);
-      ctx.bezierCurveTo(x0 + GAP_X * 0.9, y0, x1 - GAP_X * 0.9, y1, x1, y1);
-      ctx.stroke();
+      ctx.bezierCurveTo(x0 + GAP_X * 0.8, y0, x1 - GAP_X * 0.8, y1, x1, y1);
     }
-    // Timeline continuity: thin line between consecutive boards.
     for (const tl of v.timelines) {
       const y = this.boardY(tl.l) + this.bh / 2;
       if (y < vy0 - this.py || y > vy1 + this.py) continue;
-      const a = 2 * tl.start[0] + tl.start[1], b = 2 * tl.end[0] + tl.end[1];
+      const a = Math.max(2 * tl.start[0] + tl.start[1], vMin), b = Math.min(2 * tl.end[0] + tl.end[1], vMax);
       if (b <= a) continue;
-      ctx.strokeStyle = C.outline;
-      ctx.lineWidth = Math.max(0.08, 1.2 / s);
-      ctx.beginPath();
-      ctx.moveTo(this.boardX(Math.max(a, vMin)) + this.bw, y);
-      ctx.lineTo(this.boardX(Math.min(b, vMax)), y);
-      ctx.stroke();
+      ctx.moveTo(this.boardX(a) + this.bw, y);
+      ctx.lineTo(this.boardX(b), y);
     }
+    ctx.stroke();
 
-    // Boards.
-    const squarePx = s;
     for (const b of this.boards.values()) {
       if (b.v < vMin || b.v > vMax) continue;
       const by = this.boardY(b.l);
       if (by > vy1 || by + this.bh < vy0) continue;
       const tl = this.timelines.get(b.l);
-      const alpha = tl && !tl.active ? 0.5 : 1;
-      this.drawBoard(b, alpha, squarePx, tl);
+      this.drawBoard(b, tl && !tl.active ? C.inactive : 1, s, tl);
     }
     for (const b of this.phantom) {
       if (b.v < vMin || b.v > vMax) continue;
-      this.drawBoard(b, 0.35, squarePx, null, true);
+      this.drawBoard(b, 0.35, s, null, true);
     }
+    this.drawHighlights();
+    this.drawArrows(s);
 
-    this.drawHighlights(squarePx);
-    this.drawArrows(squarePx);
-
-    // Screen-space labels: timelines (left edge) and turns (top edge), sticky.
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.drawLabels(vMin, vMax, lMin, lMax);
   }
 
-  drawBoard(b, alpha, squarePx, tl, phantom = false) {
+  drawBoard(b, alpha, s, tl, phantom = false) {
     const { ctx, colors: C, bw, bh } = this;
     const x0 = this.boardX(b.v), y0 = this.boardY(b.l);
+    const px1 = 1 / s;
     ctx.globalAlpha = alpha;
-    // Frame: White's boards light, Black's dark (whose move it is on that board).
-    const fr = Math.min(0.42, Math.max(0.16, 5 / squarePx));
+    // Frame colour: whose move it is on that board (White light, Black dark).
+    const fr = Math.max(0.12, Math.min(0.3, 4 * px1));
     ctx.fillStyle = b.c ? C.frameB : C.frameW;
-    roundRect(ctx, x0 - fr, y0 - fr, bw + 2 * fr, bh + 2 * fr, fr * 0.9);
-    ctx.fill();
+    ctx.fillRect(x0 - fr, y0 - fr, bw + 2 * fr, bh + 2 * fr);
     ctx.strokeStyle = C.outline;
-    ctx.lineWidth = 1 / squarePx;
-    ctx.stroke();
-    // Squares.
+    ctx.lineWidth = px1;
+    ctx.strokeRect(x0 - fr, y0 - fr, bw + 2 * fr, bh + 2 * fr);
     ctx.fillStyle = C.dark;
     ctx.fillRect(x0, y0, bw, bh);
-    ctx.fillStyle = C.light;
-    for (let r = 0; r < bh; r++) {
-      for (let col = 0; col < bw; col++) {
-        const x = this.flipped ? bw - 1 - col : col;
-        const y = this.flipped ? r : bh - 1 - r;
-        if ((x + y) % 2 === 1) ctx.fillRect(x0 + col, y0 + r, 1, 1);
-      }
-    }
-    // Playable boards: mandatory ones get an accent outline.
-    if (tl && !phantom && tl.end[0] === b.t && tl.end[1] === b.c && b.c === this.view.player) {
-      ctx.strokeStyle = tl.status === 'mandatory' ? C.accent : C.presentEdge;
-      ctx.lineWidth = Math.max(0.1, (tl.status === 'mandatory' ? 2.5 : 1.5) / squarePx);
-      if (tl.status !== 'mandatory') ctx.setLineDash([0.4, 0.3]);
-      roundRect(ctx, x0 - fr - 0.18, y0 - fr - 0.18, bw + 2 * fr + 0.36, bh + 2 * fr + 0.36, fr + 0.1);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-    // Pieces.
-    if (squarePx >= 5) {
-      for (let y = 0; y < bh; y++) {
-        for (let x = 0; x < bw; x++) {
-          const pc = b.squares[y * bw + x];
-          if (!pc) continue;
-          const col = this.flipped ? bw - 1 - x : x;
-          const r = this.flipped ? y : bh - 1 - y;
-          const img = pieces.get(pc.p, squarePx * this.dpr);
-          if (img) ctx.drawImage(img, x0 + col + 0.04, y0 + r + 0.04, 0.92, 0.92);
-          else {
-            ctx.fillStyle = pc.p === pc.p.toLowerCase() ? '#222' : '#fff';
-            ctx.beginPath();
-            ctx.arc(x0 + col + 0.5, y0 + r + 0.5, 0.3, 0, 7);
-            ctx.fill();
-          }
+    if (s >= 2) {
+      ctx.fillStyle = C.light;
+      for (let r = 0; r < bh; r++) {
+        for (let col = 0; col < bw; col++) {
+          const x = this.flipped ? bw - 1 - col : col;
+          const y = this.flipped ? r : bh - 1 - r;
+          if ((x + y) % 2 === 1) ctx.fillRect(x0 + col, y0 + r, 1, 1);
         }
       }
-    } else if (squarePx >= 1.5) {
+    }
+    // Boards the side to move can play: a thin accent outline (solid when it must be played).
+    if (tl && !phantom && tl.end[0] === b.t && tl.end[1] === b.c && b.c === this.view.player) {
+      const o = fr + 3 * px1;
+      ctx.strokeStyle = C.accent;
+      ctx.lineWidth = 2 * px1;
+      if (tl.status !== 'mandatory') {
+        ctx.globalAlpha = alpha * 0.55;
+        ctx.setLineDash([4 * px1, 3 * px1]);
+      }
+      ctx.strokeRect(x0 - o, y0 - o, bw + 2 * o, bh + 2 * o);
+      ctx.setLineDash([]);
+      ctx.globalAlpha = alpha;
+    }
+    if (s >= 4) {
       for (let y = 0; y < bh; y++) {
         for (let x = 0; x < bw; x++) {
           const pc = b.squares[y * bw + x];
           if (!pc) continue;
           const col = this.flipped ? bw - 1 - x : x;
           const r = this.flipped ? y : bh - 1 - y;
-          ctx.fillStyle = pc.p === pc.p.toLowerCase() ? '#1d1d24' : '#ffffff';
+          const img = pieces.get(pc.p, s * this.dpr);
+          if (img) ctx.drawImage(img, x0 + col + 0.03, y0 + r + 0.03, 0.94, 0.94);
+        }
+      }
+    } else if (s >= 1.5) {
+      for (let y = 0; y < bh; y++) {
+        for (let x = 0; x < bw; x++) {
+          const pc = b.squares[y * bw + x];
+          if (!pc) continue;
+          const col = this.flipped ? bw - 1 - x : x;
+          const r = this.flipped ? y : bh - 1 - y;
+          ctx.fillStyle = pc.p === pc.p.toLowerCase() ? '#111' : '#fff';
           ctx.fillRect(x0 + col + 0.2, y0 + r + 0.2, 0.6, 0.6);
         }
       }
@@ -548,7 +542,7 @@ export class MultiverseView {
     return [cx - 0.5, cy - 0.5];
   }
 
-  drawHighlights(squarePx) {
+  drawHighlights() {
     const { ctx, colors: C, view: v, overlay: o } = this;
     const fill = (l, vv, x, y, color) => {
       if (!this.boards.has(`${l},${vv}`)) return;
@@ -556,7 +550,7 @@ export class MultiverseView {
       ctx.fillStyle = color;
       ctx.fillRect(x0, y0, 1, 1);
     };
-    // The last action: origin and destination, before and after.
+    // The last action: origin and destination, on the boards before and after it.
     for (const m of v.last || []) {
       const c = m.c;
       const [fl, ft, fx, fy] = m.from, [tl, tt, tx, ty] = m.to;
@@ -569,58 +563,56 @@ export class MultiverseView {
       fill(arrive, 2 * tt + c + 1, tx, ty, C.last);
     }
     for (const m of v.draft || []) {
-      const [fl, ft, fx, fy] = m.from, [tl, tt, tx, ty] = m.to;
-      fill(fl, 2 * ft + v.player, fx, fy, C.draft);
-      fill(tl, 2 * tt + v.player, tx, ty, C.draft);
+      fill(m.from[0], 2 * m.from[1] + v.player, m.from[2], m.from[3], C.draft);
+      fill(m.to[0], 2 * m.to[1] + v.player, m.to[2], m.to[3], C.draft);
     }
-    // Royal pieces in check.
+    // A royal in check: a red glow under the piece, as on lichess.
     for (const ch of v.checks || []) {
       const [tl, tt, tx, ty] = ch.to;
       const vv = 2 * tt + ch.c;
       if (!this.boards.has(`${tl},${vv}`) && !this.phantom.some((b) => b.l === tl && b.v === vv)) continue;
       const [cx, cy] = this.squareCenter(tl, vv, tx, ty);
-      const g = ctx.createRadialGradient(cx, cy, 0.05, cx, cy, 0.72);
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, 0.7);
       g.addColorStop(0, C.check);
-      g.addColorStop(1, 'transparent');
+      g.addColorStop(0.3, C.check);
+      g.addColorStop(1, 'rgba(169,0,0,0)');
       ctx.fillStyle = g;
       ctx.fillRect(cx - 0.5, cy - 0.5, 1, 1);
     }
-    if (o.hover && !o.readonly) fill(o.hover.l, o.hover.v, o.hover.x, o.hover.y, 'rgba(255,255,255,0.18)');
-    if (o.selected) {
-      const s = o.selected;
-      fill(s.l, 2 * s.t + s.c, s.x, s.y, C.select);
-    }
+    if (o.hover && !o.readonly && this.isInteresting(o.hover)) fill(o.hover.l, o.hover.v, o.hover.x, o.hover.y, 'rgba(255,255,255,.18)');
+    if (o.selected) fill(o.selected.l, 2 * o.selected.t + o.selected.c, o.selected.x, o.selected.y, C.select);
     for (const t of o.targets) {
       const vv = 2 * t[1] + v.player;
-      if (!this.boards.has(`${t[0]},${vv}`)) continue;
-      const [cx, cy] = this.squareCenter(t[0], vv, t[2], t[3]);
       const b = this.boards.get(`${t[0]},${vv}`);
-      const occupied = b && b.squares[t[3] * this.bw + t[2]];
-      ctx.fillStyle = C.targetDot;
-      ctx.strokeStyle = C.targetDot;
-      if (occupied) {
-        ctx.lineWidth = 0.09;
+      if (!b) continue;
+      const [cx, cy] = this.squareCenter(t[0], vv, t[2], t[3]);
+      ctx.fillStyle = C.target;
+      if (b.squares[t[3] * this.bw + t[2]]) {
+        // A capture: the square's corners, like lichess.
+        const [x0, y0] = [cx - 0.5, cy - 0.5];
         ctx.beginPath();
-        ctx.arc(cx, cy, 0.44, 0, 7);
-        ctx.stroke();
+        ctx.rect(x0, y0, 1, 1);
+        ctx.arc(cx, cy, 0.6, 0, Math.PI * 2, true);
+        ctx.fill('evenodd');
       } else {
         ctx.beginPath();
-        ctx.arc(cx, cy, 0.16, 0, 7);
+        ctx.arc(cx, cy, 0.17, 0, Math.PI * 2);
         ctx.fill();
       }
     }
   }
 
-  drawArrows(squarePx) {
+  drawArrows(s) {
     const { colors: C, view: v, overlay: o } = this;
-    const width = Math.max(0.1, Math.min(0.2, 3.2 / squarePx));
-    for (const ch of v.checks || []) this.arrow(ch.from, ch.to, ch.c, C.check, width * 0.9, false);
-    for (const m of v.last || []) this.arrow(m.from, m.to, m.c, m.c ? C.arrowB : C.arrowW, width, false);
-    for (const m of v.draft || []) this.arrow(m.from, m.to, v.player, C.draft, width, false);
-    for (const m of o.pv || []) this.arrow(m.from, m.to, m.c, C.pv, width, true);
+    const width = Math.max(0.09, Math.min(0.16, 2.6 / s));
+    for (const m of v.last || []) this.arrow(m.from, m.to, m.c, C.arMove, width);
+    for (const m of v.draft || []) this.arrow(m.from, m.to, v.player, C.arDraft, width);
+    for (const m of o.pv || []) this.arrow(m.from, m.to, m.c, C.arPv, width);
+    for (const ch of v.checks || []) this.arrow(ch.from, ch.to, ch.c, C.arCheck, width * 0.85);
   }
 
-  arrow(from, to, c, color, width, dashed) {
+  /** An arrow between squares; jumps between boards bend so they clear the boards between. */
+  arrow(from, to, c, color, width) {
     const { ctx } = this;
     const [x0, y0] = this.squareCenter(from[0], 2 * from[1] + c, from[2], from[3]);
     const [x1, y1] = this.squareCenter(to[0], 2 * to[1] + c, to[2], to[3]);
@@ -628,75 +620,69 @@ export class MultiverseView {
     const len = Math.hypot(dx, dy);
     if (len < 0.01) return;
     const sameBoard = from[0] === to[0] && from[1] === to[1];
-    // Jumps between boards curve away from the boards in between.
-    const bend = sameBoard ? 0 : Math.min(2.2, 0.18 * len);
+    const bend = sameBoard ? 0 : Math.min(1.6, 0.12 * len);
     const nx = -dy / len, ny = dx / len;
     const mx = (x0 + x1) / 2 + nx * bend, my = (y0 + y1) / 2 + ny * bend;
-    const head = Math.min(0.62, width * 3.6);
-    // End direction (tangent of the quadratic at t = 1).
+    const head = Math.max(0.32, width * 3);
     let ex = x1 - mx, ey = y1 - my;
     const el = Math.hypot(ex, ey) || 1;
     ex /= el; ey /= el;
-    const bx = x1 - ex * head * 0.9, by = y1 - ey * head * 0.9;
+    const bx = x1 - ex * head, by = y1 - ey * head;
     ctx.save();
-    ctx.globalAlpha = 0.88;
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
     ctx.lineWidth = width;
-    ctx.lineCap = 'round';
-    if (dashed) ctx.setLineDash([width * 2.2, width * 1.6]);
+    ctx.lineCap = 'butt';
     ctx.beginPath();
     ctx.moveTo(x0, y0);
     if (bend) ctx.quadraticCurveTo(mx, my, bx, by);
     else ctx.lineTo(bx, by);
     ctx.stroke();
-    ctx.setLineDash([]);
     ctx.beginPath();
     ctx.moveTo(x1, y1);
-    ctx.lineTo(bx - ey * head * 0.55, by + ex * head * 0.55);
-    ctx.lineTo(bx + ey * head * 0.55, by - ex * head * 0.55);
+    ctx.lineTo(bx - ey * head * 0.62, by + ex * head * 0.62);
+    ctx.lineTo(bx + ey * head * 0.62, by - ex * head * 0.62);
     ctx.closePath();
     ctx.fill();
     ctx.restore();
   }
 
+  /** Timeline names down the left edge and turn numbers along the top, in screen space. */
   drawLabels(vMin, vMax, lMin, lMax) {
     const { ctx, colors: C, view: v } = this;
     const s = this.cam.s;
-    ctx.font = `600 ${Math.round(Math.max(10, Math.min(14, s * 0.45)))}px ${C.font}`;
+    const size = Math.round(Math.max(11, Math.min(13, s * 0.42)));
+    ctx.font = `${size}px ${C.font}`;
     ctx.textBaseline = 'middle';
-    // Timeline labels at the left edge.
+    // Gutters so labels never sit on a board.
+    ctx.fillStyle = C.bg;
+    ctx.globalAlpha = 0.86;
+    ctx.fillRect(0, 0, this.w, 22);
+    ctx.globalAlpha = 1;
     ctx.textAlign = 'left';
     for (let l = lMin; l <= lMax; l++) {
       const [, sy] = this.toScreen(0, this.boardY(l) + this.bh / 2);
-      if (sy < -10 || sy > this.h + 10) continue;
+      if (sy < 26 || sy > this.h - 4) continue;
       const tl = this.timelines.get(l);
       const text = 'L' + (tl ? tl.label : l);
       const tw = ctx.measureText(text).width;
       ctx.fillStyle = C.bg;
-      ctx.globalAlpha = 0.85;
-      roundRect(ctx, 4, sy - 10, tw + 12, 20, 6);
-      ctx.fill();
+      ctx.globalAlpha = 0.86;
+      ctx.fillRect(0, sy - 9, tw + 14, 18);
       ctx.globalAlpha = 1;
-      ctx.fillStyle = tl && tl.status === 'mandatory' ? C.accent : C.text;
-      ctx.fillText(text, 10, sy);
+      ctx.fillStyle = tl && tl.status === 'mandatory' ? C.textStrong : C.text;
+      ctx.fillText(text, 7, sy);
     }
-    // Turn labels at the top edge, one per turn over its white and black boards.
-    ctx.textAlign = "center";
+    ctx.textAlign = 'center';
     const presentT = v.present;
-    const step = Math.max(1, Math.ceil(46 / (s * this.px * 2)));
+    const step = Math.max(1, Math.ceil(44 / (s * this.px * 2)));
     for (let t = Math.max(0, (vMin >> 1) - 1); t <= (vMax >> 1) + 1; t++) {
       if (t % step && t !== presentT) continue;
       const [sx] = this.toScreen(this.boardX(2 * t) + this.bw / 2, 0);
-      if (sx < 30 || sx > this.w - 20) continue;
-      ctx.fillStyle = t === presentT ? C.accent : C.text;
-      ctx.fillText("T" + t, sx, 14);
+      if (sx < 34 || sx > this.w - 16) continue;
+      ctx.fillStyle = t === presentT ? C.textStrong : C.text;
+      ctx.fillText('T' + t, sx, 11);
     }
   }
 }
 
-function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
-  else ctx.rect(x, y, w, h);
-}

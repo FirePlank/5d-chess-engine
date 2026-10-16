@@ -1,7 +1,7 @@
 // The analysis board / game viewer: a game tree with variations, step-through navigation,
 // book and engine actions, the recorded eval graph and live engine analysis.
 import { Rules, parseInfo } from './kairos.js';
-import { $, $$, el, toast, fmtScore, fmtNodes, winChance, recordScore, parseLan, store } from './util.js';
+import { $, $$, el, toast, fmtScore, fmtNodes, winChance, recordScore, parseLan, store, confirmDialog } from './util.js';
 
 const THROTTLE_MS = 70;
 const DEFAULT_BUDGET_MS = 30_000;
@@ -43,6 +43,8 @@ export class Analysis {
 
   // ---------------------------------------------------------------- activation
   activate(params) {
+    // While you play Kairos, analysis here would take CPU from the engine: off unless asked.
+    this.suppressed = this.engineOn && this.playing();
     this.input.attach(this.source);
     this.board.setOverlay({ readonly: false });
     if (params.get('file')) {
@@ -218,19 +220,19 @@ export class Analysis {
   onView(v, draft) {
     this.view = v;
     const chip = $('#status-chip');
-    chip.className = 'status-chip';
+    chip.className = 'status-line';
     if (draft.length) {
       chip.textContent = '';
     } else if (v.status === 'checkmate') {
-      chip.textContent = `Checkmate — ${v.player ? 'White' : 'Black'} wins`;
+      chip.textContent = `Checkmate · ${v.player ? 'White' : 'Black'} wins`;
       chip.classList.add('over');
     } else if (v.status === 'stalemate') {
-      chip.textContent = 'Stalemate — draw';
+      chip.textContent = 'Stalemate · draw';
       chip.classList.add('over');
     } else {
       const side = v.player ? 'Black' : 'White';
       const inCheck = v.checks.length > 0;
-      chip.textContent = `T${v.present} · ${side} to move${inCheck ? ' · in check' : ''}`;
+      chip.textContent = `${side} to move · T${v.present}${inCheck ? ' · in check' : ''}`;
       if (inCheck) chip.classList.add('check');
     }
   }
@@ -239,19 +241,20 @@ export class Analysis {
     const m = this.meta;
     $('#pl-white').textContent = m.white || 'White';
     $('#pl-black').textContent = m.black || 'Black';
-    $('#gm-result').textContent = m.result ? m.result.replace('1/2-1/2', '½–½') : '—';
-    const pills = [];
-    if (m.variant) pills.push(el('span', { class: 'pill accent', text: m.variant }));
-    if (m.format && m.format !== 'new') pills.push(el('span', { class: 'pill', text: { sprt: 'SPRT record', '5dpgn': '5dpgn', '5duci': '5DUCI' }[m.format] || m.format }));
-    if (m.reason) pills.push(el('span', { class: 'pill', text: m.reason }));
-    if (m.actions) pills.push(el('span', { class: 'pill', text: `${m.actions} actions` }));
-    if (m.book) pills.push(el('span', { class: 'pill', text: `${m.book} book` }));
-    if (m.game != null) pills.push(el('span', { class: 'pill', text: `game ${m.game}${m.pair != null ? ` · pair ${m.pair}` : ''}` }));
+    $('#gm-result').textContent = m.result ? m.result.replace('1/2-1/2', '½-½') : '*';
+    const parts = [];
+    if (m.variant) parts.push(m.variant);
+    if (m.format && m.format !== 'new') parts.push({ sprt: 'SPRT record', '5dpgn': '5dpgn', '5duci': '5DUCI' }[m.format] || m.format);
+    if (m.reason) parts.push(m.reason);
+    if (m.actions) parts.push(`${m.actions} actions`);
+    if (m.book) parts.push(`${m.book} book (grey)`);
+    if (m.game != null) parts.push(`game ${m.game}${m.pair != null ? `, pair ${m.pair}` : ''}`);
+    const pills = parts.map((t, i) => el('span', { class: i ? 'sep' : '', text: t }));
     if (m.source) {
       const { file, index, count } = m.source;
       const nav = (d) => () => { location.hash = `#/analysis?file=${encodeURIComponent(file)}&index=${index + d}`; };
-      if (index > 0) pills.push(el('button', { class: 'pill', style: 'cursor:pointer;border:0', text: '‹ prev game', onclick: nav(-1) }));
-      if (index + 1 < count) pills.push(el('button', { class: 'pill', style: 'cursor:pointer;border:0', text: 'next game ›', onclick: nav(1) }));
+      if (index > 0) pills.push(el('span', { class: 'sep' }, el('button', { text: '‹ previous', onclick: nav(-1) })));
+      if (index + 1 < count) pills.push(el('span', { class: 'sep' }, el('button', { text: 'next game ›', onclick: nav(1) })));
     }
     $('#gm-meta').replaceChildren(...pills);
   }
@@ -261,7 +264,7 @@ export class Analysis {
     const cell = el('div', { class: cls + (n.book ? ' book' : '') + (id === this.cur ? ' cur' : ''), dataset: { id }, title: n.lan + (n.book ? '  (book)' : '') });
     cell.append(n.san || n.lan);
     const s = this.cache.get(id) || this.recordedScoreAt(id);
-    if (s) cell.append(el('span', { class: 'mv-eval', text: fmtScore(s) + (this.cache.get(id) ? ` · d${this.cache.get(id).depth}` : '') }));
+    if (s) cell.append(el('span', { class: 'mv-eval', text: fmtScore(s) }));
     return cell;
   }
 
@@ -400,8 +403,21 @@ export class Analysis {
   }
 
   // ---------------------------------------------------------------- engine
+  /** A Play game of this browser is in progress (its engine needs the CPU). */
+  playing() {
+    const p = this.app.pages.play;
+    const st = p && p.state;
+    return !!(st && st.you && st.game && !st.game.over);
+  }
+
   restartEngine() {
-    if (!this.engineOn || !this.tree) { this.renderEngine(); return; }
+    if (this.suppressed && !this.playing()) this.suppressed = false;
+    if (!this.engineOn || this.suppressed || !this.tree) {
+      this.engine.stop();
+      this.searching = null;
+      this.renderEngine();
+      return;
+    }
     clearTimeout(this.budgetTimer);
     const v = this.view;
     if (!v || v.status === 'checkmate' || v.status === 'stalemate') {
@@ -429,9 +445,11 @@ export class Analysis {
     if (!s || (s.id != null && m.id !== s.id)) return;
     if (m.type === 'info') {
       const info = parseInfo(m.line, s.blackToMove);
-      if (info.depth == null || (info.cp == null && info.mate == null)) return;
+      // Info lines come once per completed depth; keep the deepest one per position, so a
+      // revisited position shows its best result until the new search gets deeper.
+      if (info.depth == null || (info.cp == null && info.mate == null) || !info.pv) return;
       const prev = this.cache.get(s.node);
-      if (!prev || prev.depth <= info.depth || prev.done) this.cache.set(s.node, { ...info, at: performance.now() });
+      if (!prev || info.depth >= prev.depth) this.cache.set(s.node, { ...info, at: performance.now() });
       this.scheduleRender();
     } else if (m.type === 'done') {
       const c = this.cache.get(s.node);
@@ -467,6 +485,7 @@ export class Analysis {
   }
 
   setEngine(on) {
+    this.suppressed = false;
     this.engineOn = on;
     store('engine', on);
     $('#engine-toggle').checked = on;
@@ -480,18 +499,20 @@ export class Analysis {
 
   renderEngine() {
     const card = $('#engine-card');
+    $('#engine-toggle').checked = this.engineOn && !this.suppressed;
     const info = this.cache.get(this.cur);
     const s = this.searching;
     const running = this.engineOn && s && s.node === this.cur && !s.finished;
     card.classList.toggle('computing', !!running);
     const score = this.scoreAt(this.cur);
-    $('#engine-eval').textContent = this.engineOn && info ? fmtScore(info) : score ? fmtScore(score) : '—';
+    $('#engine-eval').textContent = this.engineOn && info ? fmtScore(info) : score ? fmtScore(score) : '-';
     let stats;
-    if (!this.engineOn) stats = score && !info ? 'Recorded evaluation · analysis off' : 'Analysis off — press E';
+    if (this.engineOn && this.suppressed) stats = 'Paused while your game against Kairos runs (E to start)';
+    else if (!this.engineOn) stats = score && !info ? 'Recorded eval · analysis off (E)' : 'Off · press E to analyse';
     else if (this.view && (this.view.status === 'checkmate' || this.view.status === 'stalemate')) stats = 'Game over';
-    else if (!info) stats = running ? 'Starting analysis…' : 'Waiting…';
+    else if (!info) stats = running ? 'Starting…' : 'Waiting';
     else {
-      stats = `Depth ${info.depth}` + (info.nps ? ` · ${fmtNodes(info.nps)}n/s` : '') + (info.nodes ? ` · ${fmtNodes(info.nodes)} nodes` : '') + (!running ? ' · done' : '');
+      stats = `Depth ${info.depth}` + (info.nps ? ` · ${fmtNodes(info.nps)} nodes/s` : '') + (!running ? ' · done' : '');
     }
     $('#engine-stats').textContent = stats;
     $('#engine-progress').style.width = running ? `${Math.min(100, ((performance.now() - s.started) / (this.unlimited ? 120000 : DEFAULT_BUDGET_MS)) * 100)}%` : info ? '100%' : '0%';
@@ -550,14 +571,14 @@ export class Analysis {
       const c = e.target.closest('[data-id]');
       if (c) this.goto(+c.dataset.id);
     });
-    $('#moves').addEventListener('contextmenu', (e) => {
+    $('#moves').addEventListener('contextmenu', async (e) => {
       const c = e.target.closest('[data-id]');
       if (!c) return;
       e.preventDefault();
       const id = +c.dataset.id;
       const n = this.node(id);
       if (n.parent == null) return;
-      if (confirm('Delete this action and everything after it?')) {
+      if (await confirmDialog('Delete this action?', { text: 'Everything after it is deleted too.', ok: 'Delete', danger: true })) {
         const r = this.rules.call({ cmd: 'delete', node: id });
         this.tree = r.tree;
         if (!this.line().includes(this.cur) || this.isInSubtree(this.cur, id)) this.cur = r.node;
@@ -708,7 +729,7 @@ export class Analysis {
     else if (k === 'Home') this.first();
     else if (k === 'End') this.last();
     else if (k === ' ') this.toggleAutoplay();
-    else if (k === 'e' || k === 'E') this.setEngine(!this.engineOn);
+    else if (k === 'e' || k === 'E') this.setEngine(!(this.engineOn && !this.suppressed));
     else if (k === 'l' || k === 'L') this.openLoad();
     else if (k === 'Enter') this.input.submit();
     else if (k === 'Backspace') this.input.undo();
