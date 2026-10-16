@@ -1,0 +1,12 @@
+{
+  "name": "qsearch_evasion_killer",
+  "old": "aab2802ee3dc4b12e05af64876025a75d522c9a5",
+  "games": 12000,
+  "shards": 40,
+  "tc": "tc 10+0.1",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}
