@@ -39,7 +39,7 @@ const ROOT_CAP: usize = 1000;
 /// batch holds one action and each next one twice as many, up to this.
 const BATCH: usize = 12;
 const QDEPTH: i32 = 3;
-const QCAP: usize = 4;
+const QCAP: usize = 6;
 const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
