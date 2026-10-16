@@ -165,3 +165,21 @@
 # to g6 after g4, which weakens White's king (331).
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / d5 3. h3 {play 3}
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / d5 3. Bd3 / c6 4. b3 {know} / Bg4 {play 5} 5. h3 {play 10} / Bh5 {play 10} 6. g4 {know} / Bg6 {play 10}
+
+# --- f7 sac defences (f7_sac_guide_notes.md, Lavamat's f7-sac guide; "in Turn Zero the same
+# applies to both colours"). After 1. e3 or 1. c3 and 1...Nf6, White's queen and bishop routes
+# to T1f7 run through b3, c4 and h5; Black closes them or covers the attacking queen.
+# Against 2. Bb5: "main: 2...c6 3. c3 cxb5 4. Qb3 Qa5/Qb6/Qc7", or the queen on b3 is taken
+# ("2. Bb5 a5 3. c3 a4 4. Qb3 axb3", "2...Nc6 3. c3 Na5 4. Qb3 Nxb3").
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Bb5 {know} / c6 {play 10} 3. c3 {know} / cxb5 {play 10} 4. Qb3 {know} / Qb6 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Bb5 / c6 3. c3 / cxb5 4. Qb3 / Qa5 {play 5}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Bb5 / c6 3. c3 / cxb5 4. Qb3 / Qc7 {play 5}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Bb5 / a5 {play 3} 3. c3 {know} / a4 {play 10} 4. Qb3 {know} / axb3 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Bb5 / Nc6 {play 3} 3. c3 {know} / Na5 {play 10} 4. Qb3 {know} / Nxb3 {play 10}
+# Against 2. g4: "2...g5 3. c3 c6 4. Qb3 Qa5/Qb6/Qc7, or 2...d5 3. g5 Ne4 4. Qf3 Be6".
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. g4 {know} / d5 {play 10} 3. g5 {know} / Ne4 {play 10} 4. Qf3 {know} / Be6 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. g4 / g5 {play 5} 3. c3 {know} / c6 {play 10} 4. Qb3 {know} / Qb6 {play 10}
+# Against 1. c3: "vs 2. Qa4 & 3. Qc4: 2...c6 3. Qc4 Qa5/Qb6/Qc7; vs 3. a3: 3...d5 4. Qb3
+# Qa5/Qb6/Qc7".
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. c3 / Nf6 2. Qa4 {know} / c6 {play 10} 3. Qc4 {know} / Qb6 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. c3 / Nf6 2. Qa4 / c6 3. a3 {know} / d5 {play 10} 4. Qb3 {know} / Qb6 {play 10}
