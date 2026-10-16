@@ -41,6 +41,23 @@ pub enum Status {
     Playing,
     Checkmate,
     Stalemate,
+    /// Not decided: the position is too large for an exhaustive legal-action search.
+    Unknown,
+}
+
+/// Timelines beyond which exhaustive searches (has the side to move any legal action? is a
+/// check mate?) are skipped: with many boards on the present they can take minutes.
+pub const SEARCH_LIMIT_LINES: i32 = 32;
+
+/// Whether exhaustive searches are affordable in `s`.
+pub fn searchable(s: &State) -> bool {
+    let (lo, hi) = s.get_lines_range();
+    hi - lo < SEARCH_LIMIT_LINES
+}
+
+/// 5dpgn of an action for display (short notation; mate symbols when affordable).
+pub fn action_san(s: &State, act: &Action) -> String {
+    pgn::action_to_pgn_opts(s, act, None, pgn::PgnOptions { short: true, mate: searchable(s) })
 }
 
 impl Status {
@@ -49,6 +66,7 @@ impl Status {
             Status::Playing => "playing",
             Status::Checkmate => "checkmate",
             Status::Stalemate => "stalemate",
+            Status::Unknown => "unknown",
         }
     }
 }
@@ -209,7 +227,7 @@ impl Game {
             return Ok(c);
         }
         let id = self.nodes.len();
-        let san = pgn::action_to_pgn(&ps, &act);
+        let san = action_san(&ps, &act);
         self.nodes.push(Node {
             parent: Some(parent),
             children: Vec::new(),
@@ -225,6 +243,7 @@ impl Game {
             status: None,
         });
         self.nodes[parent].children.push(id);
+        self.nodes[parent].status = Some(Status::Playing);
         Ok(id)
     }
 
@@ -232,7 +251,14 @@ impl Game {
         if let Some(s) = self.nodes[id].status {
             return s;
         }
-        let s = status_of(&self.nodes[id].state);
+        // A node with a continuation has a legal action; large positions are not searched.
+        let s = if !self.nodes[id].children.is_empty() {
+            Status::Playing
+        } else if searchable(&self.nodes[id].state) {
+            status_of(&self.nodes[id].state)
+        } else {
+            Status::Unknown
+        };
         self.nodes[id].status = Some(s);
         s
     }
@@ -279,6 +305,7 @@ impl Game {
     pub fn delete(&mut self, id: usize) -> Result<usize, String> {
         let p = self.node(id)?.parent.ok_or("cannot delete the root")?;
         self.nodes[p].children.retain(|&c| c != id);
+        self.nodes[p].status = None;
         Ok(p)
     }
 

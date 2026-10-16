@@ -149,7 +149,7 @@ impl Api {
                     let Ok(moves) = parse_lan_moves(act) else { break };
                     let a = Action::from_vector(&moves, &s);
                     let Ok(next) = super::tree::play_action(&s, a.moves()) else { break };
-                    out.push(obj![("san", super::pgn::action_to_pgn(&s, &a)), ("lan", act.trim()), ("player", s.get_present().1)]);
+                    out.push(obj![("san", super::tree::action_san(&s, &a)), ("lan", act.trim()), ("player", s.get_present().1)]);
                     s = next;
                 }
                 Ok(ok(obj![("actions", Json::Arr(out))]))
@@ -200,7 +200,9 @@ impl Api {
                     .iter()
                     .filter_map(|h| Some((h.arr().first()?.str()?.to_string(), h.arr().get(1)?.str()?.to_string())))
                     .collect();
-                let pgn = super::pgn::write_5dpgn(&headers, &setup, &actions);
+                let mate = super::tree::searchable(&g.nodes[*path.last().unwrap()].state);
+                let opts = super::pgn::PgnOptions { short: false, mate };
+                let pgn = super::pgn::write_5dpgn_opts(&headers, &setup, &actions, opts);
                 let last = *path.last().unwrap();
                 Ok(ok(obj![("pgn", pgn), ("uci", g.position_command(last))]))
             }

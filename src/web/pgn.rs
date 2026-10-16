@@ -1110,23 +1110,49 @@ fn square(v: Vec4) -> String {
     format!("{}{}", (b'a' + v.x() as u8) as char, (b'1' + v.y() as u8) as char)
 }
 
-/// `mv` (normalized, played from `s`) in full notation without check symbols.
-fn move_core(s: &State, mv: ExtMove) -> String {
+/// Printing options for `action_to_pgn_opts`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PgnOptions {
+    /// Minimal disambiguation (see `action_to_pgn_short`).
+    pub short: bool,
+    /// Search for checkmate/softmate to mark the last check `#`/`*`; without it checks are `+`.
+    pub mate: bool,
+}
+
+impl Default for PgnOptions {
+    fn default() -> Self {
+        PgnOptions { short: false, mate: true }
+    }
+}
+
+/// `mv` (normalized, played from `s`) without check symbols: `board` as the source board
+/// prefix, then the piece, the source file/rank when asked (a pawn always shows its file when
+/// capturing or jumping), the jump, `x`, the target board when `to_tl`, the target square and
+/// the promotion.
+fn move_core(s: &State, mv: ExtMove, board: &str, file: bool, rank: bool, to_tl: bool) -> String {
     let (p, q) = (mv.fm.from, mv.fm.to);
     let player = s.player();
     let pic = to_white(piece_name(s.get_piece(p, player)));
     let capture = mv.fm.captured_piece(s) != NO_PIECE;
-    let mut o = s.pretty_lt(p);
+    let sp = p.tl() != q.tl();
+    let mut o = board.to_string();
     if pic != PAWN_W {
         o.push(pic as char);
     }
-    o += &square(p);
-    if p.tl() != q.tl() {
+    if file || (pic == PAWN_W && (capture || sp)) {
+        o.push((b'a' + p.x() as u8) as char);
+    }
+    if rank {
+        o.push((b'1' + p.y() as u8) as char);
+    }
+    if sp {
         o += if (q.t(), player) < s.get_timeline_end(q.l()) { ">>" } else { ">" };
         if capture {
             o.push('x');
         }
-        o += &s.pretty_lt(q);
+        if to_tl {
+            o += &s.pretty_lt(q);
+        }
     } else if capture {
         o.push('x');
     }
@@ -1138,11 +1164,43 @@ fn move_core(s: &State, mv: ExtMove) -> String {
     o
 }
 
+/// `mv` with its source board and the least of source file, rank and target board that
+/// resolves back to it in `s` (in the spirit of the C++ SHOW_SHORT), e.g. `(0T2)Nf3`,
+/// `(0T3)exd5`, `(0T1)O-O`, `(1T3)N>>(1T2)f5`.
+fn short_core(s: &State, mv: ExtMove) -> String {
+    // (file, rank, target board)
+    const ATTEMPTS: [(bool, bool, bool); 7] = [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+        (true, false, true),
+        (false, true, true),
+        (true, true, true),
+    ];
+    let (p, q) = (mv.fm.from, mv.fm.to);
+    let board = s.pretty_lt(p);
+    for (file, rank, to_tl) in ATTEMPTS {
+        let text = move_core(s, mv, &board, file, rank, to_tl);
+        if parse_move(s, &text).is_ok_and(|m| m == mv) {
+            let king = to_white(piece_name(s.get_piece(p, s.player()))) == KING_W;
+            if king && p.tl() == q.tl() && p.y() == q.y() && (q.x() - p.x()).abs() == 2 {
+                let castle = format!("{}{}", board, if q.x() > p.x() { "O-O" } else { "O-O-O" });
+                if parse_move(s, &castle).is_ok_and(|m| m == mv) {
+                    return castle;
+                }
+            }
+            return text;
+        }
+    }
+    move_core(s, mv, &board, true, true, true)
+}
+
 /// Play `mv` on `s`; returns its notation without check symbol, whether it gives check, and
 /// the branching suffix (`~` when the present moves back, then ` (>L<new line>)`).
-fn play_move(s: &mut State, mv: ExtMove) -> Option<(String, bool, String)> {
+fn play_move(s: &mut State, mv: ExtMove, short: bool) -> Option<(String, bool, String)> {
     let mv = s.normalize_promotion(mv)?;
-    let core = move_core(s, mv);
+    let core = if short { short_core(s, mv) } else { move_core(s, mv, &s.pretty_lt(mv.fm.from), true, true, true) };
     let (player, present, new_line) = (s.player(), s.get_present().0, s.new_line());
     let q = mv.fm.to;
     let branching = mv.fm.from.tl() != q.tl() && (q.t(), player) < s.get_timeline_end(q.l());
@@ -1160,14 +1218,23 @@ fn play_move(s: &mut State, mv: ExtMove) -> Option<(String, bool, String)> {
     Some((core, check, suffix))
 }
 
-/// One move of an action in 5dpgn (full notation, capture, promotion and check symbols), e.g.
-/// `(0T1)Ng1f3`, `(0T5)Qb3>>x(0T1)f7~ (>L1)`. `s` has the earlier moves of the action applied.
-pub fn move_to_pgn(s: &State, mv: &ExtMove) -> String {
+fn single_move(s: &State, mv: &ExtMove, short: bool) -> String {
     let mut t = s.clone();
-    match play_move(&mut t, *mv) {
+    match play_move(&mut t, *mv, short) {
         Some((core, check, suffix)) => format!("{}{}{}", core, if check { "+" } else { "" }, suffix),
         None => "---INVALID MOVE---".into(),
     }
+}
+
+/// One move of an action in 5dpgn (full notation, capture, promotion and check symbols), e.g.
+/// `(0T1)Ng1f3`, `(0T5)Qb3>>x(0T1)f7~ (>L1)`. `s` has the earlier moves of the action applied.
+pub fn move_to_pgn(s: &State, mv: &ExtMove) -> String {
+    single_move(s, mv, false)
+}
+
+/// `move_to_pgn` in short notation (see `action_to_pgn_short`).
+pub fn move_to_pgn_short(s: &State, mv: &ExtMove) -> String {
+    single_move(s, mv, true)
 }
 
 /// An action played from `s` in 5dpgn, like the C++ printer with SHOW_CAPTURE, SHOW_PROMOTION
@@ -1175,16 +1242,29 @@ pub fn move_to_pgn(s: &State, mv: &ExtMove) -> String {
 /// A checking action needs a mate search, which can be slow in huge positions; prefer
 /// `action_to_pgn_with_witness` when the next action is known.
 pub fn action_to_pgn(s: &State, act: &Action) -> String {
-    action_to_pgn_with_witness(s, act, None)
+    action_to_pgn_opts(s, act, None, PgnOptions::default())
 }
 
 /// `action_to_pgn` given the action played next (`witness`): when it can be played, the
 /// position is not checkmate, and only a softmate test is needed (if it branches).
 pub fn action_to_pgn_with_witness(s: &State, act: &Action, witness: Option<&Action>) -> String {
+    action_to_pgn_opts(s, act, witness, PgnOptions::default())
+}
+
+/// `action_to_pgn` in short notation for move lists: the source board always, the source
+/// file/rank and the target board only where needed to resolve the move, e.g. `(0T2)Nf3`,
+/// `(0T3)exd5`, `(0T5)Q>>x(0T1)f7+~ (>L1)`. Re-parses to the same action.
+pub fn action_to_pgn_short(s: &State, act: &Action) -> String {
+    action_to_pgn_opts(s, act, None, PgnOptions { short: true, mate: true })
+}
+
+/// An action in 5dpgn with the given options and optional next action (see
+/// `action_to_pgn_with_witness`).
+pub fn action_to_pgn_opts(s: &State, act: &Action, witness: Option<&Action>, opts: PgnOptions) -> String {
     let mut t = s.clone();
     let mut parts = Vec::with_capacity(act.len());
     for &mv in act.moves() {
-        match play_move(&mut t, mv) {
+        match play_move(&mut t, mv, opts.short) {
             Some(p) => parts.push(p),
             None => return "---INVALID ACTION---".into(),
         }
@@ -1193,7 +1273,7 @@ pub fn action_to_pgn_with_witness(s: &State, act: &Action, witness: Option<&Acti
         return "---INVALID ACTION---".into();
     }
     let mut symbols: Vec<&str> = parts.iter().map(|p| if p.1 { "+" } else { "" }).collect();
-    if let Some(last) = symbols.iter().rposition(|&c| c == "+") {
+    if let Some(last) = symbols.iter().rposition(|&c| c == "+").filter(|_| opts.mate) {
         let mt = match witness.filter(|w| t.can_apply_action(w).is_some()) {
             Some(w) => {
                 let mut v = w.moves().to_vec();
@@ -1267,6 +1347,11 @@ pub fn setup_headers(setup: &VariantSetup) -> Vec<(String, String)> {
 /// the board tags, then the main line as numbered `1. a / b` lines (ending with the Result
 /// header's value when it is a result token).
 pub fn write_5dpgn(headers: &[(String, String)], setup: &VariantSetup, actions: &[Action]) -> String {
+    write_5dpgn_opts(headers, setup, actions, PgnOptions::default())
+}
+
+/// `write_5dpgn` with printing options (each action is printed with the next as witness).
+pub fn write_5dpgn_opts(headers: &[(String, String)], setup: &VariantSetup, actions: &[Action], opts: PgnOptions) -> String {
     const ROSTER: [&str; 7] = ["Event", "Site", "Date", "Round", "White", "Black", "Result"];
     const SETUP_KEYS: [&str; 6] = ["board", "variant", "mode", "size", "timeline", "promotions"];
     let clean = |v: &str| v.replace('"', "'").replace(']', ")");
@@ -1296,7 +1381,7 @@ pub fn write_5dpgn(headers: &[(String, String)], setup: &VariantSetup, actions: 
     let Ok(mut s) = state_from_setup(setup) else { return out };
     let mut turn: Turn = (1, false);
     for (i, act) in actions.iter().enumerate() {
-        let text = action_to_pgn_with_witness(&s, act, actions.get(i + 1));
+        let text = action_to_pgn_opts(&s, act, actions.get(i + 1), opts);
         if turn.1 {
             out += &format!(" / {}", text);
         } else {

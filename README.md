@@ -69,7 +69,7 @@ Options: `--port 8080`, `--host 0.0.0.0` (listen on every interface), `--games <
 
 The site is plain HTML/CSS/ES modules in `web/static`, with no build step. Without the server (any static file host that sends `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`), the viewer and analysis work; play and the game browser need `kairos-web`.
 
-Tests: `cargo test` covers the record loader and 5dpgn; `node tests/web/records.mjs games/sprt/*.jsonl` replays SPRT records through the WASM build and cross-checks actions, book/eval tags and results.
+Tests: `cargo test` covers the record loader and 5dpgn; `node tests/web/records.mjs games/sprt/*.jsonl` replays SPRT records through the WASM build and cross-checks actions, book/eval tags and results; `node tests/web/pgn_corpus.mjs <dir>` loads every 5dpgn file under a directory and views each main-line position.
 
 ## License
 

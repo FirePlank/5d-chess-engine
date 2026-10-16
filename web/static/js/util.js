@@ -28,6 +28,8 @@ export function toast(msg, { error = false, ms = 3200 } = {}) {
 /** Engine score (White's view): "+1.23", "−0.40", "#3", "#−2". Units are hundredths. */
 export function fmtScore(s) {
   if (!s) return '—';
+  // Recorded mates (SPRT writes ±20000) carry no distance.
+  if (s.mate != null && s.recorded) return s.mate > 0 ? '+#' : '−#';
   if (s.mate != null) return s.mate > 0 ? `#${s.mate}` : `#−${-s.mate}`;
   if (s.cp == null) return '—';
   const v = s.cp / 100;

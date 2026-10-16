@@ -53,15 +53,19 @@ fn lan(a: &Action) -> String {
     a.moves().iter().map(|m| m.to_string()).collect::<Vec<_>>().join(" ")
 }
 
-/// Print each action (given its continuation, if any) and each of its moves and parse them back.
-fn check_round_trip(s: &State, act: &Action, witness: Option<&Action>) {
-    let text = action_to_pgn_with_witness(s, act, witness);
-    let back = parse_action(s, &text).unwrap_or_else(|e| panic!("{} -> {}: {}", lan(act), text, e));
-    assert_eq!(&back, act, "{} printed as {}", lan(act), text);
+/// Print each action (given its continuation, if any) in full and short notation, and each of
+/// its moves, and parse them back. Without `mate`, no mate search (for huge positions).
+fn check_round_trip(s: &State, act: &Action, witness: Option<&Action>, mate: bool) {
+    for short in [false, true] {
+        let text = action_to_pgn_opts(s, act, witness, PgnOptions { short, mate });
+        let back = parse_action(s, &text).unwrap_or_else(|e| panic!("{} -> {}: {}", lan(act), text, e));
+        assert_eq!(&back, act, "{} printed as {}", lan(act), text);
+    }
     let mut t = s.clone();
     for m in act.moves() {
-        let mt = move_to_pgn(&t, m);
-        assert_eq!(parse_move(&t, &mt).unwrap_or_else(|e| panic!("{}: {}", mt, e)), *m, "{}", mt);
+        for mt in [move_to_pgn(&t, m), move_to_pgn_short(&t, m)] {
+            assert_eq!(parse_move(&t, &mt).unwrap_or_else(|e| panic!("{}: {}", mt, e)), *m, "{}", mt);
+        }
         assert!(t.apply_ext::<false>(*m));
     }
 }
@@ -129,6 +133,12 @@ fn printer_notation() {
     assert_eq!(printed[8], "(0T5)Qb3>>x(0T1)f7+~ (>L1)");
     assert_eq!(printed[9], "(1T1)Ke8xf7");
     assert_eq!(printed[13], "(1T3)Qd8h4");
+    let short: Vec<String> = all.iter().map(|(s, a, _)| action_to_pgn_short(s, a)).collect();
+    assert_eq!(short[0..2], ["(0T1)e3", "(0T1)Nf6"]);
+    assert_eq!(short[8], "(0T5)Q>>xf7+~ (>L1)");
+    assert_eq!(short[9], "(1T1)Kxf7");
+    assert_eq!(short[12], "(1T3)N>>(1T2)f5 (>L2)");
+    assert_eq!(short[15], "(0T5)Q>>xf2#~ (>L-1)");
 }
 
 #[test]
@@ -136,7 +146,7 @@ fn every_action_round_trips() {
     for f in data_files() {
         let g = parse_file(&f);
         for (s, a, w) in all_actions(&g) {
-            check_round_trip(&s, a, w);
+            check_round_trip(&s, a, w, true);
         }
     }
 }
@@ -151,7 +161,7 @@ fn legal_actions_round_trip() {
             if i % 4 == 0 {
                 let (hc, ss) = HcInfo::build_hc(&s);
                 for mvs in hc.search(&s, ss).take(60) {
-                    check_round_trip(&s, &Action::from_moveseq(&mvs, &s), None);
+                    check_round_trip(&s, &Action::from_moveseq(&mvs, &s), None, true);
                 }
             }
             s = s.can_apply_action(a).unwrap();
@@ -209,6 +219,8 @@ fn syntax_variants() {
     let main = g.root.mainline();
     assert_eq!(lan(main[0]), "(0T1)e1c1");
     assert_eq!(lan(main[1]), "(0T1)e8g8");
+    let s = state_from_setup(&g.setup).unwrap();
+    assert_eq!(action_to_pgn_short(&s, main[0]), "(0T1)O-O-O");
     let promo = "[Board \"Custom - Odd\"]\n[Promotions \"QN\"]\n[r6k/1P6/8/8/8/8/8/K7:0:1:w]\n1. ";
     let g = parse_5dpgn(&format!("{}bxa8=N", promo), None).unwrap();
     assert_eq!(lan(g.root.mainline()[0]), "(0T1)b7a8N");
@@ -236,7 +248,7 @@ fn even_timelines() {
     assert_eq!(action_to_pgn(&all[0].0, all[0].1), "(-0T1)Ng1f3 (+0T1)e2e3");
     assert_eq!(action_to_pgn(&all[2].0, all[2].1), "(+0T2)Qd1f3 (-0T2)Nf3>>(-0T1)f5~ (>L+1)");
     for (s, a, w) in &all {
-        check_round_trip(s, a, *w);
+        check_round_trip(s, a, *w, true);
     }
     // (0T1) does not name a timeline of an even layout.
     assert!(parse_5dpgn("[Variant \"Standard - Two Timelines\"]\n1. (0T1)Ng1f3 (+0T1)e3", None).is_err());
@@ -276,29 +288,19 @@ fn corpus() {
     let (mut ok, mut actions, mut failed) = (0, 0, Vec::new());
     for f in &files {
         let text = std::fs::read_to_string(f).unwrap_or_else(|_| String::from_utf8_lossy(&std::fs::read(f).unwrap()).into_owned());
-        let t0 = std::time::Instant::now();
-        let parsed = parse_5dpgn(&text, None);
-        let t1 = t0.elapsed();
-        if std::env::var("PGN_TIMING").is_ok() {
-            eprintln!("{} parse {:?}", f.display(), t1);
-        }
-        match parsed {
+        match parse_5dpgn(&text, None) {
             Ok(g) => {
                 ok += 1;
                 let all = all_actions(&g);
                 actions += all.len();
+                // The mate search needs a continuation: without one it can explode in huge
+                // positions (100timelines.5dpgn), so line ends print checks as plain `+`.
                 for (s, a, w) in &all {
-                    let t = std::time::Instant::now();
-                    if std::env::var("PGN_TIMING").is_ok() {
-                        eprintln!("  start {} moves, {:?}", a.len(), s.get_present());
-                    }
-                    check_round_trip(s, a, *w);
-                    if std::env::var("PGN_TIMING").is_ok() && t.elapsed().as_millis() > 100 {
-                        eprintln!("  slow {:?}: {}", t.elapsed(), action_to_pgn_with_witness(s, a, *w));
-                    }
+                    check_round_trip(s, a, *w, w.is_some());
                 }
                 let main: Vec<Action> = g.root.mainline().into_iter().cloned().collect();
-                let back = parse_5dpgn(&write_5dpgn(&g.headers, &g.setup, &main), None).unwrap();
+                let opts = PgnOptions { short: true, mate: false };
+                let back = parse_5dpgn(&write_5dpgn_opts(&g.headers, &g.setup, &main, opts), None).unwrap();
                 assert_eq!(back.root.mainline().into_iter().cloned().collect::<Vec<_>>(), main, "{}", f.display());
             }
             Err(e) => failed.push(format!("{}: {}", f.display(), e)),
