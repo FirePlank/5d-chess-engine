@@ -69,9 +69,6 @@ fn lmr(depth: i32, index: usize) -> i32 {
 }
 /// Ordering bonus of a checking semimove (above every capture).
 const CHECK_BONUS: i32 = 30_000;
-/// Share of the optimum time the f7 sac table's probes may take (a search without a clock
-/// only reads the tables).
-const SAC_PREP_DIV: u64 = 100;
 /// Reverse futility pruning: at non-PV nodes up to this depth, return the static eval when
 /// it beats beta by RFP_MARGIN per ply.
 const RFP_DEPTH: i32 = 2;
@@ -648,14 +645,12 @@ impl AlphaBeta {
             return e.eval;
         }
         let sd = hce::sides_with(s, &mut *self.terms);
-        let mut f = hce::features_from(&sd, s, hce::needs_checks(&self.hce));
-        let sac = hce::split_sac(&mut f);
+        let f = hce::features_from(&sd, s, hce::needs_checks(&self.hce));
         let base = hce::score(&f, &self.hce, s.get_present().1);
         let v = match super::evalnet::embedded() {
             Some(net) => base + net.residual(&super::evalnet::inputs_from(&sd, s, base)),
             None => base,
         };
-        let v = v + hce::score(&sac, &self.hce, s.get_present().1);
         // Terms add up over every board, so with many timelines the sum can reach the mate
         // range (where it would be taken for a mate score).
         let v = v.clamp(-EVAL_MAX, EVAL_MAX);
@@ -1861,12 +1856,6 @@ impl AlphaBeta {
         let start = Instant::now();
         let plan = TimePlan::new(limits, Self::mandatory_boards(root), root.active_timelines());
         let deadline = plan.as_ref().map(|p| start + Duration::from_millis(p.maximum.saturating_sub(5).max(1)));
-        // The f7 sac table: local outcomes of the travels (and created timelines) this
-        // position may need, kept for the rest of the game.
-        match plan.as_ref() {
-            Some(p) => super::sac::prepare(root, u64::MAX, Some(start + Duration::from_millis(p.optimum / SAC_PREP_DIV)), Some(stop), super::sac::PROBE_NODES, false),
-            None => super::sac::prepare(root, 0, None, Some(stop), super::sac::PROBE_NODES, false),
-        };
         self.begin_search(stop, limits.nodes, deadline);
         // Enumerating actions stops at the deadline or when told to stop (see `interrupted`).
         let _interrupt = interrupt_on(stop, deadline);
@@ -2047,8 +2036,6 @@ impl AlphaBeta {
         resume: Option<&SearchResume>,
     ) -> ThreadResult {
         let main = self.thread_id == 0;
-        // The f7 sac table's winning travels at this root, for the evaluation.
-        self.terms.sac_root = super::sac::root_travels(root);
         let mut work = root.clone();
         work.enable_undo();
         let mut best: MoveSeq = resume.map_or_else(|| roots[0].1.clone(), |r| r.best.clone());

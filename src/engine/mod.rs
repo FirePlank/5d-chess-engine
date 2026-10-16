@@ -3,7 +3,6 @@ pub mod book;
 pub mod evalnet;
 pub mod hce;
 pub mod local;
-pub mod sac;
 pub mod time;
 pub mod uci;
 
