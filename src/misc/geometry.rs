@@ -141,8 +141,7 @@ impl Hc {
             let i = *i;
             let mut x = remaining.clone();
             x[i].minus(fixed);
-            // A slice may list coordinates outside this HC: the later pieces must not gain them.
-            remaining[i].and_assign(fixed);
+            remaining[i].assign(fixed);
             if !x[i].is_empty() {
                 out(x);
             }
