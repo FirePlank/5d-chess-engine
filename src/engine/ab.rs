@@ -72,22 +72,6 @@ const CHECK_BONUS: i32 = 30_000;
 /// Share of the optimum time the f7 sac table's probes may take (a search without a clock
 /// only reads the tables).
 const SAC_PREP_DIV: u64 = 100;
-/// Continuation history: weights (/1024) of the 1-ply (opponent's last action) and 2-ply (own
-/// previous action) follow-ups, and the divisor that brings them to butterfly-history units.
-const CONT_WEIGHTS: [i32; 2] = [1024, 712];
-const CONT_DIV: i32 = 8;
-/// History bonus of a cutoff: min(base * depth - sub, cap); the quiets it beat get 5/4 of it
-/// as a malus; entries stay within +-HISTORY_GRAVITY.
-const HISTORY_BONUS_BASE: i32 = 300;
-const HISTORY_BONUS_SUB: i32 = 250;
-const HISTORY_BONUS_CAP: i32 = 1536;
-const HISTORY_GRAVITY: i32 = 16384;
-/// Follow-up keys: 16 piece slots x 64 board-local squares.
-const KEY_BITS: usize = 10;
-/// No continuation-history row.
-const NO_ROW: u32 = u32::MAX;
-/// No follow-up key: no previous action (the root's parent, a null move).
-const NO_KEY: u16 = u16::MAX;
 /// Reverse futility pruning: at non-PV nodes up to this depth, return the static eval when
 /// it beats beta by RFP_MARGIN per ply.
 const RFP_DEPTH: i32 = 2;
@@ -345,11 +329,6 @@ pub struct AlphaBeta {
     tt: Arc<TtTable>,
     history: Vec<i32>,
     killers: Vec<[Option<MoveSeq>; 2]>,
-    /// Continuation history: by follow-up (1 or 2 plies back), side to move, the follow-up
-    /// key of that earlier action and the follow-up key of a quiet semimove.
-    cont_history: Vec<i16>,
-    /// Per ply: the follow-up key (`action_key`) of the action searched from that ply.
-    prev_keys: Vec<u16>,
     /// Per ply: the last evasion that failed high in quiescence (tried before building).
     qkillers: Vec<Option<MoveSeq>>,
     nodes: u64,
@@ -520,66 +499,6 @@ fn history_index(s: &State, m: &FullMove) -> usize {
     history_index_of(mover_victim(s, m).0, m)
 }
 
-/// Piece slot (1..=12; 0 for none) for the follow-up tables.
-#[inline]
-fn piece_slot(pc: Piece) -> usize {
-    match to_white(piece_name(pc)) {
-        PAWN_W => 1,
-        BRAWN_W => 2,
-        KNIGHT_W => 3,
-        BISHOP_W => 4,
-        ROOK_W => 5,
-        QUEEN_W => 6,
-        PRINCESS_W => 7,
-        UNICORN_W => 8,
-        DRAGON_W => 9,
-        COMMON_KING_W => 10,
-        KING_W => 11,
-        ROYAL_QUEEN_W => 12,
-        _ => 0,
-    }
-}
-
-/// Follow-up key of a semimove: the moved piece and its board-local destination (the board
-/// itself is left out, so the key stays meaningful as the present moves on).
-#[inline]
-fn follow_key(mover: Piece, m: &FullMove) -> u16 {
-    ((piece_slot(mover) << 6) | m.to.xy() as usize) as u16
-}
-
-/// An action's main semimove (moving piece and move): its most valuable capture, else its
-/// first travel, else its first semimove.
-fn main_semimove(s: &State, act: &MoveSeq) -> Option<(Piece, FullMove)> {
-    let mut best: Option<(i32, Piece, FullMove)> = None;
-    for m in act {
-        let (mover, victim) = mover_victim(s, m);
-        let rank = if victim != NO_PIECE {
-            2 + piece_value(victim)
-        } else {
-            (m.from.tl() != m.to.tl()) as i32
-        };
-        if best.is_none_or(|b| rank > b.0) {
-            best = Some((rank, mover, *m));
-        }
-    }
-    best.map(|b| (b.1, b.2))
-}
-
-/// Follow-up key of an action of `s`: its main semimove's.
-fn action_key(s: &State, act: &MoveSeq) -> u16 {
-    main_semimove(s, act).map_or(NO_KEY, |(mover, m)| follow_key(mover, &m))
-}
-
-/// `action_key` of a remembered action, which may not be legal in `s` (`NO_KEY` when `s`
-/// lacks its boards).
-fn remembered_key(s: &State, act: &MoveSeq) -> u16 {
-    let player = s.get_present().1;
-    if act.iter().any(|m| s.get_board_ptr(m.from.l(), m.from.t(), player).is_none() || s.get_board_ptr(m.to.l(), m.to.t(), player).is_none()) {
-        return NO_KEY;
-    }
-    action_key(s, act)
-}
-
 /// Whether a semimove gives check: anything on its result board attacking an enemy royal
 /// physically, or the moved piece itself attacking one across time or timelines (discovered
 /// superphysical checks are not looked for).
@@ -656,8 +575,6 @@ struct OrderScratch {
     /// History values of the branch coordinates, by coordinate, as they were when the
     /// node was ordered (the branch axes may be scored later).
     branch_history: Vec<i32>,
-    /// The node's continuation-history rows (`NO_ROW`: none).
-    cont: [u32; 2],
 }
 
 /// How `node_ordering` treats the branch axes.
@@ -695,8 +612,6 @@ impl AlphaBeta {
             tt,
             history: vec![0; 1 << 16],
             killers: vec![[None, None]; MAX_PLY + 1],
-            cont_history: vec![0; 4 << (2 * KEY_BITS)],
-            prev_keys: vec![NO_KEY; MAX_PLY + 2],
             qkillers: vec![None; MAX_PLY + 1],
             nodes: 0,
             deadline: None,
@@ -790,44 +705,8 @@ impl AlphaBeta {
     }
 
     /// Ordering score of one HC coordinate.
-    /// Ordering score of a quiet semimove: its butterfly history plus its continuation
-    /// history under the node's rows `cont`.
-    #[inline]
-    fn quiet_order(&self, mover: Piece, m: &FullMove, cont: [u32; 2]) -> i32 {
-        self.history[history_index_of(mover, m)].clamp(-5000, 5000) + self.cont_score(cont, follow_key(mover, m))
-    }
-
-    /// Weighted continuation history of the semimove with follow-up key `key`.
-    #[inline]
-    fn cont_score(&self, cont: [u32; 2], key: u16) -> i32 {
-        let mut sc = 0;
-        for (k, &row) in cont.iter().enumerate() {
-            if row != NO_ROW {
-                sc += self.cont_history[row as usize | key as usize] as i32 * CONT_WEIGHTS[k];
-            }
-        }
-        sc / (1024 * CONT_DIV)
-    }
-
-    /// Continuation-history rows of a node at `ply` of `s`: the follow-ups of the actions 1
-    /// and 2 plies back.
-    fn cont_rows(&self, s: &State, ply: usize) -> [u32; 2] {
-        let side = s.get_present().1 as usize;
-        let mut rows = [NO_ROW; 2];
-        for (k, row) in rows.iter_mut().enumerate() {
-            if let Some(p) = ply.checked_sub(k + 1) {
-                let key = self.prev_keys[p];
-                if key != NO_KEY {
-                    *row = ((((k << 1 | side) << KEY_BITS) | key as usize) << KEY_BITS) as u32;
-                }
-            }
-        }
-        rows
-    }
-
-    /// Ordering score of one HC coordinate; `history` overrides the quiet ordering value.
-    #[allow(clippy::too_many_arguments)]
-    fn coord_score(&self, s: &State, info: &HcInfo, n: usize, i: Index, checks: &mut Option<CheckDetector>, history: Option<i32>, cont: [u32; 2]) -> i32 {
+    /// Ordering score of one HC coordinate; `history` overrides the history table's value.
+    fn coord_score(&self, s: &State, info: &HcInfo, n: usize, i: Index, checks: &mut Option<CheckDetector>, history: Option<i32>) -> i32 {
         match info.entry(n, i) {
             Entry::Null => -5,
             Entry::Departing { .. } => 0,
@@ -839,7 +718,7 @@ impl AlphaBeta {
                 if victim != NO_PIECE {
                     sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
                 } else {
-                    sc += history.unwrap_or_else(|| self.quiet_order(mover, m, cont));
+                    sc += history.unwrap_or_else(|| self.history[history_index_of(mover, m)]).clamp(-5000, 5000);
                 }
                 if (mover == PAWN_W || mover == BRAWN_W) && (m.to.y() == 0 || m.to.y() == s.get_board_size().1 - 1) {
                     sc += 9000;
@@ -886,7 +765,6 @@ impl AlphaBeta {
         if scores.len() < dim {
             scores.resize_with(dim, Vec::new);
         }
-        let cont = scratch.cont;
         let mut detector = if checks { Some(CheckDetector::new(info, s, scratch)) } else { None };
         for n in axes.start..axes.end.min(dim) {
             let sc = &mut scores[n];
@@ -899,10 +777,10 @@ impl AlphaBeta {
                 hist.resize(u[n].max().map(|i| i as usize + 1).unwrap_or(0), 0);
                 for i in u[n].iter() {
                     if let Some((m, mover)) = info.branch_arrival(i) {
-                        hist[i as usize] = self.quiet_order(mover, &m, cont);
+                        hist[i as usize] = self.history[history_index_of(mover, &m)];
                     }
                 }
-                sc.push(self.coord_score(s, info, n, 0, &mut detector, None, cont));
+                sc.push(self.coord_score(s, info, n, 0, &mut detector, None));
                 continue;
             }
             sc.resize(u[n].max().map(|i| i as usize + 1).unwrap_or(0), 0);
@@ -911,7 +789,7 @@ impl AlphaBeta {
             v.clear();
             for i in u[n].iter() {
                 let recorded = if n == fba && branch == BranchOrder::Recorded { Some(scratch.branch_history[i as usize]) } else { None };
-                let score = self.coord_score(s, info, n, i, &mut detector, recorded, cont);
+                let score = self.coord_score(s, info, n, i, &mut detector, recorded);
                 sc[i as usize] = score;
                 v.push(((!((score as u32) ^ 0x8000_0000) as u64) << 32) | i as u64);
             }
@@ -1064,13 +942,12 @@ impl AlphaBeta {
 
     fn action_score(&self, s: &State, act: &MoveSeq, ply: usize) -> i32 {
         let mut sc = 0;
-        let cont = if ply <= MAX_PLY { self.cont_rows(s, ply) } else { [NO_ROW; 2] };
         for m in act {
             let (mover, victim) = mover_victim(s, m);
             if victim != NO_PIECE {
                 sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
             } else {
-                sc += self.quiet_order(mover, m, cont) / 4;
+                sc += self.history[history_index_of(mover, m)].clamp(-5000, 5000) / 4;
             }
             if m.from.tl() != m.to.tl() && victim == NO_PIECE {
                 sc -= 300;
@@ -1297,7 +1174,6 @@ impl AlphaBeta {
         let mut nb = self.bufs.pop().unwrap_or_default();
         {
             let NodeBufs { info, evasions, order, evasion_scores, .. } = &mut *nb;
-            order.cont = [NO_ROW; 2];
             evasions.ss = info.rebuild(s, true);
             // The branch axes are only ordered once some hypercuboid needs their order.
             let fba = info.first_branch_axis();
@@ -1442,7 +1318,6 @@ impl AlphaBeta {
             if depth >= NMP_MIN_DEPTH && !self.seek_mate && Self::has_null_material(s) && self.static_eval(s) >= beta {
                 let r = NMP_R + depth / NMP_DIV;
                 let mark = s.make_null();
-                self.prev_keys[ply] = NO_KEY;
                 let v = -self.negamax(s, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
                 s.unmake(mark);
                 if self.aborted {
@@ -1469,14 +1344,11 @@ impl AlphaBeta {
         // Remembered actions first, before paying for the action space: the TT action,
         // then the killers.
         let mut pre_tried: Vec<MoveSeq> = Vec::new();
-        // Quiet actions searched without a cutoff (the continuation history's malus).
-        let mut quiets: Vec<MoveSeq> = Vec::new();
         let mut remembered: Vec<MoveSeq> = tt_action.iter().cloned().collect();
         if ply <= MAX_PLY {
             remembered.extend(self.killers[ply].iter().flatten().filter(|k| tt_action.as_ref() != Some(*k)).cloned());
         }
         for (k, act) in remembered.into_iter().enumerate() {
-            self.prev_keys[ply] = remembered_key(s, &act);
             let Some(mark) = Self::make_checked(s, &act) else { continue };
             // The TT action keeps the node's PV status; killers after it are null-window.
             let v = if k == 0 && tt_action.is_some() {
@@ -1503,14 +1375,11 @@ impl AlphaBeta {
                 }
             }
             if alpha >= beta {
-                self.on_cutoff(s, &act, depth, ply, &quiets);
+                self.on_cutoff(s, &act, depth, ply);
                 let proven = mate_proven(best, best_proven, false);
                 self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
                 self.proven = proven;
                 return best;
-            }
-            if !Self::is_tactical(s, &act) {
-                quiets.push(act.clone());
             }
             pre_tried.push(act);
         }
@@ -1521,7 +1390,6 @@ impl AlphaBeta {
         let mut full = Some(ss);
         {
             let NodeBufs { info, cursor, order, .. } = &mut *nb;
-            order.cont = self.cont_rows(s, ply);
             self.start_actions(s, info, cursor, order, first, true);
         }
         let mut generated = 0usize;
@@ -1582,7 +1450,6 @@ impl AlphaBeta {
                         skipped = true;
                         break;
                     }
-                    self.prev_keys[ply] = action_key(s, &act);
                     let mark = Self::make(s, &act);
                     let quiet = sc < 10_000;
                     let mut r = 0;
@@ -1628,14 +1495,11 @@ impl AlphaBeta {
                         }
                     }
                     if alpha >= beta {
-                        self.on_cutoff(s, &act, depth, ply, &quiets);
+                        self.on_cutoff(s, &act, depth, ply);
                         let proven = mate_proven(best, best_proven, false);
                         self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
                         self.proven = proven;
                         break 'search Some(best);
-                    }
-                    if quiet && !Self::is_tactical(s, &act) {
-                        quiets.push(act);
                     }
                 }
             }
@@ -1675,8 +1539,7 @@ impl AlphaBeta {
         best
     }
 
-    /// A cutoff by `act` at a node at `ply` of `s`, after the quiet actions `quiets`.
-    fn on_cutoff(&mut self, s: &State, act: &MoveSeq, depth: i32, ply: usize, quiets: &[MoveSeq]) {
+    fn on_cutoff(&mut self, s: &State, act: &MoveSeq, depth: i32, ply: usize) {
         if Self::is_tactical(s, act) {
             return;
         }
@@ -1693,44 +1556,6 @@ impl AlphaBeta {
             self.killers[ply][1] = self.killers[ply][0].take();
             self.killers[ply][0] = Some(act.clone());
         }
-        // Continuation history: the cutoff's semimoves up, the semimoves of the quiets searched
-        // before it down (those it shares with them excepted).
-        let cont = if ply <= MAX_PLY { self.cont_rows(s, ply) } else { [NO_ROW; 2] };
-        if cont == [NO_ROW; 2] {
-            return;
-        }
-        let bonus = (HISTORY_BONUS_BASE * depth - HISTORY_BONUS_SUB).min(HISTORY_BONUS_CAP);
-        let malus = bonus * 5 / 4;
-        for m in act {
-            let key = follow_key(mover_victim(s, m).0, m);
-            self.cont_update(cont, key, bonus);
-        }
-        for q in quiets {
-            for m in q {
-                if !act.contains(m) {
-                    let key = follow_key(mover_victim(s, m).0, m);
-                    self.cont_update(cont, key, -malus);
-                }
-            }
-        }
-    }
-
-    /// Gravity update of the continuation history of follow-up key `key` under rows `cont`.
-    fn cont_update(&mut self, cont: [u32; 2], key: u16, adj: i32) {
-        for (k, &row) in cont.iter().enumerate() {
-            if row != NO_ROW {
-                let adj = adj * CONT_WEIGHTS[k] / 1024;
-                let e = &mut self.cont_history[row as usize | key as usize];
-                let cur = *e as i32;
-                *e = (cur + adj - ((cur * adj.abs()) >> 14)).clamp(-HISTORY_GRAVITY, HISTORY_GRAVITY) as i16;
-            }
-        }
-    }
-
-    /// Forget the move-ordering statistics (a new game).
-    fn clear_history(&mut self) {
-        self.history.iter_mut().for_each(|h| *h = 0);
-        self.cont_history.iter_mut().for_each(|c| *c = 0);
     }
 
     #[inline]
@@ -1917,7 +1742,7 @@ impl Helper {
                 e.thread_id = thread_id;
                 while let Ok(msg) = rx.recv() {
                     match msg {
-                        HelperMsg::NewGame => e.clear_history(),
+                        HelperMsg::NewGame => e.history.iter_mut().for_each(|h| *h = 0),
                         HelperMsg::Search(job) => {
                             let HelperJob { root, roots, roots_complete, max_depth, resumed_depth, start, tt, stop, counters, done } = *job;
                             if stop.load(Ordering::Relaxed) {
@@ -1948,7 +1773,9 @@ impl AlphaBeta {
     pub fn new_game(&mut self) {
         let n = self.tt.len();
         self.set_tt(|| TtTable::with_len(n));
-        self.clear_history();
+        for h in self.history.iter_mut() {
+            *h = 0;
+        }
         for helper in &self.helpers {
             let _ = helper.tx.send(HelperMsg::NewGame);
         }
@@ -2269,7 +2096,6 @@ impl AlphaBeta {
                 scores = Vec::with_capacity(roots.len());
                 let mut top = -INF;
                 for (k, (_, act)) in roots.iter().enumerate() {
-                    self.prev_keys[0] = action_key(&work, act);
                     let mark = Self::make(&mut work, act);
                     let v = if k == 0 {
                         -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true)
