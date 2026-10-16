@@ -2067,11 +2067,6 @@ impl AlphaBeta {
             let mut window = ASP_WINDOW;
             let (mut lo, mut hi) = if aspire { (prev_score - window, prev_score + window) } else { (-INF, INF) };
             let mut tries = 0;
-            // Fail highs since the last fail low: each re-search is one ply shallower
-            // (Stockfish's failedHighCnt). A fail high to a mate in an already won position
-            // otherwise leaves the table so that the full-depth re-search takes many times
-            // longer (Very Small: the mate in 7 at depth 14 took 10 s instead of 1 s).
-            let mut fail_highs = 0;
             // The action and line of the last fail high: kept if the re-search is interrupted
             // before it has a best of its own.
             let mut fail_high: Option<(MoveSeq, Vec<MoveSeq>)> = None;
@@ -2082,7 +2077,6 @@ impl AlphaBeta {
             loop {
                 let mut alpha = lo;
                 let beta = hi;
-                let sdepth = (depth - fail_highs).max(1);
                 iter_best = None;
                 iter_pv = Vec::new();
                 all_proven = roots_complete;
@@ -2091,20 +2085,20 @@ impl AlphaBeta {
                 for (k, (_, act)) in roots.iter().enumerate() {
                     let mark = Self::make(&mut work, act);
                     let v = if k == 0 {
-                        -self.negamax(&mut work, sdepth - 1, 1, -beta, -alpha, true)
+                        -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true)
                     } else {
                         // Late root actions are reduced, never pruned.
-                        let child_check = if sdepth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(self.in_check(&work)) } else { None };
-                        let r = if child_check == Some(false) { (lmr(sdepth, k) - 1).clamp(0, sdepth - 2) } else { 0 };
+                        let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(self.in_check(&work)) } else { None };
+                        let r = if child_check == Some(false) { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
                         self.known_check = child_check;
-                        let mut v = -self.negamax(&mut work, sdepth - 1 - r, 1, -alpha - 1, -alpha, false);
+                        let mut v = -self.negamax(&mut work, depth - 1 - r, 1, -alpha - 1, -alpha, false);
                         if !self.aborted && v > alpha && r > 0 {
                             self.known_check = child_check;
-                            v = -self.negamax(&mut work, sdepth - 1, 1, -alpha - 1, -alpha, false);
+                            v = -self.negamax(&mut work, depth - 1, 1, -alpha - 1, -alpha, false);
                         }
                         if !self.aborted && v > alpha {
                             self.known_check = child_check;
-                            v = -self.negamax(&mut work, sdepth - 1, 1, -beta, -alpha, true);
+                            v = -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true);
                         }
                         v
                     };
@@ -2129,13 +2123,11 @@ impl AlphaBeta {
                     break;
                 }
                 if top <= lo {
-                    fail_highs = 0;
                     window *= ASP_FAIL_MULT;
                     lo = (prev_score - window).max(-INF);
                     // Nothing reached the last depth's score: an earlier fail high is stale.
                     fail_high = None;
                 } else if top >= hi {
-                    fail_highs += 1;
                     window *= ASP_FAIL_MULT;
                     hi = (prev_score + window).min(INF);
                     // The action that failed high is searched first again.
