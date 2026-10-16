@@ -509,6 +509,17 @@ const UNTIMED_IDLE: u64 = 300;
 struct Clock {
     base_ms: u64,
     inc_ms: u64,
+    /// Simple delay each turn before the clock runs: fixed, and per active timeline.
+    delay_ms: u64,
+    delay_tl_ms: u64,
+}
+
+impl Clock {
+    /// The delay of a turn played from `s` (its active timelines counted at the turn's start).
+    fn turn_delay(&self, s: &State) -> u64 {
+        let (a, b) = s.get_active_range();
+        self.delay_ms + self.delay_tl_ms * (b - a + 1).max(0) as u64
+    }
 }
 
 struct Session {
@@ -715,7 +726,11 @@ impl Play {
                 ("start", s.start.as_str()),
                 ("humanColor", if s.human_black { "b" } else { "w" }),
                 ("moves", s.history.clone()),
-                ("clock", s.clock.as_ref().map(|c| obj![("base", c.base_ms), ("inc", c.inc_ms)])),
+                ("clock", s.clock.as_ref().map(|c| obj![("base", c.base_ms), ("inc", c.inc_ms), ("delay", c.delay_ms), ("delayPerTimeline", c.delay_tl_ms)])),
+                // This turn's delay and how much of the turn has passed (for the delay countdown).
+                ("turnDelay", s.clock.as_ref().map(|c| c.turn_delay(&s.state))),
+                ("turnElapsed", s.turn_start.elapsed().as_millis() as u64),
+                ("activeTimelines", { let (a, b) = s.state.get_active_range(); (b - a + 1) as i64 }),
                 ("left", now_left.map(|l| Json::Arr(vec![l[0].into(), l[1].into()]))),
                 ("toMove", if s.state.get_present().1 { "b" } else { "w" }),
                 ("movetime", s.movetime),
@@ -743,13 +758,15 @@ impl Play {
         ]
     }
 
-    /// Remaining clock times with the running side's elapsed time taken off.
+    /// Remaining clock times with the running side's elapsed time (past this turn's delay)
+    /// taken off.
     fn clock_now(s: &Session) -> Option<[u64; 2]> {
-        s.clock.as_ref()?;
+        let c = s.clock.as_ref()?;
         let mut l = s.left;
         if s.over.is_none() {
             let side = s.state.get_present().1 as usize;
-            l[side] = l[side].saturating_sub(s.turn_start.elapsed().as_millis() as u64);
+            let used = (s.turn_start.elapsed().as_millis() as u64).saturating_sub(c.turn_delay(&s.state));
+            l[side] = l[side].saturating_sub(used);
         }
         Some(l)
     }
@@ -913,7 +930,13 @@ impl Play {
             let limits = match &s.clock {
                 Some(c) => {
                     let side = s.state.get_present().1 as usize;
-                    Limits { time_left: Some(s.left[side]), increment: Some(c.inc_ms), ..Limits::default() }
+                    Limits {
+                        time_left: Some(s.left[side]),
+                        increment: Some(c.inc_ms),
+                        delay: Some(c.delay_ms),
+                        delay_per_timeline: Some(c.delay_tl_ms),
+                        ..Limits::default()
+                    }
                 }
                 None => Limits { movetime: Some(s.movetime), ..Limits::default() },
             };
@@ -956,11 +979,12 @@ impl Play {
         self.publish(&mut st);
     }
 
-    /// Take the mover's elapsed time off their clock and add the increment.
+    /// Take the mover's elapsed time past the turn's delay off their clock (unused delay is
+    /// lost) and add the increment. `s.state` is still the position the turn began from.
     fn charge_clock(s: &mut Session) {
         if let Some(c) = &s.clock {
             let side = s.state.get_present().1 as usize;
-            let used = s.turn_start.elapsed().as_millis() as u64;
+            let used = (s.turn_start.elapsed().as_millis() as u64).saturating_sub(c.turn_delay(&s.state));
             s.left[side] = s.left[side].saturating_sub(used) + c.inc_ms;
         }
     }
@@ -1028,9 +1052,12 @@ impl Play {
                 let clock = if clock.is_null() {
                     None
                 } else {
-                    let base = clock.get("base").int().unwrap_or(300_000).clamp(10_000, 3 * 3_600_000) as u64;
-                    let inc = clock.get("inc").int().unwrap_or(0).clamp(0, 600_000) as u64;
-                    Some(Clock { base_ms: base, inc_ms: inc })
+                    let ms = |k: &str, max: i64| clock.get(k).int().unwrap_or(0).clamp(0, max) as u64;
+                    let (inc, delay, delay_tl) = (ms("inc", 600_000), ms("delay", 600_000), ms("delayPerTimeline", 600_000));
+                    // A clock with no time to add needs some base time.
+                    let min_base = if inc + delay + delay_tl == 0 { 10_000 } else { 0 };
+                    let base = clock.get("base").int().unwrap_or(300_000).clamp(min_base, 3 * 3_600_000) as u64;
+                    Some(Clock { base_ms: base, inc_ms: inc, delay_ms: delay, delay_tl_ms: delay_tl })
                 };
                 let movetime = body.get("movetime").int().unwrap_or(2000).clamp(100, 60_000) as u64;
                 // The opening book is on unless the player turns it off.

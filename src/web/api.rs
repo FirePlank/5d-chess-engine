@@ -277,6 +277,8 @@ impl Api {
             nodes: j.get("nodes").int().map(|d| d as u64),
             time_left: j.get("timeLeft").int().map(|d| d as u64),
             increment: j.get("increment").int().map(|d| d as u64),
+            delay: j.get("delay").int().map(|d| d as u64),
+            delay_per_timeline: j.get("delayPerTimeline").int().map(|d| d as u64),
             resume: j.get("resume").bool() == Some(true),
         };
         let hash = self.hash_mb;

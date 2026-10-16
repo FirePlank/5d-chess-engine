@@ -43,6 +43,10 @@ export class LocalPlay {
         moves: [...g.moves],
         clock: g.clock,
         left: this.clockNow(),
+        // This turn's delay and how much of the turn has passed (for the delay countdown).
+        turnDelay: g.clock ? g.turnDelay : null,
+        turnElapsed: performance.now() - g.turnStart,
+        activeTimelines: g.activeTimelines,
         toMove: g.toMove,
         movetime: g.movetime,
         book: g.book,
@@ -78,7 +82,8 @@ export class LocalPlay {
     this.gameId++;
     this.game = {
       id: this.gameId, variant, start, humanColor, node: 0, moves: [], evals: [],
-      clock: clock && { base: clock.base, inc: clock.inc }, left: [base, base], turnStart: performance.now(),
+      clock: clock && { base: clock.base, inc: clock.inc || 0, delay: clock.delay || 0, delayPerTimeline: clock.delayPerTimeline || 0 },
+      left: [base, base], turnStart: performance.now(), turnDelay: 0, activeTimelines: 1,
       movetime, book: book !== false, toMove: 'w', thinking: false, over: null, info: null, fresh: true,
     };
     this.afterAction();
@@ -97,23 +102,30 @@ export class LocalPlay {
     this.afterAction();
   }
 
-  /** Remaining clock times, the running side's elapsed time taken off. */
+  /** Time the side to move has used this turn past its delay (the delay itself is free). */
+  usedPastDelay() {
+    const g = this.game;
+    return Math.max(0, performance.now() - g.turnStart - g.turnDelay);
+  }
+
+  /** Remaining clock times, the running side's elapsed time past the turn's delay taken off. */
   clockNow() {
     const g = this.game;
     if (!g || !g.clock) return null;
     const l = [...g.left];
     if (!g.over) {
       const side = g.toMove === 'w' ? 0 : 1;
-      l[side] = Math.max(0, l[side] - (performance.now() - g.turnStart));
+      l[side] = Math.max(0, l[side] - this.usedPastDelay());
     }
     return l;
   }
 
+  /** Charge the mover for the turn just played (unused delay is lost) and add the increment. */
   chargeClock() {
     const g = this.game;
     if (!g.clock) return;
     const side = g.toMove === 'w' ? 0 : 1;
-    g.left[side] = Math.max(0, g.left[side] - (performance.now() - g.turnStart)) + g.clock.inc;
+    g.left[side] = Math.max(0, g.left[side] - this.usedPastDelay()) + g.clock.inc;
   }
 
   /** After an action: game over, or Kairos's turn (search), or the human's (ponder). */
@@ -121,6 +133,9 @@ export class LocalPlay {
     const g = this.game;
     const v = this.view(g.node);
     g.toMove = v.player ? 'b' : 'w';
+    // The turn's delay: fixed, plus per timeline active at its start (the tournament format).
+    g.activeTimelines = v.active[1] - v.active[0] + 1;
+    g.turnDelay = g.clock ? g.clock.delay + g.clock.delayPerTimeline * g.activeTimelines : 0;
     if (v.status === 'checkmate') return this.finish(v.player ? '1-0' : '0-1', 'checkmate');
     if (v.status === 'stalemate') return this.finish('1/2-1/2', 'stalemate');
     if (v.status === 'exiled-white') return this.finish('0-1', 'exiled-white');
@@ -135,7 +150,7 @@ export class LocalPlay {
     g.info = null;
     const side = g.toMove === 'w' ? 0 : 1;
     const limits = g.clock
-      ? { movetime: null, timeLeft: Math.round(this.clockNow()[side]), increment: g.clock.inc }
+      ? { movetime: null, timeLeft: Math.round(this.clockNow()[side]), increment: g.clock.inc, delay: g.clock.delay, delayPerTimeline: g.clock.delayPerTimeline }
       : { movetime: g.movetime };
     const newGame = g.fresh;
     g.fresh = false;
