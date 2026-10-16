@@ -63,6 +63,8 @@ const NMP_MIN_DEPTH: i32 = 3;
 const NMP_R: i32 = 2;
 const NMP_DIV: i32 = 3;
 const DEFAULT_HASH_MB: usize = 64;
+/// Static evaluations are kept within +-EVAL_MAX, well clear of mate scores.
+const EVAL_MAX: i32 = 20000;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -600,6 +602,9 @@ impl AlphaBeta {
             Some(net) => base + net.residual(&super::evalnet::inputs_from(&sd, s, base)),
             None => base,
         };
+        // Terms add up over every board, so with many timelines the sum can reach the mate
+        // range (where it would be taken for a mate score).
+        let v = v.clamp(-EVAL_MAX, EVAL_MAX);
         self.known.store(i, key, |e| {
             e.eval = v;
             e.flags |= KNOWN_EVAL;
