@@ -7,6 +7,7 @@
 <meta name="description" content="Kairos, a 5D Chess With Multiverse Time Travel engine: game viewer, analysis board and play against the engine.">
 <meta name="color-scheme" content="dark light">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
+<script src="coi-serviceworker.js"></script>
 <script>
   // Theme and board colours before first paint: saved choice, else the system preference.
   (() => {
@@ -195,7 +196,7 @@
   <!-- ============================== Game browser -->
   <section class="browser hidden" id="browser">
     <div class="panel files">
-      <div class="files-head"><h2 class="panel-title">Files</h2><input class="input sm" id="file-filter" placeholder="Filter" aria-label="Filter files"></div>
+      <div class="files-head"><h2 class="panel-title">Files</h2><input class="input sm" id="file-filter" placeholder="Filter" aria-label="Filter files"><button class="btn sm hidden" id="file-open" title="Open a JSONL or 5dpgn record file from this computer">Open…</button><input type="file" id="file-open-input" class="hidden" accept=".jsonl,.5dpgn,.txt,.json"></div>
       <div class="file-list" id="file-list"></div>
     </div>
     <div class="panel games-panel">

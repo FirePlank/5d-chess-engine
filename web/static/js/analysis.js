@@ -1,6 +1,7 @@
 // The analysis board / game viewer: a game tree with variations, step-through navigation,
 // book and engine actions, the recorded eval graph and live engine analysis.
 import { Rules, parseInfo, threadsSupported } from './kairos.js';
+import { apiGet } from './static-api.js';
 import { $, $$, el, toast, fmtScore, fmtNodes, winChance, recordScore, parseLan, store, confirmDialog } from './util.js';
 
 const THROTTLE_MS = 70;
@@ -80,7 +81,7 @@ export class Analysis {
 
   async loadRemote(file, index) {
     try {
-      const r = await fetch(`api/games/get?file=${encodeURIComponent(file)}&index=${index}`).then((r) => r.json());
+      const r = await apiGet(this.app, `api/games/get?file=${encodeURIComponent(file)}&index=${index}`);
       if (!r.ok) throw new Error(r.error);
       try {
         this.load(r.text, null, { source: { file, index, count: r.count } });

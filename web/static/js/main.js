@@ -5,6 +5,7 @@ import { Engine, defaultEngineSettings } from './kairos.js';
 import { Analysis } from './analysis.js';
 import { Play } from './play.js';
 import { Games } from './games.js';
+import { setRules } from './static-api.js';
 import { $, $$, toast, store } from './util.js';
 
 /** Saved analysis-engine settings over the defaults. */
@@ -114,6 +115,7 @@ async function main() {
   app.pages = { analysis: new Analysis(app), play: new Play(app), games: new Games(app) };
   try {
     await app.pages.analysis.init();
+    setRules(app.pages.analysis.rules);
   } catch (e) {
     console.error(e);
     toast('Could not start the Kairos core: ' + e.message, { error: true, ms: 15000 });

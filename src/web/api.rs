@@ -78,6 +78,15 @@ impl Api {
                     .collect();
                 Ok(ok(obj![("variants", Json::Arr(list))]))
             }
+            // The variant a record's start position is (the game browser's variant column).
+            "variant" => {
+                let pos = j.get("position").str().unwrap_or("startpos");
+                let name = match position_from_uci(pos) {
+                    Ok(s) => record::variant_of(&s).unwrap_or("Custom"),
+                    Err(_) => "Invalid",
+                };
+                Ok(ok(obj![("variant", name)]))
+            }
             "load" => {
                 let text = j.get("text").str().ok_or("missing text")?;
                 let l = record::load(text, j.get("position").str().filter(|s| !s.trim().is_empty()))?;
@@ -243,8 +252,8 @@ impl Api {
             depth: j.get("depth").int().map(|d| d as u32),
             movetime: j.get("movetime").int().map(|d| d as u64),
             nodes: j.get("nodes").int().map(|d| d as u64),
-            time_left: None,
-            increment: None,
+            time_left: j.get("timeLeft").int().map(|d| d as u64),
+            increment: j.get("increment").int().map(|d| d as u64),
             resume: j.get("resume").bool() == Some(true),
         };
         let hash = self.hash_mb;

@@ -1,6 +1,9 @@
-// Play against Kairos. The server runs the engine and keeps the clocks; one human plays at a
-// time and everyone else watches the live game (and may queue for the next one).
+// Play against Kairos. With kairos-web the server runs the engine and keeps the clocks; one
+// human plays at a time and everyone else watches the live game (and may queue for the next
+// one). Without a server (the static site) the game runs in this page on the browser engine
+// (local-play.js), with the same requests and state.
 import { Rules } from './kairos.js';
+import { LocalPlay } from './local-play.js';
 import { lanText } from './input.js';
 import { $, $$, el, toast, fmtClock, fmtScore, fmtNodes, store, confirmDialog } from './util.js';
 
@@ -29,6 +32,10 @@ export class Play {
   async init() {
     this.rules = await Rules.create();
     this.source.rules = this.rules;
+    if (!this.app.server) {
+      this.local = new LocalPlay(this.app.engine, { onState: (s) => this.onState(s), onThinking: (i) => this.onThinking(i) });
+      await this.local.init();
+    }
     const variants = this.rules.call({ cmd: 'variants' }).variants;
     const saved = store('play.variant') || 'Standard';
     $('#play-variant').replaceChildren(...variants.map((v) => el('option', { value: v.name, text: v.name, selected: v.name === saved })));
@@ -93,12 +100,8 @@ export class Play {
   activate() {
     this.active = true;
     this.input.attach(this.source);
-    if (!this.app.server) {
-      $('#play-setup').replaceChildren(el('h2', { class: 'card-title', text: 'Play Kairos' }), el('p', { class: 'muted', text: 'Playing needs the Kairos server. Run kairos-web (see the README) and open the site from it.' }));
-      this.show();
-      return;
-    }
-    this.connect();
+    if (this.local) this.local.resume();
+    else this.connect();
     if (this.previewable()) this.preview();
     else this.show();
   }
@@ -125,6 +128,16 @@ export class Play {
   }
 
   async post(what, body = {}) {
+    if (this.local) {
+      try {
+        const j = await this.local.post(what, body);
+        this.onState(j);
+        return j;
+      } catch (e) {
+        toast(e.message, { error: true });
+        throw e;
+      }
+    }
     try {
       const r = await fetch(`api/play/${what}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: this.token, ...body }) });
       const j = await r.json();

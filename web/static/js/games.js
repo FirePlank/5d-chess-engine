@@ -1,5 +1,7 @@
-// Game browser: record files served by kairos-web, filtered and paged, opening in the viewer.
-import { $, el, fmtBytes, debounce, store } from './util.js';
+// Game browser: record files served by kairos-web (or, on the static site, the bundled files and
+// any the visitor opens), filtered and paged, opening in the viewer.
+import { $, el, fmtBytes, debounce, store, toast } from './util.js';
+import { apiGet, openFile } from './static-api.js';
 
 const PAGE = 100;
 
@@ -18,6 +20,21 @@ export class Games {
     $('#f-min').oninput = reload;
     $('#f-max').oninput = reload;
     $('#file-filter').oninput = () => this.renderFiles();
+    // The static site: open a record file from this computer (JSONL or 5dpgn).
+    $('#file-open').classList.toggle('hidden', !!this.app.server);
+    $('#file-open').onclick = () => $('#file-open-input').click();
+    $('#file-open-input').onchange = async (e) => {
+      const f = e.target.files[0];
+      e.target.value = '';
+      if (!f) return;
+      try {
+        const id = await openFile(f.name, await f.text());
+        this.files = (await apiGet(this.app, 'api/games/files')).files || [];
+        this.select(id);
+      } catch (err) {
+        toast('Could not open the file: ' + err.message, { error: true });
+      }
+    };
     $('#games-body').addEventListener('click', (e) => {
       const tr = e.target.closest('tr[data-index]');
       if (tr) this.open(+tr.dataset.index);
@@ -25,21 +42,17 @@ export class Games {
   }
 
   async activate(params) {
-    if (!this.app.server) {
-      $('#file-list').replaceChildren(el('div', { class: 'empty-state', text: 'The game browser needs the Kairos server (kairos-web).' }));
-      return;
-    }
     if (!this.loaded) {
       this.loaded = true;
       try {
-        const r = await fetch('api/games/files').then((r) => r.json());
+        const r = await apiGet(this.app, 'api/games/files');
         this.files = r.files || [];
       } catch (e) { this.files = []; }
       this.renderFiles();
       const want = params.get('file') || store('games.file');
       const f = this.files.find((x) => x.id === want) || this.files.find((x) => x.name.endsWith('.jsonl'));
       if (f) this.select(f.id);
-      else $('#games-body').replaceChildren(el('tr', {}, el('td', { colspan: 8, class: 'empty-state', text: 'No record files found. Start kairos-web with --games <dir> (default: games/ in the repository).' })));
+      else $('#games-body').replaceChildren(el('tr', {}, el('td', { colspan: 8, class: 'empty-state', text: this.app.server ? 'No record files found. Start kairos-web with --games <dir> (default: games/ in the repository).' : 'No record files here. Open a JSONL or 5dpgn file from your computer.' })));
     }
   }
 
@@ -88,7 +101,7 @@ export class Games {
     const seq = ++this.seq;
     let r;
     try {
-      r = await fetch('api/games/list?' + p).then((r) => r.json());
+      r = await apiGet(this.app, 'api/games/list?' + p);
     } catch (e) { r = { ok: false, error: e.message }; }
     if (seq !== this.seq) return;
     const f = this.files.find((x) => x.id === this.file);
