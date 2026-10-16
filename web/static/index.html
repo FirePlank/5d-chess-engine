@@ -29,6 +29,7 @@
     <a href="#/analysis" data-route="analysis">Analysis</a>
     <a href="#/play" data-route="play">Play</a>
     <a href="#/games" data-route="games">Games</a>
+    <a href="#/rules" data-route="rules">Rules</a>
   </nav>
   <div class="site-actions">
     <button class="icon-btn" id="btn-board-theme" title="Board colours" aria-label="Board colours"><svg><use href="#i-palette"/></svg></button>
@@ -220,6 +221,72 @@
       </div>
       <div class="pager" id="pager"></div>
     </div>
+  </section>
+  <!-- ============================== Rules the engine plays by -->
+  <section class="rules hidden" id="rules">
+    <article class="rules-doc">
+      <h1>Rules</h1>
+      <p class="lead">The rules Kairos plays by: 5D Chess With Multiverse Time Travel, with the community tournament standard for stalemate (exiled kings).</p>
+      <nav class="rules-toc" aria-label="On this page">
+        <a href="#/rules" data-sec="game">The game</a>
+        <a href="#/rules" data-sec="turns">Turns</a>
+        <a href="#/rules" data-sec="timelines">Timelines</a>
+        <a href="#/rules" data-sec="check">Check and mate</a>
+        <a href="#/rules" data-sec="exiled">Exiled kings</a>
+        <a href="#/rules" data-sec="ending">Endings</a>
+      </nav>
+
+      <h2 id="rules-game">The game</h2>
+      <ul>
+        <li>Boards are up to 8×8. Pieces: king, queen, rook, bishop, knight, pawn, and the fairy pieces princess, unicorn, dragon, brawn, royal queen and common king.</li>
+        <li>Castling and en passant work as in the original game. Pawns and brawns promote on the last rank, to a queen in the standard variants.</li>
+        <li>Kings and royal queens are royal. A common king is not.</li>
+        <li>Variants: Standard, Turn Zero, Reversed Royalty, Half Reflected, Defended Pawn, Two Timelines, and Very Small – Open.</li>
+      </ul>
+
+      <h2 id="rules-turns">Turns</h2>
+      <ul>
+        <li>The <b>present</b> is the earliest latest-board among the active timelines. The side whose board it is moves.</li>
+        <li>An <b>action</b> is one move on every playable board on the present, plus any moves on boards further on where it is also that side's turn. Then the side submits.</li>
+        <li>An action is legal only if the mover's royal pieces cannot be captured afterwards.</li>
+      </ul>
+
+      <h2 id="rules-timelines">Timelines</h2>
+      <ul>
+        <li>Moving onto a board that is no longer the latest of its timeline creates a new timeline from that board.</li>
+        <li>White's new timelines are numbered up from the main one, Black's down.</li>
+        <li>A side may create at most one more active timeline than its opponent. Any timeline beyond that is <b>inactive</b>: it stays on the board and can be moved into, but it does not count for the present and never has to be played.</li>
+      </ul>
+
+      <h2 id="rules-check">Check and mate</h2>
+      <ul>
+        <li><b>Check:</b> a royal piece can be captured next move, from the same board, another board or another time.</li>
+        <li><b>Checkmate:</b> in check, with no legal action.</li>
+        <li><b>Softmate</b> (<code>*</code> in notation): in check, and every escape is a move into the past that creates a timeline. Not a result.</li>
+        <li><b>Stalemate:</b> not in check, with no legal action. A draw, unless the exiled-kings rule applies.</li>
+      </ul>
+
+      <h2 id="rules-exiled">Exiled kings</h2>
+      <p>The community tournament rule:</p>
+      <blockquote>At a stalemate, a side whose royal pieces all stand on inactive timelines loses.</blockquote>
+      <ul>
+        <li>A side is exiled when it has royal pieces but none on an active timeline.</li>
+        <li>If only one side is exiled, it loses the stalemate. If both or neither are, the game is drawn.</li>
+      </ul>
+
+      <h2 id="rules-ending">Endings</h2>
+      <table class="rules-table">
+        <thead><tr><th>Ending</th><th>Result</th></tr></thead>
+        <tbody>
+          <tr><td>Checkmate</td><td>The checking side wins.</td></tr>
+          <tr><td>Stalemate, both or neither side exiled</td><td>Draw.</td></tr>
+          <tr><td>Stalemate, one side exiled</td><td>The exiled side loses.</td></tr>
+          <tr><td>Resignation</td><td>The opponent wins.</td></tr>
+          <tr><td>Time forfeit</td><td>The side that ran out of time loses.</td></tr>
+        </tbody>
+      </table>
+      <p>There is no repetition or fifty-move rule.</p>
+    </article>
   </section>
 </main>
 

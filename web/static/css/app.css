@@ -460,3 +460,23 @@ table.games { width: 100%; border-collapse: collapse; font-size: 13px; }
   .draft-bar { bottom: 52px; }
   .coord-chip { display: none; }
 }
+
+/* ---------------------------------------------------------------- rules page */
+.rules { height: 100%; overflow-y: auto; padding: 0 var(--s2) var(--s4); }
+.rules-doc { max-width: 780px; margin: 0 auto; padding: var(--s3) var(--s3) var(--s4); line-height: 1.6; }
+.rules-doc h1 { font-size: 26px; margin: var(--s3) 0 var(--s2); color: var(--strong); letter-spacing: -.02em; }
+.rules-doc h2 { font-size: 18px; margin: var(--s4) 0 var(--s2); padding-top: var(--s2); border-top: 1px solid var(--border); color: var(--strong); scroll-margin-top: var(--s2); }
+.rules-doc p, .rules-doc li { color: var(--text); }
+.rules-doc b, .rules-doc em { color: var(--strong); }
+.rules-doc ul { padding-left: 20px; margin: var(--s2) 0; }
+.rules-doc li { margin: 6px 0; }
+.rules-doc code { padding: 1px 5px; border-radius: var(--r-sm); background: var(--inset); color: var(--strong); font-size: .92em; }
+.rules-doc .lead { font-size: 15px; color: var(--text); }
+.rules-doc blockquote { margin: var(--s2) 0; padding: var(--s2) var(--s3); border-left: 3px solid var(--accent); background: var(--inset); border-radius: 0 var(--r) var(--r) 0; color: var(--strong); font-weight: 600; }
+.rules-toc { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: var(--s3) 0; font-size: 13px; }
+.rules-toc a { color: var(--accent); text-decoration: none; }
+.rules-toc a:hover { text-decoration: underline; }
+.rules-table { width: 100%; border-collapse: collapse; margin: var(--s2) 0; font-size: 14px; }
+.rules-table th, .rules-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.rules-table th { color: var(--strong); font-weight: 600; }
+@media (max-width: 760px) { .rules { height: auto; overflow: visible; } }

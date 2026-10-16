@@ -35,19 +35,20 @@ async function serverInfo() {
 function route() {
   const hash = location.hash || '#/analysis';
   const [path, qs] = hash.slice(2).split('?');
-  const name = ['analysis', 'play', 'games'].includes(path) ? path : 'analysis';
+  const name = ['analysis', 'play', 'games', 'rules'].includes(path) ? path : 'analysis';
   const params = new URLSearchParams(qs || '');
   if (app.route !== name) {
     const prev = app.pages[app.route];
     if (prev && prev.deactivate) prev.deactivate();
   }
   app.route = name;
-  $$('.tabs a').forEach((a) => a.classList.toggle('on', a.dataset.route === name));
-  $('#workspace').classList.toggle('hidden', name === 'games');
+  $$('.site-nav a').forEach((a) => a.classList.toggle('on', a.dataset.route === name));
+  $('#workspace').classList.toggle('hidden', name === 'games' || name === 'rules');
+  $('#rules').classList.toggle('hidden', name !== 'rules');
   $('#browser').classList.toggle('hidden', name !== 'games');
   $('#side-analysis').classList.toggle('hidden', name !== 'analysis');
   $('#side-play').classList.toggle('hidden', name !== 'play');
-  if (name !== 'games') app.board.resize();
+  if (name === 'analysis' || name === 'play') app.board.resize();
   app.pages[name].activate(params);
 }
 
@@ -94,6 +95,18 @@ async function showBuild() {
   } catch (e) { /* a local server has no build info */ }
 }
 
+/** The Rules page is static text; its contents links scroll to a section. */
+function rulesPage() {
+  document.querySelector('.rules-toc').addEventListener('click', (e) => {
+    const a = e.target.closest('a[data-sec]');
+    if (!a) return;
+    e.preventDefault();
+    const el = document.getElementById('rules-' + a.dataset.sec);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  return { activate() { $('#rules').scrollTop = 0; } };
+}
+
 async function main() {
   app.board = new MultiverseView($('#board'));
   app.input = new MoveInput(app.board);
@@ -131,7 +144,7 @@ async function main() {
   showBuild();
 
   app.server = await serverInfo();
-  app.pages = { analysis: new Analysis(app), play: new Play(app), games: new Games(app) };
+  app.pages = { analysis: new Analysis(app), play: new Play(app), games: new Games(app), rules: rulesPage() };
   try {
     await app.pages.analysis.init();
     setRules(app.pages.analysis.rules);
