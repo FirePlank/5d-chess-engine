@@ -37,7 +37,7 @@ export class Play {
       await this.local.init();
     }
     const variants = this.rules.call({ cmd: 'variants' }).variants;
-    const saved = store('play.variant') || 'Standard';
+    const saved = store('play.variant.t0') || 'Standard - Turn Zero';
     $('#play-variant').replaceChildren(...variants.map((v) => el('option', { value: v.name, text: v.name, selected: v.name === saved })));
     $$('#play-color button').forEach((b) => {
       b.classList.toggle('on', b.dataset.v === this.color);
@@ -57,7 +57,7 @@ export class Play {
     $('#play-book').checked = store('play.book') !== false;
     $('#play-book').onchange = () => store('play.book', $('#play-book').checked);
     $('#play-form').onsubmit = (e) => { e.preventDefault(); this.start(); };
-    $('#play-variant').onchange = () => { store('play.variant', $('#play-variant').value); this.preview(); };
+    $('#play-variant').onchange = () => { store('play.variant.t0', $('#play-variant').value); this.preview(); };
     $('#play-resign').onclick = async () => {
       if (await confirmDialog('Resign this game?', { text: 'Kairos wins the game.', ok: 'Resign', danger: true })) this.post('resign').catch(() => {});
     };
@@ -83,7 +83,7 @@ export class Play {
   preview() {
     if (!this.rules || !this.previewable()) return;
     try {
-      const r = this.rules.call({ cmd: 'new', position: $('#play-variant').value || 'Standard' });
+      const r = this.rules.call({ cmd: 'new', position: $('#play-variant').value || 'Standard - Turn Zero' });
       this.tree = r.tree;
     } catch (e) {
       toast(e.message, { error: true });
@@ -162,7 +162,7 @@ export class Play {
     const tc = $('#play-tc button.on') || $('#play-tc button');
     const base = +tc.dataset.base, inc = +tc.dataset.inc;
     const variant = $('#play-variant').value;
-    store('play.variant', variant);
+    store('play.variant.t0', variant);
     const body = {
       variant,
       color: this.color === 'r' ? 'random' : this.color,

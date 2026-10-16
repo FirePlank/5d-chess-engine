@@ -1007,7 +1007,7 @@ impl Play {
                 if !Self::can_start(&st, who.as_deref()) {
                     return Response::json(obj![("ok", false), ("error", "busy"), ("state", Self::public_state(&st, who.as_deref()))]);
                 }
-                let variant = body.get("variant").str().unwrap_or("Standard").to_string();
+                let variant = body.get("variant").str().unwrap_or("Standard - Turn Zero").to_string();
                 if !VARIANTS.contains(&variant.as_str()) {
                     return Response::error(400, "unknown variant");
                 }

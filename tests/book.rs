@@ -49,11 +49,11 @@ fn positions_are_found_however_they_were_reached() {
         t = play_action(&t, &parse_lan_moves(act).unwrap()).unwrap();
     }
     assert_eq!(t.hash(), s.hash());
-    // Standard and Turn Zero are different books.
-    let std = position("Standard", "(0T1)g1f3 submit (0T1)g8f6 submit (0T2)d2d4 submit");
-    assert!(Book::theory().probe(&std).is_some_and(|v| v.iter().all(|m| m.lan == "(0T2)d7d5")));
+    // The book is Turn Zero only: other variants are never in it.
+    assert!(Book::theory().probe(&position("Standard", "")).is_none());
+    assert!(Book::theory().probe(&position("Standard", "(0T1)g1f3 submit (0T1)g8f6 submit (0T2)d2d4 submit")).is_none());
     // Out of book.
-    assert!(Book::theory().probe(&position("Standard", "(0T1)h2h4 submit (0T1)h7h5 submit")).is_none());
+    assert!(Book::theory().probe(&position("Standard - Turn Zero", "(0T1)h2h4 submit (0T1)h7h5 submit")).is_none());
 }
 
 #[test]
@@ -69,9 +69,15 @@ fn know_moves_are_never_chosen() {
         let m = b.choose(&s, seed).unwrap();
         assert!(m.play && m.lan == "(0T4)e2e3", "{}", m.lan);
     }
-    // White's first move in T0: always Nf3 (the other first moves are known, not played).
+    // White's first move in T0: Nf3 (10), e3 (5) or e4 (2); the other first moves are known,
+    // not played.
     let start = position("Standard - Turn Zero", "");
-    assert!((0..200).all(|seed| b.choose(&start, seed).unwrap().lan == "(0T1)g1f3"));
+    let mut seen = std::collections::HashMap::new();
+    for seed in 0..2000 {
+        *seen.entry(b.choose(&start, seed).unwrap().lan.clone()).or_insert(0) += 1;
+    }
+    assert_eq!(seen.len(), 3, "{:?}", seen);
+    assert!(seen["(0T1)g1f3"] > seen["(0T1)e2e3"] && seen["(0T1)e2e3"] > seen["(0T1)e2e4"], "{:?}", seen);
     // A position with only known moves has nothing to play.
     let s = position(
         "Standard - Turn Zero",
@@ -109,12 +115,15 @@ fn own_book_plays_book_moves_only_when_on() {
     let (_, lines) = search(None, "Standard", "");
     assert!(lines.iter().all(|l| !l.contains("book")) && lines.iter().any(|l| l.starts_with("depth")));
     // On: White's first move from the book, with no search.
-    let (best, lines) = search(Some(true), "Standard", "");
-    assert_eq!(best, "(0T1)g1f3");
+    let (best, lines) = search(Some(true), "Standard - Turn Zero", "");
+    assert!(["(0T1)g1f3", "(0T1)e2e3", "(0T1)e2e4"].contains(&best.as_str()), "{}", best);
     assert_eq!(lines.len(), 1);
-    assert!(lines[0].starts_with("string book (0T1)g1f3"), "{}", lines[0]);
+    assert!(lines[0].starts_with(&format!("string book {}", best)), "{}", lines[0]);
+    // On, but the book is Turn Zero only: a normal search in Standard.
+    let (_, lines) = search(Some(true), "Standard", "");
+    assert!(lines.iter().all(|l| !l.contains("book")) && lines.iter().any(|l| l.starts_with("depth")));
     // On, out of book: a normal search.
-    let (_, lines) = search(Some(true), "Standard", "(0T1)h2h4 submit (0T1)h7h5 submit");
+    let (_, lines) = search(Some(true), "Standard - Turn Zero", "(0T1)h2h4 submit (0T1)h7h5 submit");
     assert!(lines.iter().all(|l| !l.contains("book")) && lines.iter().any(|l| l.starts_with("depth")));
     // Off again.
     let (_, lines) = search(Some(false), "Standard - Turn Zero", "");
@@ -129,9 +138,9 @@ fn api_book_hint_and_book_search() {
     assert!(r.contains("\"ok\":true"), "{}", r);
     let r = api.call(r#"{"cmd":"book","node":0}"#, &mut info);
     assert!(r.contains("\"lan\":\"(0T1)g1f3\"") && r.contains("\"play\":true") && r.contains("\"play\":false"), "{}", r);
-    let pos = resolve_position("Standard").unwrap();
+    let pos = resolve_position("Standard - Turn Zero").unwrap();
     let r = api.call(&format!(r#"{{"cmd":"search","position":"{}","depth":1,"book":true}}"#, pos), &mut info);
-    assert!(r.contains("\"bestmove\":\"(0T1)g1f3\""), "{}", r);
+    assert!(["(0T1)g1f3", "(0T1)e2e3", "(0T1)e2e4"].iter().any(|m| r.contains(&format!("\"bestmove\":\"{}\"", m))), "{}", r);
     let r = api.call(&format!(r#"{{"cmd":"book","position":"{} moves (0T1)h2h4 submit"}}"#, pos), &mut info);
     assert!(r.contains("\"moves\":[]"), "{}", r);
 }
