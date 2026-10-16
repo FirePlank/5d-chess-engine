@@ -30,5 +30,13 @@ with open(os.path.join(root, 'files.json'), 'w') as f:
     json.dump({'ok': True, 'files': files}, f)
 print(f'{len(files)} record files')
 PY
+# The build's commit, shown on the site (header) so a visitor can tell which version runs.
+sha=${GITHUB_SHA:-$(git rev-parse HEAD)}
+repo=${GITHUB_REPOSITORY:-FirePlank/5d-chess-engine}
+"${PYTHON:-python3}" - "$out/version.json" "$sha" "$repo" "$(git show -s --format=%cI "$sha" 2>/dev/null || true)" "$(git show -s --format=%s "$sha" 2>/dev/null || true)" <<'PY'
+import json, sys
+out, sha, repo, date, subject = sys.argv[1:6]
+json.dump({'sha': sha, 'date': date, 'subject': subject, 'url': f'https://github.com/{repo}/commit/{sha}'}, open(out, 'w'))
+PY
 touch "$out/.nojekyll"
 echo "site in $out"

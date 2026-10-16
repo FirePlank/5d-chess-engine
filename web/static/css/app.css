@@ -142,6 +142,8 @@ svg { width: 18px; height: 18px; flex: none; }
   background: var(--page);
 }
 .site-logo { font-size: 22px; font-weight: 700; color: var(--strong); text-decoration: none; letter-spacing: -.02em; }
+.build { font: 11px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--muted); text-decoration: none; margin-left: 10px; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border, currentColor); opacity: .75; align-self: center; }
+.build:hover { opacity: 1; }
 .site-logo .tld { font-size: 13px; font-weight: 600; color: var(--muted); margin-left: 3px; vertical-align: 6px; }
 .site-nav { display: flex; height: 100%; }
 .site-nav a {
@@ -433,6 +435,7 @@ table.games { width: 100%; border-collapse: collapse; font-size: 13px; }
   #app { height: auto; }
   .site-header { gap: var(--s2); padding: 0 var(--s1) 0 var(--s3); }
   .site-logo .tld { display: none; }
+  .build { display: none; }
   .site-nav a { padding: 0 6px; font-size: 12px; letter-spacing: .02em; }
   .site-logo { font-size: 19px; }
   #btn-help { display: none; }

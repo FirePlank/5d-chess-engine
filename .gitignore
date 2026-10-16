@@ -16,3 +16,4 @@
 !/tests/data/**
 # Game records bundled with the static site (web/games)
 !/web/games/**
+/target-pages

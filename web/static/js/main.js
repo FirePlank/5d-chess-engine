@@ -79,6 +79,21 @@ function bindKeys() {
   });
 }
 
+/** The published build (version.json, written by scripts/build_pages.sh): its commit, as a link. */
+async function showBuild() {
+  try {
+    const r = await fetch('version.json', { cache: 'no-store' });
+    if (!r.ok) return;
+    const v = await r.json();
+    const a = $('#build');
+    a.textContent = v.sha.slice(0, 7);
+    const when = v.date ? ' · ' + v.date.slice(0, 16).replace('T', ' ') : '';
+    a.title = `Build ${v.sha.slice(0, 7)}${when}${v.subject ? '\n' + v.subject : ''}`;
+    if (v.url) a.href = v.url;
+    a.classList.remove('hidden');
+  } catch (e) { /* a local server has no build info */ }
+}
+
 async function main() {
   app.board = new MultiverseView($('#board'));
   app.input = new MoveInput(app.board);
@@ -113,6 +128,7 @@ async function main() {
     if (!saved) setTheme(e.matches ? 'dark' : 'light');
   });
   bindKeys();
+  showBuild();
 
   app.server = await serverInfo();
   app.pages = { analysis: new Analysis(app), play: new Play(app), games: new Games(app) };
