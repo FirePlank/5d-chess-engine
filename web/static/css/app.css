@@ -142,6 +142,8 @@ svg { width: 18px; height: 18px; flex: none; }
   background: var(--page);
 }
 .site-logo { font-size: 22px; font-weight: 700; color: var(--strong); text-decoration: none; letter-spacing: -.02em; }
+.build { font: 11px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--muted); text-decoration: none; margin-left: 10px; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border, currentColor); opacity: .75; align-self: center; }
+.build:hover { opacity: 1; }
 .site-logo .tld { font-size: 13px; font-weight: 600; color: var(--muted); margin-left: 3px; vertical-align: 6px; }
 .site-nav { display: flex; height: 100%; }
 .site-nav a {
@@ -187,6 +189,12 @@ select { padding-right: var(--s1); }
 textarea { width: 100%; height: 180px; padding: var(--s2); font: 12.5px/1.5 var(--mono); resize: vertical; }
 .field { display: flex; flex-direction: column; gap: var(--s1); margin-bottom: var(--s3); }
 .field > span { font-size: 12px; color: var(--muted); font-weight: 600; }
+.field.book-row { flex-direction: row; align-items: center; gap: var(--s2); }
+.book-hint { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 6px 10px; border-top: 1px solid var(--border); font-size: 13px; }
+.book-hint .book-label { font-size: 12px; color: var(--muted); font-weight: 600; }
+.book-hint .book-move { cursor: pointer; }
+.book-hint .book-move:hover { text-decoration: underline; }
+.book-hint .book-move.know { color: var(--muted); text-decoration: line-through; }
 .error { color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); padding: var(--s2); border-radius: var(--r-sm); font-size: 13px; white-space: pre-wrap; margin-top: var(--s2); }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; margin-bottom: var(--s2); }
 .seg button { border: 0; background: var(--inset); padding: var(--s1) var(--s3); font-weight: 600; font-size: 13px; color: var(--muted); }
@@ -433,6 +441,7 @@ table.games { width: 100%; border-collapse: collapse; font-size: 13px; }
   #app { height: auto; }
   .site-header { gap: var(--s2); padding: 0 var(--s1) 0 var(--s3); }
   .site-logo .tld { display: none; }
+  .build { display: none; }
   .site-nav a { padding: 0 6px; font-size: 12px; letter-spacing: .02em; }
   .site-logo { font-size: 19px; }
   #btn-help { display: none; }
@@ -457,3 +466,23 @@ table.games { width: 100%; border-collapse: collapse; font-size: 13px; }
   .draft-bar { bottom: 52px; }
   .coord-chip { display: none; }
 }
+
+/* ---------------------------------------------------------------- rules page */
+.rules { height: 100%; overflow-y: auto; padding: 0 var(--s2) var(--s4); }
+.rules-doc { max-width: 780px; margin: 0 auto; padding: var(--s3) var(--s3) var(--s4); line-height: 1.6; }
+.rules-doc h1 { font-size: 26px; margin: var(--s3) 0 var(--s2); color: var(--strong); letter-spacing: -.02em; }
+.rules-doc h2 { font-size: 18px; margin: var(--s4) 0 var(--s2); padding-top: var(--s2); border-top: 1px solid var(--border); color: var(--strong); scroll-margin-top: var(--s2); }
+.rules-doc p, .rules-doc li { color: var(--text); }
+.rules-doc b, .rules-doc em { color: var(--strong); }
+.rules-doc ul { padding-left: 20px; margin: var(--s2) 0; }
+.rules-doc li { margin: 6px 0; }
+.rules-doc code { padding: 1px 5px; border-radius: var(--r-sm); background: var(--inset); color: var(--strong); font-size: .92em; }
+.rules-doc .lead { font-size: 15px; color: var(--text); }
+.rules-doc blockquote { margin: var(--s2) 0; padding: var(--s2) var(--s3); border-left: 3px solid var(--accent); background: var(--inset); border-radius: 0 var(--r) var(--r) 0; color: var(--strong); font-weight: 600; }
+.rules-toc { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: var(--s3) 0; font-size: 13px; }
+.rules-toc a { color: var(--accent); text-decoration: none; }
+.rules-toc a:hover { text-decoration: underline; }
+.rules-table { width: 100%; border-collapse: collapse; margin: var(--s2) 0; font-size: 14px; }
+.rules-table th, .rules-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.rules-table th { color: var(--strong); font-weight: 600; }
+@media (max-width: 760px) { .rules { height: auto; overflow: visible; } }

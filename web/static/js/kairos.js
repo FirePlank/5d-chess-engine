@@ -154,14 +154,15 @@ export class Engine {
 
   /**
    * Start a search; a running one is stopped first. Returns the request id. On a clock, pass
-   * `timeLeft`/`increment` (ms) and `movetime: null`.
+   * `timeLeft`/`increment` (ms) and `movetime: null`. `book`: answer a book position from the
+   * opening book at once (the engine's `OwnBook`; Play only).
    */
-  async search({ position, movetime = 86_400_000, depth, newGame = false, resume = false, timeLeft, increment }) {
+  async search({ position, movetime = 86_400_000, depth, newGame = false, resume = false, timeLeft, increment, book = false }) {
     await this.start();
     this.stop();
     const id = ++this.reqId;
     this.busy = true;
-    this.worker.postMessage({ type: 'search', id, position, movetime, depth, newGame, resume, timeLeft, increment });
+    this.worker.postMessage({ type: 'search', id, position, movetime, depth, newGame, resume, timeLeft, increment, book });
     return id;
   }
 

@@ -45,6 +45,7 @@ export class LocalPlay {
         left: this.clockNow(),
         toMove: g.toMove,
         movetime: g.movetime,
+        book: g.book,
         thinking: g.thinking,
         over: g.over,
         info: g.info,
@@ -68,7 +69,7 @@ export class LocalPlay {
     return this.state();
   }
 
-  start({ variant = 'Standard', color = 'random', clock = null, movetime = 2000 }) {
+  start({ variant = 'Standard', color = 'random', clock = null, movetime = 2000, book = true }) {
     this.engine.stop();
     this.rules.call({ cmd: 'new', position: variant });
     const start = this.view(0).position;
@@ -78,7 +79,7 @@ export class LocalPlay {
     this.game = {
       id: this.gameId, variant, start, humanColor, node: 0, moves: [], evals: [],
       clock: clock && { base: clock.base, inc: clock.inc }, left: [base, base], turnStart: performance.now(),
-      movetime, toMove: 'w', thinking: false, over: null, info: null, fresh: true,
+      movetime, book: book !== false, toMove: 'w', thinking: false, over: null, info: null, fresh: true,
     };
     this.afterAction();
   }
@@ -141,7 +142,8 @@ export class LocalPlay {
     this.searchId = null;
     this.searchFor = { id: g.id, position, lastScore: null };
     try {
-      const id = await this.engine.search({ position, newGame, ...limits });
+      // The opening book answers book positions at once (the in-browser engine's OwnBook).
+      const id = await this.engine.search({ position, newGame, book: g.book, ...limits });
       if (this.game === g && this.searchFor && this.searchFor.position === position) this.searchId = id;
     } catch (e) {
       if (this.game === g && !g.over) this.finish(g.humanColor === 'w' ? '1-0' : '0-1', 'engine failed to start: ' + e.message);

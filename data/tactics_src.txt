@@ -1,0 +1,99 @@
+# Tactics regression suite source: `ktools tacticsgen data/tactics_src.txt > data/tactics.g`
+# (a test checks the two agree). One position per line:
+#   <name> | <correct action in 5dpgn, alternatives separated by " or "> | <5dpgn game to the position>
+# Sources (docs/theory/): f7_sac_guide_notes.md (Lavamat's f7-sac guide), tactics_guide.txt
+# (Mage's 5D tactics guide), t0_opening_guide.txt (Theory Gang's T0 Openings Guide, line numbers
+# below) and the classic f-sac game. The generated file shows each correct action in full 5dpgn
+# with its check/softmate/checkmate symbol, as computed by the rules core.
+
+# ---------------------------------------------------------------- f7 sac, Standard, White
+# The guide's lines start after the queen travel 1. Qxf7+ Kxf7 on the new timeline. Here the
+# queen reaches f3 by T2 (1. e3, 2. Qf3) and travels from T5f3 to T1f7 ("White's travel routes to
+# f7: T5f3"), Black's main-timeline moves (a6 a5 h6 h5) staying off the queen's path (T2f6, T3f5,
+# T4f4) and out of the way. "..." moves of the guide are filled with a6.
+f7 sac Std: the T5f3 queen travel | (0T5)Qf3>>x(0T1)f7+ | [Board "Standard"] [Mode "5D"] 1. e3 / a6 2. Qf3 / a5 3. a3 / b6 4. a4 / Bb7
+f7 sac Std: Nh3 starts the mate in 4 | (1T2)Nh3 | [Board "Standard"] [Mode "5D"] 1. e3 / a6 2. Qf3 / a5 3. a3 / b6 4. a4 / Bb7 5. (0T5)Qf3>>x(0T1)f7+ (>L1) / (1T1)Kxf7
+f7 sac Std: Qb3 line, Ng5+ | (1T3)Ng5+ | [Board "Standard"] [Mode "5D"] 1. e3 / a6 2. Qf3 / a5 3. a3 / b6 4. a4 / Bb7 5. (0T5)Qf3>>x(0T1)f7+ (>L1) / (1T1)Kxf7 6. (1T2)Nh3 / (1T2)Nf6
+f7 sac Std: Qb3* softmate (Ke8) | (1T5)Qb3 | [Board "Standard"] [Mode "5D"] 1. e3 / a6 2. Qf3 / a5 3. a3 / b6 4. a4 / Bb7 5. (0T5)Qf3>>x(0T1)f7+ (>L1) / (1T1)Kxf7 6. (1T2)Nh3 / (1T2)Nf6 7. (1T3)Ng5+ / (1T3)Ke8 8. (1T4)c3 / (1T4)a6
+f7 sac Std: Qb3* softmate (Kg8) | (1T5)Qb3+ | [Board "Standard"] [Mode "5D"] 1. e3 / a6 2. Qf3 / a5 3. a3 / b6 4. a4 / Bb7 5. (0T5)Qf3>>x(0T1)f7+ (>L1) / (1T1)Kxf7 6. (1T2)Nh3 / (1T2)Nf6 7. (1T3)Ng5+ / (1T3)Kg8 8. (1T4)c3 / (1T4)a6
+f7 sac Std: Qf3 line, Ng5+ | (1T4)Ng5+ | [Board "Standard"] [Mode "5D"] 1. e3 / a6 2. Qf3 / a5 3. a3 / b6 4. a4 / Bb7 5. (0T5)Qf3>>x(0T1)f7+ (>L1) / (1T1)Kxf7 6. (1T2)Nh3 / (1T2)e6 7. (1T3)e3 / (1T3)Nf6
+f7 sac Std: Qf3* softmate (Ke8) | (1T5)Qf3 | [Board "Standard"] [Mode "5D"] 1. e3 / a6 2. Qf3 / a5 3. a3 / b6 4. a4 / Bb7 5. (0T5)Qf3>>x(0T1)f7+ (>L1) / (1T1)Kxf7 6. (1T2)Nh3 / (1T2)e6 7. (1T3)e3 / (1T3)Nf6 8. (1T4)Ng5+ / (1T4)Ke8
+f7 sac Std: Qf3* softmate (Kg8) | (1T5)Qf3 | [Board "Standard"] [Mode "5D"] 1. e3 / a6 2. Qf3 / a5 3. a3 / b6 4. a4 / Bb7 5. (0T5)Qf3>>x(0T1)f7+ (>L1) / (1T1)Kxf7 6. (1T2)Nh3 / (1T2)e6 7. (1T3)e3 / (1T3)Nf6 8. (1T4)Ng5+ / (1T4)Kg8
+f7 sac Std: Qh5* after ...e6 and ...Qf6 | (1T4)Qh5+ | [Board "Standard"] [Mode "5D"] 1. e3 / a6 2. Qf3 / a5 3. a3 / b6 4. a4 / Bb7 5. (0T5)Qf3>>x(0T1)f7+ (>L1) / (1T1)Kxf7 6. (1T2)Nh3 / (1T2)e6 7. (1T3)e3 / (1T3)Qf6
+f7 sac Std: Qh5* after ...d5 and ...Bf5 | (1T4)Qh5+ | [Board "Standard"] [Mode "5D"] 1. e3 / a6 2. Qf3 / a5 3. a3 / b6 4. a4 / Bb7 5. (0T5)Qf3>>x(0T1)f7+ (>L1) / (1T1)Kxf7 6. (1T2)Nh3 / (1T2)d5 7. (1T3)e3 / (1T3)Bf5
+# tactics_guide: "Qf3 threatens an unstoppable mate; if the opponent is able to block with Qf6
+# you can play Ng5#, which provides two checks at once for hardmate".
+f7 sac Std: Ng5# double check after ...Qf6 | (1T5)Ng5# | [Board "Standard"] [Mode "5D"] 1. e3 / a6 2. Qf3 / a5 3. a3 / b6 4. a4 / Bb7 5. (0T5)Qf3>>x(0T1)f7+ (>L1) / (1T1)Kxf7 6. (1T2)Nh3 / (1T2)e6 7. (1T3)e3 / (1T3)g6 8. (1T4)Qf3+ / (1T4)Qf6 | mate 2
+
+# ---------------------------------------------------------------- f7 sac, Turn Zero, both colours
+# White: the same travel to T1f7. Black: the mirror travel from T4f6 to T0f2 ("in Turn Zero the
+# same applies to both colours (T0f2 for Black)"), with the mirrored lines on timeline -1.
+f7 sac T0 White: the T5f3 queen travel | (0T5)Qf3>>x(0T1)f7+ | [Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / a6 2. Qf3 / a5 3. a3 / b6 4. a4 / Bb7
+f7 sac T0 White: Qb3* softmate (Ke8) | (1T5)Qb3 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / a6 2. Qf3 / a5 3. a3 / b6 4. a4 / Bb7 5. (0T5)Qf3>>x(0T1)f7+ (>L1) / (1T1)Kxf7 6. (1T2)Nh3 / (1T2)Nf6 7. (1T3)Ng5+ / (1T3)Ke8 8. (1T4)c3 / (1T4)a6
+f7 sac T0 White: Qf3* softmate (Kg8) | (1T5)Qf3 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / a6 2. Qf3 / a5 3. a3 / b6 4. a4 / Bb7 5. (0T5)Qf3>>x(0T1)f7+ (>L1) / (1T1)Kxf7 6. (1T2)Nh3 / (1T2)e6 7. (1T3)e3 / (1T3)Nf6 8. (1T4)Ng5+ / (1T4)Kg8
+f7 sac T0 White: Qh5* after ...e6 and ...Qf6 | (1T4)Qh5+ | [Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / a6 2. Qf3 / a5 3. a3 / b6 4. a4 / Bb7 5. (0T5)Qf3>>x(0T1)f7+ (>L1) / (1T1)Kxf7 6. (1T2)Nh3 / (1T2)e6 7. (1T3)e3 / (1T3)Qf6
+f2 sac T0 Black: the T4f6 queen travel | (0T4)Qf6>>x(0T0)f2+ | [Board "Standard - Turn Zero"] [Mode "5D"] 1. a3 / e6 2. a4 / Qf6 3. b3 / a6 4. Bb2
+f2 sac T0 Black: Nh6 starts the mate | (-1T1)Nh6 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. a3 / e6 2. a4 / Qf6 3. b3 / a6 4. Bb2 / (0T4)Qf6>>x(0T0)f2+ (>L-1) 5. (-1T1)Kxf2
+f2 sac T0 Black: Ng4+ | (-1T2)Ng4+ | [Board "Standard - Turn Zero"] [Mode "5D"] 1. a3 / e6 2. a4 / Qf6 3. b3 / a6 4. Bb2 / (0T4)Qf6>>x(0T0)f2+ (>L-1) 5. (-1T1)Kxf2 / (-1T1)Nh6 6. (-1T2)Nf3
+f2 sac T0 Black: Qb6* softmate (Ke1) | (-1T4)Qb6 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. a3 / e6 2. a4 / Qf6 3. b3 / a6 4. Bb2 / (0T4)Qf6>>x(0T0)f2+ (>L-1) 5. (-1T1)Kxf2 / (-1T1)Nh6 6. (-1T2)Nf3 / (-1T2)Ng4+ 7. (-1T3)Ke1 / (-1T3)c6 8. (-1T4)a3
+f2 sac T0 Black: Qb6* softmate (Kg1) | (-1T4)Qb6+ | [Board "Standard - Turn Zero"] [Mode "5D"] 1. a3 / e6 2. a4 / Qf6 3. b3 / a6 4. Bb2 / (0T4)Qf6>>x(0T0)f2+ (>L-1) 5. (-1T1)Kxf2 / (-1T1)Nh6 6. (-1T2)Nf3 / (-1T2)Ng4+ 7. (-1T3)Kg1 / (-1T3)c6 8. (-1T4)a3
+f2 sac T0 Black: Qh4* after e3 and Qf3 | (-1T3)Qh4+ | [Board "Standard - Turn Zero"] [Mode "5D"] 1. a3 / e6 2. a4 / Qf6 3. b3 / a6 4. Bb2 / (0T4)Qf6>>x(0T0)f2+ (>L-1) 5. (-1T1)Kxf2 / (-1T1)Nh6 6. (-1T2)e3 / (-1T2)e6 7. (-1T3)Qf3
+
+# ---------------------------------------------------------------- f7 sac defences (Standard)
+# f7_sac_guide_notes, against 1. e3: "2. Bb5 a5 3. c3 a4 4. Qb3 axb3; ... 2...Nc6 3. c3 Na5 4. Qb3
+# Nxb3": the queen coming to b3 is taken.
+f7 defence Std: a-pawn takes the queen on b3 | (0T4)axb3 | [Board "Standard"] [Mode "5D"] 1. e3 / Nf6 2. Bb5 / a5 3. c3 / a4 4. Qb3
+f7 defence Std: knight takes the queen on b3 | (0T4)Nxb3 | [Board "Standard"] [Mode "5D"] 1. e3 / Nf6 2. Bb5 / Nc6 3. c3 / Na5 4. Qb3
+
+# ---------------------------------------------------------------- the classic f-sac game (Standard)
+# 1. e3 e6 2. Qf3 Qf6 3. Qxf6 gxf6 4. f4 Nc6 5. c3 Bc5 6. d4 Bb6 7. Bf1>>x(0T1)f7+ Kxf7 8. Nh3 Nf6
+# 9. Ng5+ Ke8 10. c3 d5 11. Qb3* Bb6>>(0T4)b3 12. (-1T5)Bd3* Ke8>>(0T4)d8 13. Nb1>>x(-1T5)b3#.
+# Move 12 forces mate in 2 (the engine also finds another mate in 2 there). Move 13 is left out:
+# in that position dozens of actions mate at once.
+classic f-sac: 7. Bf1>>x(0T1)f7+ | (0T7)Bf1>>x(0T1)f7+ | [Board "Standard"] [Mode "5D"] 1. (0T1)e2e3 / (0T1)e7e6 2. (0T2)Qd1f3 / (0T2)Qd8f6 3. (0T3)Qf3xf6 / (0T3)g7xf6 4. (0T4)f2f4 / (0T4)Nb8c6 5. (0T5)c2c3 / (0T5)Bf8c5 6. (0T6)d2d4 / (0T6)Bc5b6
+classic f-sac: 8. Nh3 | (1T2)Ng1h3 | [Board "Standard"] [Mode "5D"] 1. (0T1)e2e3 / (0T1)e7e6 2. (0T2)Qd1f3 / (0T2)Qd8f6 3. (0T3)Qf3xf6 / (0T3)g7xf6 4. (0T4)f2f4 / (0T4)Nb8c6 5. (0T5)c2c3 / (0T5)Bf8c5 6. (0T6)d2d4 / (0T6)Bc5b6 7. (0T7)Bf1>>x(0T1)f7+~ (>L1) / (1T1)Ke8xf7
+classic f-sac: 9. Ng5+ | (1T3)Nh3g5+ | [Board "Standard"] [Mode "5D"] 1. (0T1)e2e3 / (0T1)e7e6 2. (0T2)Qd1f3 / (0T2)Qd8f6 3. (0T3)Qf3xf6 / (0T3)g7xf6 4. (0T4)f2f4 / (0T4)Nb8c6 5. (0T5)c2c3 / (0T5)Bf8c5 6. (0T6)d2d4 / (0T6)Bc5b6 7. (0T7)Bf1>>x(0T1)f7+~ (>L1) / (1T1)Ke8xf7 8. (1T2)Ng1h3 / (1T2)Ng8f6
+classic f-sac: 11. Qb3* | (1T5)Qd1b3 | [Board "Standard"] [Mode "5D"] 1. (0T1)e2e3 / (0T1)e7e6 2. (0T2)Qd1f3 / (0T2)Qd8f6 3. (0T3)Qf3xf6 / (0T3)g7xf6 4. (0T4)f2f4 / (0T4)Nb8c6 5. (0T5)c2c3 / (0T5)Bf8c5 6. (0T6)d2d4 / (0T6)Bc5b6 7. (0T7)Bf1>>x(0T1)f7+~ (>L1) / (1T1)Ke8xf7 8. (1T2)Ng1h3 / (1T2)Ng8f6 9. (1T3)Nh3g5+ / (1T3)Kf7e8 10. (1T4)c2c3 / (1T4)d7d5
+classic f-sac: 12. (-1T5)Bd3* | (-1T5)Bf1d3 | [Board "Standard"] [Mode "5D"] 1. (0T1)e2e3 / (0T1)e7e6 2. (0T2)Qd1f3 / (0T2)Qd8f6 3. (0T3)Qf3xf6 / (0T3)g7xf6 4. (0T4)f2f4 / (0T4)Nb8c6 5. (0T5)c2c3 / (0T5)Bf8c5 6. (0T6)d2d4 / (0T6)Bc5b6 7. (0T7)Bf1>>x(0T1)f7+~ (>L1) / (1T1)Ke8xf7 8. (1T2)Ng1h3 / (1T2)Ng8f6 9. (1T3)Nh3g5+ / (1T3)Kf7e8 10. (1T4)c2c3 / (1T4)d7d5 11. (1T5)Qd1b3* / (0T7)Bb6>>(0T4)b3 (>L-1) | mate 2
+
+# ---------------------------------------------------------------- T0 guide: traps and their punishment
+# 3. Bd2 c6: blocking c3 on move 4 is "a mate in one", Qa5# (143).
+T0 Bd2 trap: 4. Nc3 Qa5# | (0T4)Qa5 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / d5 3. Bd2 / c6 4. Nc3
+T0 Bd2 trap: 4. c3 Qa5# | (0T4)Qa5 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / d5 3. Bd2 / c6 4. c3
+# Sarp's Counterattack, 3. dxc5 Qa5+ 4. Nc3 Ne4 (204): "black will immediately win".
+T0 Sarp's: 4. Nc3 Ne4 | (0T4)Ne4 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. dxc5 / Qa5+ 4. Nc3
+# The Bishop's line trap when 5. e3 isn't played (210): Bxf2+, Ne4+, Qb6.
+T0 Sarp's bishop line: 5. g3 Bxf2+ | (0T5)Bxf2+ | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. dxc5 / e6 4. Bd2 / Bxc5 5. g3
+T0 Sarp's bishop line: 6. Kxf2 Ne4+ | (0T6)Ne4+ | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. dxc5 / e6 4. Bd2 / Bxc5 5. g3 / Bxf2+ 6. Kxf2
+T0 Sarp's bishop line: 7. Ke1 Qb6 | (0T7)Qb6 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. dxc5 / e6 4. Bd2 / Bxc5 5. g3 / Bxf2+ 6. Kxf2 / Ne4+ 7. Ke1
+# One Wing Angel Gambit (169, 181; "6. Be2" corrected to the block 6. Bd2).
+T0 One Wing Angel: 5. Nxb5 Qa5+ | (0T5)Qa5+ | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c5 3. Nc3 / Nc6 4. d3 / b5 5. Nxb5
+T0 One Wing Angel: 6. Bd2 Nb4 | (0T6)Nb4 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c5 3. Nc3 / Nc6 4. d3 / b5 5. Nxb5 / Qa5+ 6. Bd2
+T0 One Wing Angel: 7. Nxb5 Qa5+ | (0T7)Qa5+ | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c5 3. Nc3 / Nc6 4. d3 / b5 5. cxb5 / Nd4 6. e3 / Nxb5 7. Nxb5
+T0 One Wing Angel: 8. Bd2 Qxb5 | (0T8)Qxb5 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c5 3. Nc3 / Nc6 4. d3 / b5 5. cxb5 / Nd4 6. e3 / Nxb5 7. Nxb5 / Qa5+ 8. Bd2
+# Monte Carlo's Gambit (238-246): each capture of the poisoned pawns loses material.
+T0 Monte Carlo: 6...Nbxd5 7. g5 | (0T7)g5 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. c3 / Qb6 4. e3 / Nc6 5. d5 / Nb4 6. g4 / Nbxd5
+T0 Monte Carlo: 6...Nfxd5 7. a3 | (0T7)a3 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. c3 / Qb6 4. e3 / Nc6 5. d5 / Nb4 6. g4 / Nfxd5
+T0 Monte Carlo: 6...Nxg4 7. Qa4 | (0T7)Qa4 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. c3 / Qb6 4. e3 / Nc6 5. d5 / Nb4 6. g4 / Nxg4
+T0 Monte Carlo: 8. Qa4 Nxf2 | (0T8)Nxf2 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. c3 / Qb6 4. e3 / Nc6 5. d5 / Nb4 6. d6 / e6 7. g4 / Nxg4 8. Qa4
+# Mongolian Attack, Bd3 Trojan trap (272-276).
+T0 Mongolian Trojan: bishop travel to f7 | (0T7)Bf5>>x(0T5)f7 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4 / d5 3. e3 / c6 4. Bd3 / Bg4 5. Qxg4 / Nxg4 6. Bf5 / Nf6
+T0 Mongolian Trojan: 10. Nf5 Nf5 | (1T8)Nf5 (0T8)Nf5 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4 / d5 3. e3 / c6 4. Bd3 / Bg4 5. Qxg4 / Nxg4 6. Bf5 / Nf6 7. (0T7)Bf5>>x(0T5)f7~ (>L1) / (1T5)Kxf7 8. (1T6)Qxg4 / (1T6)Qc8 9. (1T7)Qxc8 / (0T7)Qd8>x(1T7)c8
+# Mongolian 3. c3, the f7-sac approach (293).
+T0 Mongolian c3: queen travel to f7 | (0T6)Qc4>>x(0T3)f7 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4 / c5 3. c3 / cxd4 4. Qb3 / Qb6 5. Qc4 / e6
+T0 Mongolian c3: Nf5 softmate | (1T4)Nf5 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4 / c5 3. c3 / cxd4 4. Qb3 / Qb6 5. Qc4 / e6 6. (0T6)Qc4>>x(0T3)f7~ (>L1) / (1T3)Kxf7
+# e3 structures, 3. b3 trap (338-339): Bxf6 and the queen travel from h5.
+T0 b3 trap: queen travel from h5 to f7 | (0T8)Qh5>>x(0T6)f7 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c5 3. b3 / Nc6 4. Bb2 / b6 5. Ng5 / e6 6. Bxf6 / Qxf6 7. Qh5 / g6
+# 2...c6 3. Bc4 Qb6 (363): Bxf7+, and after Kxf7 the knight travel to f5.
+T0 Bc4 trick: 4. Bxf7+ | (0T4)Bxf7+ | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c6 3. Bc4 / Qb6
+T0 Bc4 trick: knight travel to f5 | (0T5)Nf3>>(0T4)f5 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c6 3. Bc4 / Qb6 4. Bxf7+ / Kxf7
+# 1. e3 Nf6 2. Nf3 e6 3. b3 Ng4 4. Ba3 f5 5. Bxf8 (369).
+T0 1.e3 e6: 5. Bxf8 | (0T5)Bxf8 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / e6 3. b3 / Ng4 4. Ba3 / f5
+# 2...Ng4 line, White's counter-travel (376).
+T0 1.e3 Ng4: king travel | (-1T4)Ke1>>(0T5)d1 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / Ng4 3. Ng5 / f5 4. Qxg4 / fxg4 5. Nf7 / e6 6. Nxd8 / Kxd8 7. a3 / Na6 8. f4 / Nc5 9. g3 / (0T9)Bf8>>x(0T3)f2~ (>L-1)
+T0 1.e3 Ng4: bishop travel to f7 | (0T10)Bf1>>(0T4)f7 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / Ng4 3. Ng5 / f5 4. Qxg4 / fxg4 5. Nf7 / e6 6. Nxd8 / Kxd8 7. a3 / Na6 8. f4 / Nc5 9. g3 / (0T9)Bf8>>x(0T3)f2~ (>L-1) 10. (-1T4)Ke1>>(0T5)d1~ (>L1) / (-1T4)e6
+# Trojan's Trap (325, 326).
+T0 Trojan's Trap: bishop travel to f7 (325) | (0T9)Bf5>>x(0T7)f7 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / d5 3. Bd3 / c6 4. Ng5 / Bg4 5. Qxg4 / Nxg4 6. Bf5 / Qc7 7. Nxf7 / Nxe3 8. fxe3 / Nd7
+T0 Trojan's Trap: 10. Ne6 (325) | (1T8)Ne6 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / d5 3. Bd3 / c6 4. Ng5 / Bg4 5. Qxg4 / Nxg4 6. Bf5 / Qc7 7. Nxf7 / Nxe3 8. fxe3 / Nd7 9. (0T9)Bf5>>x(0T7)f7~ (>L1) / (1T7)Kd8
+T0 Trojan's Trap: bishop travel to f7 (326) | (0T7)Bf5>>x(0T5)f7 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / d5 3. Bd3 / c6 4. Ng5 / Bg4 5. Qxg4 / Nxg4 6. Bf5 / Nf6
+T0 Trojan's Trap: 10. Ne6 Nf7 (326) | (0T8)Ne6 (1T8)Nf7 | [Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / d5 3. Bd3 / c6 4. Ng5 / Bg4 5. Qxg4 / Nxg4 6. Bf5 / Nf6 7. (0T7)Bf5>>x(0T5)f7~ (>L1) / (1T5)Kd7 8. (1T6)Qxg4 / (1T6)Nxg4 9. (1T7)Bxd5 / (0T7)Ng4 (1T7)cxd5

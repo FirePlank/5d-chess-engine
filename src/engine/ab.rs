@@ -340,6 +340,9 @@ pub struct AlphaBeta {
     resume: Option<SearchResume>,
     /// Search threads (`Threads`), this one included.
     threads: usize,
+    /// `OwnBook`: play a book action (`book::Book::theory`) without searching when the root
+    /// is a book position with one.
+    own_book: bool,
     /// Lazy SMP helper threads (started by the first search that needs them).
     helpers: Vec<Helper>,
     /// Nodes of the helpers in the last search.
@@ -605,6 +608,7 @@ impl AlphaBeta {
             last_score: 0,
             resume: None,
             threads: 1,
+            own_book: false,
             helpers: Vec::new(),
             helper_nodes: 0,
             helper_results: 0,
@@ -1682,8 +1686,17 @@ impl AlphaBeta {
         self.tt = Arc::new(make());
     }
 
-    /// Returns true when the option was recognized: `Hash` (MB) or `Threads`.
+    /// Returns true when the option was recognized: `Hash` (MB), `Threads` or `OwnBook`
+    /// (true/false, or a number: non-zero is on).
     pub fn set_option(&mut self, key: &str, value: &OptionValue) -> bool {
+        if key == "OwnBook" {
+            self.own_book = match value {
+                OptionValue::Bool(b) => *b,
+                OptionValue::Str(s) => s.eq_ignore_ascii_case("true"),
+                v => v.as_f64().is_some_and(|x| x != 0.0),
+            };
+            return true;
+        }
         match (key, value.as_f64()) {
             ("Hash", Some(mb)) => {
                 self.set_tt(|| TtTable::new((mb as usize).max(1)));
@@ -1736,6 +1749,14 @@ impl AlphaBeta {
     /// is done; the action played is chosen by the vote of the threads that report back within
     /// a few milliseconds (never waiting longer on a helper).
     pub fn find_best_move(&mut self, root: &State, limits: &Limits, stop: &AtomicBool, info: &mut dyn FnMut(String)) -> Option<Action> {
+        if self.own_book {
+            let book = super::book::Book::theory();
+            if let Some(m) = book.choose(root, super::book::random_seed()) {
+                info(format!("string book {} ; {} (weight {} of {})", m.lan, m.pgn, m.weight, book.play_weight(root)));
+                self.last_score = 0;
+                return Some(m.action.clone());
+            }
+        }
         let start = Instant::now();
         let plan = TimePlan::new(limits, Self::mandatory_boards(root));
         let deadline = plan.as_ref().map(|p| start + Duration::from_millis(p.maximum.saturating_sub(5).max(1)));

@@ -1,4 +1,5 @@
 pub mod ab;
+pub mod book;
 pub mod evalnet;
 pub mod hce;
 pub mod local;

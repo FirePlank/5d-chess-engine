@@ -11,6 +11,7 @@ A Rust engine for [5D Chess With Multiverse Time Travel](https://www.5dchesswith
 - **Search**: Iterative deepening PVS over whole turns with a transposition table, killer and history ordering, late move pruning and reductions and a tactical quiescence search. Turns are enumerated best-first by the summed scores of their per-board moves, with checking moves (including checks across time and timelines) ordered first.
 - **Evaluation**: Linear evaluation over every timeline's latest board (material, timeline advantage, king safety including pieces near a royal from neighbouring timelines, mobility, pawn structure) with weights fitted to game results.
 - **Protocol**: Speaks 5DUCI, so it plugs into any 5DUCI interface or match runner.
+- **Opening book**: Turn Zero and Standard theory from the community guides (`docs/theory/`): the T0 Openings Guide's recommended structures and trap refutations, and the f7-sac guide's defences, in `data/book_theory.txt` (built by `ktools bookgen` from the annotated 5dpgn lines of `data/book_theory_src.txt`). With the 5DUCI option `OwnBook` (off by default) a book position is answered at once with a weighted random theory move.
 
 ## Quick Start
 
@@ -42,6 +43,10 @@ cargo test --release
 # Node oracles (must not change for pure speed work)
 ./target/release/ktools bench
 AB_NODES=20000 ./target/release/ktools abbench
+
+# Tactics regression suite (data/tactics.g, from data/tactics_src.txt): solved/unsolved and
+# time to solve per position, here 2 s per position on 1 thread
+./target/release/ktools tactics data/tactics.g 2000 1
 ```
 
 Strength is measured with the SPRT harness in `src/bin/sprt.rs` (pentanomial GSPRT, colour-swapped pairs from openings generated per pair (a random 8x8 variant plus 6 noisy shallow-search actions), 10+0.1 clock by default):
@@ -63,8 +68,8 @@ cargo run --release --bin kairos-web
 
 Then open <http://127.0.0.1:8080/>. `cargo wasm` (an alias in `.cargo/config.toml`) builds `web/wasm` into `web/wasm/target/wasm32-wasip1-threads/release/kairos_wasm.wasm`, which the server serves as `/kairos.wasm`; the server warns at start if it is missing or older than the sources.
 
-- **Analysis**: paste or drop a game (SPRT `--games-out` JSON lines, 5dpgn, a 5DUCI `position … moves …` line or a board FEN; Ctrl+V loads from the clipboard) and step through it: every timeline and turn on one zoomable board, arrows for the last action and for checks, the present, book actions marked, the recorded evaluations as a graph. Kairos analyses the position in the browser: live depth, score and principal variation, click a PV action to play it. Moves can be made on the board (select on every board you want to play, then submit), building variations.
-- **Play**: play Kairos on any built-in variant, as either side, with a clock or a fixed think time. The server runs the engine; one person plays at a time, everyone else watches the live game and can queue for the next one. Finished games are appended to `games/web/played.jsonl`.
+- **Analysis**: paste or drop a game (SPRT `--games-out` JSON lines, 5dpgn, a 5DUCI `position … moves …` line or a board FEN; Ctrl+V loads from the clipboard) and step through it: every timeline and turn on one zoomable board, arrows for the last action and for checks, the present, book actions marked, the recorded evaluations as a graph, and the opening book's theory moves for the position (click one to play it). Kairos analyses the position in the browser: live depth, score and principal variation, click a PV action to play it. Moves can be made on the board (select on every board you want to play, then submit), building variations.
+- **Play**: play Kairos on any built-in variant, as either side, with a clock or a fixed think time; with "Opening book" on (the default) Kairos plays theory moves from its opening book at once. The server runs the engine; one person plays at a time, everyone else watches the live game and can queue for the next one. Finished games are appended to `games/web/played.jsonl`.
 - **Games**: browse the record files under `games/` (JSONL and 5dpgn) with filters for variant, result, ending and length, and open any game in the viewer.
 
 There is one browser build (`wasm32-wasip1-threads`, like Apeiron's single build): it runs on shared memory, and when the page is cross-origin isolated (kairos-web sends COOP/COEP) the analysis engine also runs its Lazy SMP helper threads in Web Workers; otherwise it searches on one thread. Threads and hash size are in the engine settings (gear) on the Analysis page.

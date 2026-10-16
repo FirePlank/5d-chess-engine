@@ -1,0 +1,447 @@
+﻿Index
+Who are we?        5
+An Introduction to T0 Openings Guide        6
+Classical f7 defense (London Structures)        8
+3. c3 c6 - (Recommended Structure)        8
+4. Bf4        9
+4. Bg5        10
+4. e3        10
+4. Nbd2        11
+4. Be3        12
+3. Nc3        13
+3. Bd2        13
+4. c3/Nc3 - (Blunder)        14
+4. e3        14
+Symmetrical English Four Knights Variation        15
+Double King’s Fianchetto Line        15
+d4/d5 ideas        16
+4. e3        16
+b3/b6 Approach        17
+Queenside Pawns Avalanche Approach        17
+One Wing Angel Gambit / Sephiroth’s Gambit        17
+5. Nxb5 - gambit accepted        18
+5. cxb5 - gambit accepted        18
+6. Nxd5        18
+6. e3        19
+7. Nxb5        19
+7. Qb3        19
+Decline line        20
+5. … bxc4        20
+5. … Nd4        20
+Sarp’s Counterattack        21
+3. dxc5 Queen's Line        21
+4. Bd2        21
+4. Qd2        21
+4. c3/Nc3 (Blunder)        22
+3. dxc5 - The Bishop’s Line        22
+Trap when 5. e3 isn’t played        22
+3. c3 Qb6 - (Mainline)        23
+4. Qb3 - Sarp’s endgame        23
+4.e3        24
+… Nc6        24
+Dreamer’s variation        25
+Monte Carlo’s Gambit        25
+6. … Nbxd5        26
+6. … Nfxd5        26
+6. … Nxg4        27
+5. Bc4        28
+4. dxc5        28
+... Qxc5 5. Be3        28
+5. Qb5        28
+Endgame line        28
+The Senatus Gambit        29
+Mongolian Attack        30
+Classical f7 Defense        30
+4. c4        30
+4. Bd3 Trojan Trap        31
+2. c5        32
+The Zigzag        32
+3. … e6        33
+3. … g6 The Zigzag Gambit        33
+3. c3 – f7 sac approach        34
+2. e6        34
+3. e3        35
+3. c3 – f7 sac approach        35
+e3 structures (excluding f2/f7 sac)        37
+2. … d5        38
+3. c4 - Inverse Sarp’s Counterattack        38
+3. Nd4 - Mongolian Attack Transposition        38
+3. Bd3 - Trojan’s Trap        39
+3. h3        40
+2. … c5 Symmetrical English Invitational        40
+3. b3        41
+3. … d5 center blockade        41
+3. Bd3        42
+2. … e6        42
+e3 vs f2/f7 sac        44
+1. Nf3 Nf6 2. e3        44
+3. Bc4        44
+1. e3 / Nf6  2. Nf3        45
+2. … e6        45
+2. … Ng4        46
+Contributions        48
+Versions and main patch notes        49
+Extra resources        50
+________________
+Who are we?
+Theory Gang is composed of several players from the 5D chess competitive community. This group of players has been developing, compiling, and organizing theory so that everyone can learn more from this game and provide much more ideas to the game. Our mission is to develop an environment where players have more resources to learn from, innovate the theory of this variant while providing more flexible gameplay, and promote 5D chess theory to anyone willing to learn about this wonderful game.  
+By the date of publishment Theory Gang is composed of the following 5D chess players:
+* Los Bro SPQR
+* Mage
+* Neathp
+* PseudoAbstractMeta
+* Tones
+* Narik
+* Nice
+* CrazyPenguin
+________________
+An Introduction to T0 Openings Guide
+        Whether you are a beginner or a veteran 5D chess player, the opening theory is a crucial part of the game. Jumping into a competitive match without basic knowledge of 5D opening theory will likely get you mated by turn 5. Readers of this guide will learn how to implement solid, defensive, or aggressive playstyles, become familiar with common traps and blunders for both colors in a multitude of positions, and gain a fundamental understanding of the game plan for a wide range of the most prevalent openings. This study will equip you with a solid foundation of knowledge and perspectives to apply to your own in-game evaluations, and we hope that the ideas introduced here will inspire your own creative contributions to the beautiful game. 
+ This guide comprises a comprehensive collection of mainline openings seen in competitive play at the time of writing. In 5D chess, 2D chess opening theory is frequently rendered invalid by the threat of time travel attacks, chief among them being the f7 sac: a common mating sequence that can occur in the first few moves. The f7 sac will not be covered in detail here, but a comprehensive guide to the f7 sac (written by Lavamat) is linked in the “Extra Resources” section at the end of the document. The f7 sac is the primary limiting factor in the development of 5D chess opening theory. This powerful opening threat necessitated the development of alternative standard variants, including Turn Zero, Defended Pawn, and Half-Reflected, which are explicitly designed to undermine the oppressive strategy. However, despite the persistence of the f7 sac in limiting early game flexibility, there are enough accessible approaches to the opening for a variety of distinct lines to stand out from one another.
+The variant covered in the proceeding discussions is “Standard-Turn Zero” (or, “T0”). For those unfamiliar with the variant, T0 aims to balance Standard by adding a board (on which it is the Black player’s turn and on which no pieces have moved) before the initial turn 1 board. In contrast to Standard, T0 provides Black the opportunity to travel to a board on which no pieces have moved (and to do so before White). Thus, the opening restrictions for Black caused by the threat of the f7 sac now also apply to White. Though the difference may appear subtle at first glance, there is universal consensus among competitive players that this variant provides a significant improvement to the balance of the game. As such, T0 has been adopted as one of the de-facto competitive variants for rated 5D chess gameplay, and it has been one of the most important variants for several tournaments and seasons of the 5D Chess League. This means that if you want to climb to the top of the competitive community, you must dominate in T0.
+As a prerequisite to understanding this guide, you will need a basic working knowledge of the game. This includes familiarity with fundamental concepts such as piece movement, triagonals, quadragonals, softmates, hardmates, etc. As a helpful reference, we encourage you to review the 5D Chess Terminology Guide linked in the “Extra Resources” section at the end of this document.
+Lastly, this guide uses the official 5DPGN notation system, which is directly compatible for import and export in the chessin5D client (linked in the “Extra Resources” section). By plugging lines from this guide directly into the Match Analyzer tool in the chessin5D client, you can automatically recreate the positions in-game with the ability to make and undo moves freely. This way, you can interact with and explore the lines yourself as you follow along with the discussions in the guide!
+With all of that said, you’re ready to dive headfirst into the deep and exciting world of 5D Chess T0 Opening Theory. Thank you for reading, and we hope you enjoy it! 
+________________
+Classical f7 defense (London Structures) 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / d5
+This is the most classical way in which someone can defend against the infamous f7. We will not get into a lot in detail about why it protects against the f7, since the f7 sac guide explains why this order of moves protects against it. The main idea of the London System is to bring out the queenside bishop and then form a solid center triangle of pawns, which is usually hard to break through. Usually, the developed bishop is traded for the f-knight leaving the opponent with difficulties developing their bishop pair. It’s easy to set up, meaning that almost every time you will be able to play well-known positions. Due to how solid it is, it’s a perfect opening for every player. It’s pretty symmetrical, meaning that you can play it equally as both white and black. And finally, the basics of this opening are straightforward compared to other openings, meaning that as long as you have an idea of the strategic placement of the pieces, you should be able to play similar positions. 
+3. c3 c6 - (Recommended Structure)
+This is considered the most optimal way to play d4/d5 structures since it offers a solid structure with active play. Because the Queen is still on its home square, the queen has quick access to multiple diagonals which leads to the opponent’s king. For this reason, this is usually the preferred line from experienced players. However, in this type of structure, the queenside knight often struggles to develop. This type of structure has the flexibility of either playing solidly or actively.
+In these sorts of positions, you usually play positionally rather than entering into forcing lines. Therefore, instead of showing complete lines, we will show the different structures and you can find the structure that suits you best. The following structures can be played both as white and black. 
+In this position, e3 is an important developing move to be played, activating your queen and light-squared bishop. The issue with playing e3 immediately is that your dark-squared bishop will have trouble developing for the rest of the game. That is why Bf4 or Bg5 are considered the best moves in this position.
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / d5 3. c3 / c6
+4. Bf4
+Bf4 is probably the most commonly played move here because it is the most obvious piece to develop and plays an active attacking role without easily exploitable disadvantages. This move is quite solid because you could play e3 afterward to keep your active pieces outside of the pawn chain. However, the b-pawn tends to be a weakness in the structure that you will have to be aware of. As shown, the Queen has partial control of both the king-side and queen-side after e3, and the queenside knight will likely develop to d2 where it can go to b3. Black can also follow similar goals, or try to counterattack by attacking the b pawn.
+        In this line white develops their queenside bishop onto f4 to keep the control over e5 square and b8-h2 diagonal, taking away c7 from the black Queen and giving some later opportunities to maneuver along this diagonal. Additionally, from f4 the bishop pins the f6 knight, because if black decides to move their knight there may be a travel to f7 using the f4 bishop in the future. 
+The following development of pieces is generally connected with pushing e3, placing the kingside bishop on d3, placing the queen on c2, and moving the queenside knight to d2 to maintain control over e4. After this, you may start preparing either queenside or kingside play. 
+Therefore, it can be said that this line has the advantage of development and initiative, but it exposes weaknesses on the queen’s side that the opponent may exploit.
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / d5 3. c3 / c6 4. Bf4 / Bf5
+4. Bg5
+        The Bg5 lines are structures in which a player will threaten immediately the Knight on f6 since it’s possibly their most important defender of the structure. This line offers a lot of activity for the player playing this setup. But it also makes sure that the bishop isn’t trapped inside the structure, which could result in an interesting game. 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / d5 3. c3 / c6 4. Bg5 / Bg4
+After Bg5, if black were to attempt to push away the bishop with h6 the bishop has options of trading with the knight on f6 or repositioning itself with Bh4 continuing the pressure on the f6 knight while simultaneously adding a defender to the crucial f pawn. If black continues to push away the bishop with g5 black will weaken their kingside structure and white can move Bg3 putting their bishop on the open diagonal while also defending the f pawn.
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / d5 3. c3 / c6 4. Bg5 / h6 5. Bh4 / g5
+4. e3
+        This line intends to create a solid structure. Due to this, your kingside bishop will be naturally strong, but your queenside bishop will be incredibly inactive. Moreover, even though it is a solid structure, gaining the initiative will be difficult in the long/short term. However, white does have some offensive ideas: the queen can be brought to both the kingside and the queenside, or the queenside knight can be maneuvered to the kingside.
+As mentioned before, it’s not recommended to play e3 before developing the queenside bishop. The value of the move may not be realized before the action starts. In this case white may look to develop the inactive bishop by pushing b3 and then playing Ba3, placing their weak bishop against the black’s strong bishop on f8. If this trade does occur, it will be in favor. 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / d5 3. c3 c6 4. e3 / e6
+4. Nbd2
+        Although this move looks a bit passive, there are some aggressive ideas linked to it. The queenside bishop is still defending b2 and the d-knight can now travel to b3, blocking an attack by the queen onto the b2 pawn. This allows the line to transpose into many other lines following Bf4. However, this move order is a little slower as you need to move the knight to free your queenside bishop. Another idea includes a Knight rotation where Nd5 can be played and then Ndf3 which could be slow. At the same time, the e-file center will be controlled by the player playing this setup, which could bring interesting opportunities too, yet it’s too slow.
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / d5 3. c3 c6 4. Nbd2 / Nbd7  
+4. Be3
+In this structure, pieces can be developed at a fast pace, while simultaneously defending the f-pawn. The line intends to play as solidly as possible. However, akin to 4. e3, the structure will be hard to attack, yet will lack initiative due to the closed position. The kingside bishop will be difficult to develop to an active square: either g3 can be played allowing for the bishop to be fianchettoed on g2, or the bishop on e3 can be moved to allow for e3 to be played, releasing the kingside bishop. 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / d5 3. c3 c6 4. Be3 / Be6  
+3. Nc3
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / d5 3. Nc3 / Nc6
+3. Nc3 intends to prevent a triagonal checkmate from the opponent’s queen while simultaneously developing a piece. Even though this seems like a good move, in the long term your opponent can apply pressure on that knight since it must remain on c3 to guard the triagonal. In other words, the knight is pinned to the king through time. The knight can only move once another piece moves to d2 first; therefore, its development is an illusion. Thus, this line is not recommended. 
+3. Bd2
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / d5 3. Bd2 / Bd7
+        3. Bd2 has a similar premise as Nf3, white will try to develop a piece while defending against a triagonal mate. This is much more playable compared to 3. Nc3; however, if you enter into this line, you must be careful especially when black plays 3. … c6.
+                 4. c3/Nc3 - (Blunder)
+        If black plays c6, then the moves c3 and Nc3 on move 4 are both blunders since they lead into a funny trap. Since the bishop was protecting the triagonal by defending a4, meaning that blocking the diagonal too early enters into a mate in one. It doesn’t matter if it’s a Pawn or a Knight, blocking on c3 on move 4, black gives mate with the move Qa4, giving a checkmate on the triagonal. This would look something like this: 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / d5 3. Bd2 / c6 4. Nc3 / Qa5#
+                4. e3
+When black plays c6, then white is obligated to move something that isn’t blocking the bishop’s path. e3 is a recommended move just because it frees a second bishop and it also doesn’t blunder mate instantly. This setup is playable; however, it’s common that either the Knight on b1 or the black-squares Bishop will have issues developing. The only reason this might be played is to break with c4 and Nc3 in the future, to enter into a Queen’s gambit position. This might lead to some interesting positions, c4 is a risky move, though it might be possible. However, it's not recommended to enter into this order of moves, because it might create some weaknesses, and your pieces would be more trapped compared to other lines. Also, this tends to enter into more passive positions, unless, as mentioned before, white tries to play a c4 in the future, which could be dangerous and open up the position. 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / d5 3. Bd2 / c6 4. e3
+________________
+Symmetrical English Four Knights Variation
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c5 3. Nc3 / Nc6   
+The Symmetrical English Four Knights variation is a way to play in which both players will play for a position where neither has the opportunity to try an f7 sac, making it a solid and stable setup. Nonetheless, there are still some spicy variations where the rivals will set up some traps and gambits that a player should be cautious of such lines. Both opponents will try to attack and defend the queenside. Because the c pawn has been pushed, players will try to dominate as fast as possible the queenside, the player that manages to obtain control on the queen’s side will be the player that will get more initiative and pressure. Because of this, attacking and defending this side of the board will be critical. The flexibility that this opening offers to the players makes it an interesting weapon that could be used for solid and even aggressive players. 
+Double King’s Fianchetto Line
+        A balanced way for both white and black play is to go for lines where they wait for the opportunity to have a nice attack by developing pieces for future attacks. Because of this idea of developing the bishops by playing things like:
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c5 3. Nc3 / Nc6 4. g3 / g6 5. Bg2 / Bg7
+This system assures that every piece has something to do which will make it an easy way to play. Moves will come naturally and in general, it would be an equal position. Possibly a slight advantage for white only if black doesn’t try to create some asymmetric moves in the future; d3/d6 are possible moves to liberate the c1/c8 bishops since they are better on their respective diagonals, rather than trying a double fianchetto setup; just because it will be more active. However, d3/d6 is also much more dangerous since moves like b4/b5 could be played which are similar to the One-Winged Angel Gambit (More about it later in this guide); therefore, if a player wants to move the d-pawn, they should castle first to prevent many issues. This opening is recommended for players of all levels. 
+d4/d5 ideas
+        If a player wants to bring some imbalanced positions, they could try ideas such as playing d4/d5 rather than d3/d6; doing so will bring more aggressive and active positions for the player that tries this setup. Recommended only to play d4/d5 only after castling or plays Kf1/Kf8 respectively to avoid further complications. This setup is recommended for intermediate or advanced players just because it could get risky in some situations.
+4. e3
+        4. e3 is a structure that offers a lot of flexibility. It can be something either solid or aggressive if a player wants to. This structure facilitates a lot the development of every minor piece; it is unusual to find pieces on this structure without an important job to do. 
+        b3/b6 Approach
+The solid approach to this sort of line is to play the Queen’s side more conservatively. In other words, a player would try to develop their c-bishop with a fianchetto; this is usually achieved with b3/b6. The idea here is to play with a setup in which it lets your bishop develop, at the same time that the Queen’s side remains stable. However, one important cost of this type of structure is that your Queen will not be able to reach the triagonal in one turn if your opponent opens it because the b-pawn is blocking the Queen’s path. Therefore, this line is recommended for those players that are more conservative. This approach is recommended for intermediates and advanced players. 
+Queenside Pawns Avalanche Approach
+Since the d-pawn hasn’t moved, doing an avalanche on the Queen’s side is a thematic idea that a player could play for. Meaning that if a player goes for a plan like this, you could easily get into open positions which are full of tactics and tricks. However, getting an open position also means that your opponent will have a lot of active pieces too. This means that this type of approach tends to give sharp positions where many times all a, b, and c files have no pawns. This is usually achieved by preparing b4/b5 with the support of a3/a6. This is one of the few ways in which a player can reach a playable open position for 5D chess, which makes it an important weapon for players that are searching for offensive 5D chess lines. What is interesting from these sorts of lines is that every piece will have the opportunity to become active, due to how open the game will be. This is by far a riskier approach, but at the same time, it offers a higher reward. Therefore, this means that this approach is only recommended for those ambitious brave players who want to play for sharp open positions. It is recommended for intermediate players to advanced players.   
+One Wing Angel Gambit / Sephiroth’s Gambit
+        This is a gambit that either player can play whenever they’ve encountered the opponent playing d3/d6 in move 4. This gambit offers players a lot of piece activity and pressure. The idea is to punish your opponent for moving the d-pawn, which allows future triagonal threats. To show the line, it will only be shown if black is the one performing it. The line goes as follows: 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c5 3. Nc3 / Nc6 4. d3 b5
+The idea that b5 proposes is to create a lot of activity from the c bishop. The queen will be able to continue threat mates in the triagonal. The bishop will be able to develop in b7. The rook could potentially enter on the b-file. In other words, at the cost of one pawn, black will be able to have a lot of activity and counterplay.
+5. Nxb5 - gambit accepted
+If white tries to accept the gambit by taking the pawn with the Knight, then white immediately loses after two moves due to the following trap: 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c5 3. Nc3 / Nc6 4. d3 b5 5. Nxb5 Qa5 6. Be2 Nb4
+5. cxb5 - gambit accepted
+        This line has the premise that black has given up material; therefore, white should capture the material. However, taking the pawn makes the player enter into a complex and interesting position in which black will set up a lot of traps and initiative. In some cases even neutralizing a lot of white’s development. This is because many pieces must be there just to protect against threats that black will have throughout the game. White’s position becomes a passive game in which creating new plans will be very difficult in the long term. In this position, black can play the move 5. … Nd4. This move is threatening to exchange the Knight in f3, which is a crucial defender in the long run because it defends the f2. This would look something like this:    
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c5 3. Nc3 / Nc6 4. d3 b5 5. cxb5 Nd4
+6. Nxd5
+        If white doesn’t care about the Knight and exchanges it, black will just recapture with the c-pawn. Black will force the following options for white: moving the Knight and risking to open the triagonal for future mates, or giving up the knight to consolidate the structure. Also, keeping the pawn there will limit white’s mobility. In either case, black is winning a lot positionally and/or materially. This would look something like this: 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c5 3. Nc3 / Nc6 4. d3 b5 5. cxb5 Nd4 6. Nxd4 cxd4
+6. e3
+This line is a way in which white could try to kick out black’s Knight with the pawn. This also tries to consolidate the position. However, black still has a way to play. The idea is that black plays Nxb5 recapturing the lost material that black gave up in the opening. This would look something like this: 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c5 3. Nc3 / Nc6 4. d3 b5 5. cxb5 Nd4 6. e3 Nxb5
+7. Nxb5
+In case white retakes the Knight, black will be able to give a check with the queen and recapture the Knight; giving black the opportunity of having a much more active game where their initiative must be enough to win the game.
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c5 3. Nc3 / Nc6 4. d3 b5 5. cxb5 Nd4 6. e3 Nxb5 7. Nxb5 Qa5 8. Bd2 Qxb5
+7. Qb3
+White has still a trick that they could pull over in this position. Qb3 is a strong move because it threatens both mating on f7 or taking the Knight. Nonetheless, black has a move that defends against this line. That move is Nd6, which could be a passive move; however, the potential that the open file for the rook and the open diagonal from the bishop can compensate for the passive knight move. 
+Decline line
+A player might not want to enter into these sorts of lines because they are afraid of the gambit. Therefore, a player will play more defensively. White will try not to give the tempo so that black gets a better position. White can attempt to counterattack the gambit by declining it. However, black will have two different ways to play that works against almost every response, either they take the pawn on c4 or they play the move Nd4 anyways. Interestingly, these two moves work for almost every situation, alternating them
+5. … bxc4
+Taking the c5 pawn usually gets into interesting equal positions where both players will have enough tricks to get into difficult and interesting positions. On the other hand, black might lose some of the initiatives that they had gained in the opening, just because in some lines white can reactivate. However, black will have counterplay to that counterplay too because the b-file will be opened, black’s light square Bishop will also develop very quickly, which can be dangerous. Black will also be threatening the possible triagonal mate if the Knight moves, meaning that queenside might get neutralized, and if black wants to, they can change a queenside attack idea, and prepare a kingside attack. All of this is possible thanks to the open lines that the gambit offers. 
+5. … Nd4
+Moving Nd4 is a way in which black can conserve their initiative, and their goal is trying to deviate all piece’s attention into the Queen’s flank. The reason is that once the pieces are located there, the kingside will not have enough defenders to protect against the knights and the queen. If the Knight in f3 is eliminated, a queen will be able to threaten time travel mate shenanigans on f2. Therefore, this way of playing offers more initiative, but positions tend to be much sharper. This move is recommended especially when white declines the gambit with 5. Qb3. Because if 5. Qb3 happens, then 5. … Nd4 will immobilize many of the options of the opponent. 
+________________
+Sarp’s Counterattack
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5  
+        The idea is to give black a game where the player can counterattack by creating an imbalance in the game. It’s also a pretty neat way for black to play since it brings a lot of offensive gameplay. It’s an aggressive defense that black has to make sure to obtain an advantage, since it attacks the center, and it tries to immediately punish the open diagonal of the king. Lines tend to be sharp and exciting, but they require a lot of memorization since these lines tend to be sharp. Recommended for high intermediate and advanced players that are seeking interesting and complex games.  
+3. dxc5 Queen's Line
+This is a line where black will immediately try to punish white on the diagonal to retake their pawn immediately. The idea of this is to have an active queen that will be threatening future f2 time travel sacs, activity for their pieces, and there are even a couple of opening moves. For example, white must protect the check with their light-squared bishop or their queen otherwise it's going to be a mate. 
+4. Bd2
+The idea of Bd2 is that white will be able to defend against the check, but also it forces the Queen to move, otherwise white would only capture the Queen. Because of this reason, black should recapture the pawn to enter into some tricky lines that white will have to be careful of. The Bd2 line tends to be more solid. However, the queen will not be able to enter into the game fast. Meaning that white will play much more defensively in these sorts of lines. However, if white manages to stabilize the position, white will manage to have a lead in development.  
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. dxc5 / Qa5 4. Bd2 / Qxc5
+4. Qd2
+On the other hand, defending with the queen will bring a more active play from white, which will bring interesting offensive responses to white. The reason is that the file for the queen will be open. However, playing like this will block the light square bishop, which could potentially be a weakness in the future, that without counting that the queen could also get kinda pinned through possible time checks, so if the queen moves, it must make sure that it will go for the pawn. Or in some situations even kinda pinning the queen in d2 due to time checks threats on the triagonal. White must be more careful when dealing with this sort of position, but at the same time, it will be able to create counterplay by itself. 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. dxc5 / Qa5 4. Qd2 / Qxc5
+Note: Every time black retakes the pawn on c5, black shouldn’t trade the queens too early or white will have the possibility of winning a queen by time traveling in the future.
+4. c3/Nc3 (Blunder)
+[Board "Standard - Turn Zero"] [Mode "5D"]1. Nf3 / Nf6 2. d4 / c5 3. dxc5 / Qa5 4. Nc3 / Ne4  
+If white tries to defend by blocking the check on c3, then black will immediately win because the triagonal isn’t close. Therefore, the queen would still be checking the king.
+3. dxc5 - The Bishop’s Line
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. dxc5 / e6 4. Bd2 / Bxc5 5. e3 / Qb6 6. Qc1  
+This is another way to play if white immediately takes the pawn on c5. This method of playing utilizes the concept that white has to get through a lot of forced moves, which means that black should be able to take an initiative advantage from the start. This line is more solid than the immediate queen’s threat. However, black will have a less tricky position. On the other side, Black will have a lot of threats on e3, which will be a weak square for white. White usually ends up in positions where black will have a lot of initiative. The player who controls e3 is more likely to have a win in this position since it usually tends to be a mate. Not a recommended line to play as white.
+Trap when 5. e3 isn’t played
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. dxc5 / e6 4. Bd2 / Bxc5 5. g3 / Bxf2 6. Kxf2 / Ne4 7. Ke1 / Qb6
+White is losing in this position because the king is in an open triagonal where the Black’s Queen is, and if they try to stop it white will have to sacrifice their Knight by moving it on d4. Nonetheless, after the queen recaptures on d4, the threats that there are on f2 are undefendable. Therefore, white will lose by force if they reach into a position like this one. White could also probably try time traveling, but it just feels that is prolonging the inevitable.  
+3. c3 Qb6 - (Mainline)
+This is the mainline of the opening, where both white and black will set up interesting traps for each other all over the place. By far one of the most theoretical positions where traps will be laying all over the board. Both players will have a lot of threats, aggressive and active positions where white will play to stabilize the position, and black is going for a fast mate, usually on f2. These lines tend to be risky for both players, but the pressure such systems bring is interesting and fun to play. White can enter into an endgame/ queenless middlegame by placing the queen on b3.
+4. Qb3 - Sarp’s endgame
+        Probably one of the fastest ways in which a player will be able to enter into a forced endgame. The reason In this endgame can be forced is because the idea of moving the Qb6 for black is to take the queen; therefore, preventing the infamous f7 sac. If black doesn’t want to enter into such lines, then they have to immediately take the queen. Resulting in an endgame in which both players will have to prepare a lot of maneuvering. On one side, white is betting that they will win because they have more development. However, black is betting that their structure will be better in the endgame. This endgame is balanced because both players will have their chances to set up strategic setups. 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. c3 / Qb6 4. Qb3 / Qxb3 5. axb3
+4.e3
+  This setup by white attempts to stabilize the position and attempts to attack the queen by taking the c-pawn while developing pieces actively. White will try to either get their bishop or knight to c4 so that they can begin fighting back against black.
+Example line where black gets into a worse position
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. c3 / Qb6 4. e3 / e6 5. Nbd2 / cxd4 6. Nxd4 / Nc6 7. Nc4 
+Here, white is already attacking black and is doing ok in development.
+        … Nc6
+        Nc6 is a move that has a lot of ideas. First, it has the advantage that it brings a new piece to the attack. Secondly, the structure will not be compromised yet, meaning that you can delay a move like e6 to avoid d5 ideas. At the same time, Nc6 allows in many situations Nb4 which causes a lot of pressure on the board. Another thing to consider is how it exerts pressure into the center. For example, it limits moves like Nd2.  
+If White plays Nd2, then black can trade on d4, forcing white to have bad development and a partially exposed king. 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. c3 / Qb6 4. e3 / Nc6 5. Nbd2 / cxd4 6. Nxd4 / Nxd4 7. cxd4
+Dreamer’s variation
+Probably one of the sharpest ways to play against the Sarp’s. Positions like this one tend to have a lot of tricks that both players will have to mess around with. In these types of games, white will try to play to control the center. In some cases, white can even consider going for an e4 push. Meanwhile, black will try to deliver a counterattack on the queenside. There are many things to consider in these positions such as the Queen's mobility, possible triagonals, baits, attacks, breaking the center, structural damage, and much more. If you want to enter into complicated equal positions against the Sarp’s, this is by far one of the lines you have to enter with. The beauty of this line is that because of the sharpness that it brings, a lot of moves are forced from both players for the game to proceed in an equal position. This position is played in the following way: 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. c3 / Qb6 4. e3 Nc6 5. d5 Nb4 6. d6 e6
+        As mentioned before, white is playing to control the center because if they manage to do so, then black will lose a lot of development ideas. However, black has already developed their pieces at a much faster pace, meaning that even though white will destroy the structure, black will be able to keep an initial lead in development. The interesting part is that the black pieces will be accommodated in such a way that white will have to struggle to take. For example, if white attempts to capture the knight on b4 when the queen is still on b6 with a move such as cxb4, then Qxb4 is going to be mate. Things like this are what make the Dreamer variation a difficult line. Many times pieces will be hanging out at a first glance; however, if you take them, but usually they compensate for the positional game. 
+Another thing to consider is that if it is true that white is going to shut down many black development ideas, it is also true that both the white’s b-knight and the c-bishop will have a lot of struggle developing too, meaning that as white you must consider that the bishop and knight will probably never develop in the game. 
+This line is only recommended for those advanced players that want to enter into probably the most complex and aggressive line of the Sarp’s Counterattack. 
+Monte Carlo’s Gambit
+        The Monte Carlo’s Gambit occurs on a Sarp’s Counterattack Dreamer’s Variation, and it can also be considered as one of the first lines developed with the help of 5D chess AIs. It was found that there is a reason why 7. g4 is a crazy and super interesting idea that attempts to play with a lot of initiative and development by trying to disconnect the interactions between the Black pieces. However, it must be said that with correct play, this should be better for black. 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. c3 / Qb6 4. e3 Nc6 5. d5 Nb4 6. g4
+        At a first glance, White is giving up 2 free pawns, weakening the structure, and the thing is that both pawns are poisoned. In the case that Black decides to take a pawn, White will always win material. At the same time, the open lines that White had created will activate White’s pieces with a huge amount of threats. 
+                6. … Nbxd5
+Black could argue that taking on d5 with the b-Knight would give them more center control, the issue is that after the move g5, black is going to lose one of the Knights no matter what, since the Queen is attacking the Knight on d5 and the Pawn the one on f6. Even though White’s structure is weak, it is not going to be that easy for Black to prove that the structure is a huge weakness when White is up a piece and the activity lines that and targets that White can obtain here. The conditions right now are not enough for Black to exploit the structural weakness, giving time to white to prepare a defense or counterattack.
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. c3 / Qb6 4. e3 Nc6 5. d5 Nb4 6. g4 / Nbxd5 7. g5
+6. … Nfxd5
+Black could argue that taking on d5 with the f-Knight would give them more queenside control, the issue is that after the move a3, black is going to lose one of the Knights no matter what, since the Queen is attacking the Knight on d5 and the Pawn the one on b4. It is really important to remember, that it is not possible to take the knight with the c-Pawn because otherwise you would get mated by the queen. Even though White’s structure is weak, it is not going to be that easy for Black to prove that the structure is a huge weakness when White is up a piece. The conditions right now are not enough for Black to exploit the structural weakness, giving time to white to prepare a defense or counterattack.
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. c3 / Qb6 4. e3 Nc6 5. d5 Nb4 6. g4 / Nfxd5 7. g5
+6. … Nxg4
+        This is by far the most critical approach for Black. Taking on g4 seems to avoid all of the loss of material issues while exerting pressure on the f2 pawn. In reality, there is still a move that assures white to still gain material that is Qa4 with the idea that White can now safely take the b-Knight with their c-Pawn since the Queen on a4 is now preventing the Black’s Queen to mate on b4, allowing cxb4. And in the scenario that Black moves their b-knight, White will simply now take the knight on g4, since the b-Knight was pinned.    
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. c3 / Qb6 4. e3 Nc6 5. d5 Nb4 6. g4 / Nxg4 7. Qa4
+In this position, there is only one way for Black to immediately punish White on this gambit, and it is 8. … Nxf2. The logic behind it is really simple: Black is going to lose a knight no matter what, at least lose the knight with a cause. From here Black is always going to have more initiative, but it’s at the cost of a lot of material. These lines tend to be super sharp and it is only recommended for those most experienced players that want to play aggressive gambits.   
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. c3 / Qb6 4. e3 Nc6 5. d5 Nb4 6. d6 e6 7. g4 / Nxg4 8. Qa4 / Nxf2
+5. Bc4
+        Bc4 is an approach that has the idea of creating threats on the kingside. This approach tends to create counterplay by creating pressure on f7. If Black isn’t careful, f7 could become a target for attacks, Knight cycles, and in some cases, Queen time travels. It must be said that the light-square Bishop is a critical piece for White since it's the piece that usually defends the light-squared weaknesses of the structure, meaning that White should also be careful of how and when they exchange the light-square Bishop. The Black player on the other hand might enter with one main approach against Bc4: e6. It's a solid move that blocks the threats on f7 immediately, at the same time that the Black’s dark-square bishop can develop at the same time that it is protecting the c5 pawn. If White decides to take the c5 pawn, then Bxc5 is a really strong threat, since e3 would become a target and a huge weakness that White must defend. The imbalances of the game are going to take a crucial role at this point. In many lines, Black is going to get more development than White does, meaning that they might set up an attack a lot faster. However, if Black is too slow, White will be usually the player with the Initiative. 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. c3 / Qb6 4. e3 Nc6 5. Bc5 e6
+4. dxc5
+... Qxc5 5. Be3
+These are lines in which white can stop some of black’s counterplay, but the positions are still more or less equal.
+                5. Qb5 
+Endgame line
+[Board "Standard"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. c3 / Qb6 4. dxc5 / Qxc5 5. Be3 / Qb5 6. Qb3 / Qxb3 7. axb3 / Nc6 
+        After Qb5 white could try to get into an endgame in which they will be betting that their piece activity is going to play better against black’s structure. These endgames tend to have a lot of maneuvering, however, since black has already exchanged the c5 pawn, black will be able to obtain a better structure compared to other similar endgames. Black will try to attack the weak isle of pawns in the b and c file, meanwhile white will try to bring their pieces faster than black can do it.
+The Senatus Gambit 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / c5 3. c3 / Qb6 4. dxc5 / Qe6
+  This line is a way in which a player will try to stabilize the position by not retaking the c5 pawn. Black will try to get a more aggressive position where the Queen will be directly looking at the king’s file. However, white will be compensated with a more solid structure. These lines tend to have a lot of pressure on the e-file and black will try to exploit this advantage. In other words, black is betting that white will not be able to handle all of the pressure on the file, especially on e3. The player that controls e3 is more likely to win in these types of positions. White must be careful when they enter into these types of positions, but if White manages to neutralize the attack, White should have a better position due to its structure and material. 
+________________
+Mongolian Attack
+The Mongolian Attack is a line played with white, and probably one of the trickiest openings on 5D chess. It involves moving the Knight to f3 on turn 1 and then moving it to d4 on turn 2. This protects against the turn 0 f2 sac while providing several aggressive lines. This also eliminates the weakness of exposing the king against the classical f7 defense. And if it’s true that the Mongolian Attack is a super trappy opening, it’s also true that it is an opening that loses a lot of strength if played against alternative openings. Nonetheless, it is an opening that can easily surprise a player that doesn’t know the theory of the Mongolian Attack. Therefore this opening is recommended for players that like to trick their opponents, especially intermediate and high intermediate players who would be able to benefit from this opening.
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4
+Classical f7 Defense
+         The Mongolian Attack is very effective against the Classical f7 Defense because it sets up a large number of traps that immobilize many of Black’s pieces. This is all possible because there is a Knight on d4 who is in the perfect position to mate in case that there is an f7 sac since Nf5 would be mate after that. That is also the reason why some of Black’s pieces will be crucial for their defense. For example, the light-square Bishop has the mission to defend f5 at all costs. There are even some lines in which White can even sac a complete queen to get rid of that Bishop. In many situations, white defends the f-file just by the use of tactics. If they try to f7 sac, usually White will have enough pressure that will stop those ideas from happening. 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4 / d5 3. e3 / c6 
+4. c4
+        The idea of playing c4 is to create chaos in the center of the board. When chaos is created, White will benefit since it is the way it will indirectly be defending the f-file. The reason that this works is that the Mongolian Attack defends against the f-file threats by tactical defenses, in other words, the threats must be stronger than the opponent, c4 is a move that has that goal in mind. The Queen is going to be developed or at the very least it can get out if necessary. The center is under pressure at the same time that White manages to make sure that there is not a d4 push from Black in such a position, meaning that Black can’t immediately destroy the White’s structure. However, when White plays this line they need to consider that it is a risky opening in the long term since the f-file is going to be a major weakness that is not defended to gain the initiative.   
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4 / d5 3. e3 / c6 4. c4
+4. Bd3 Trojan Trap 
+Bd3 is a really interesting move to play in this position, it's a move that prepares an attack at the same time that it sets up a nasty trap. In the case that the main trap is not played, White will set an attack on the kingside that can get into pretty interesting positions. Yet it must be said that White will rely on the amount of pressure that they give to the opponent, in case that they fail to give such pressure, the f-file can get weak in the long term. 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4 / d5 3. e3 / c6 4. Bd3
+In the case that Black plays the natural move like Bg4 attacking the Queen, White has a pretty cool idea to counterattack. You might about how to defend the Queen in this position without creating any serious weaknesses? Well, you don’t. You can sac the Queen immediately by taking the Bishop. In the case that you recapture the Queen with the Knight, suddenly f7 is weak again and the move Bf5 is a way to prepare a time travel and start their attack. White will be down a queen and time travel advantage, yet the pressure that it's giving to the exposed king is too much for Black to deal with.    
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4 / d5 3. e3 / c6 4. Bd3 Bg4 5. Qxg5 Nxg5 6. Bf5 Nf6 7. (0T7)Bf55>>x(0T5)f7~ (>L1)
+The next position shows a possible trap that you can get with this setup:
+[Board "Standard"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4 / d5 3. e3 / c6 4. Bd3 / Bg4 5. Qxg4 / Nxg4 6. Bf5 / Nf6 7. (0T7)Bf5>>x(0T5)f7~ (>L1) / (1T5)Kxf7 8. (1T6)Qxg4 / (1T6)Qc8 9. (1T7)Qxc8 / (0T7)Qd8>x(1T7)c8 10. (1T8)Nf5 (0T8)Nf5
+2. c5
+2. c5 is a really interesting response from Black that leads into really tricky lines. The idea behind c5 is pretty straightforward, attack the Knight, gain some tempo, and gain center control in the process. However, even though all of that is true for Black, it is also true that these types of lines can get tricky, due to the positioning of the Knight, meaning that Black has to proceed carefully when entering lines such as this one.  
+[Board "Standard"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4 / c5
+The Zigzag
+        The Zigzag line is a ridiculous approach that can result in moving just 1 Knight on the first 4 moves. The objective of this line is rotating the Knight to get as close as possible to the opponent with the sole purpose of damaging the structure and/or setting some nasty time travels on f7. White will manage to bring the Knight by rotating into f5. Black on the other hand will try to utilize their advantage of tempo. Once Black stabilizes the position, they should have a better position in the end. 
+[Board "Standard"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4 / c5 3. Nf5
+3. … e6
+3. … e6 has the advantage that it blocks some of the travels that a Queen would have to get into f7, at the same time that it helps to open some lines for the Bishop and the Queen. However, if Black decides to defend against the Knight on f5 by playing immediately on e6, then White can leave the Knight hanging on f5 because opening the e-file will result in a really dangerous position for Black. White can play e3 to open some lines and try to catch up with Black on the tempo. After that, a move like g6 can come in handy for Black to pressure the Knight on f5. In some lines, it is possible to sacrifice that Knight anyways, by preparing pressure on the center, moves like Bd3 or g4 setting up pressure on e6 as fast as possible. Nonetheless, it must be remembered that this approach is super risky, and White should be fast after the loss in tempo that they had at the beginning of the game. 
+  [Board "Standard"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4 / c5 3. Nf5 / e6 4. g6
+3. … g6 The Zigzag Gambit
+        Black might also try to attack the Knight on f5 as fast as possible, meaning that g6 seems to be a way to play the position so that it pressures the Knight at the same time that it prepares a fianchetto for the Bishop. Nonetheless, in that line White was already prepared to sacrifice the Knight for the greater good anyway, so Black can play 4. Nd6 to force the opening of the e-file, destroying the structure and justifying the Knight moves at the same time. Opening the e-file creates a long-term weakness that White will be able to target and exploit. Black on the other hand argues that even though their structure is bad, they have more tempo and material advantage that can be used to defend the e-file.   
+[Board "Standard"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4 / c5 3. Nf5 / g6 4. Nd6 / exd6
+3. c3 – f7 sac approach 
+        This line argues that the f7 sac is still open, therefore the White player should still go for the f7 sac. Even though it is possible to allow the f7 sac by pushing c4 or by setting up a parallel Queen’s defense (more information on the f7 sac guide linked on extra resources), the f7 sac to turn 1 is not the only threat, White can time travel into f7 into any board that there is a Knight on d4, because after Kxf7 the move Nf5 will result in a softmate. That’s why it is not easy to take the Knight on d4 even when it’s hanging. Additionally, if Qb6 is played to prepare a queen trade b4 can be played to continue the threat by blocking the queen trade.
+[Board "Standard"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4 / c5 3. c3
+For example, the following line shows a possible trap that can occur here: 
+[Board "Standard"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4 / c5 3. c3 cxd4 4. Qb3 / Qb6 5. Qc4 e6 6. (0T6)Qc4>>x(0T3)f7~(>1L) / (1T3)Kxf7 7. (1T4)Nf5
+2. e6
+2. e6 is one of the most challenging lines against Mongolian since it closes attacks on f7 at the same time that it ensures attacks into T3 are completely blocked. The timing of the move order of these lines enters into the most interesting lines. However, the Mongolian still has some ways to get around the 2. e6 line to create counterplay for themselves. In this line, there are 2 main things to consider: is the Mongolian player going to go after an f7 sac, or are they not going for the f7 sac. 
+[Board "Standard"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4 / c5 
+3. e3
+This line looks to approach the Mongolian without any idea of going for the f7 sac. This line searches to develop both the Bishop and the Queen as fast as possible. However, the line here results in a loss of tempo, after c5 where the Knight has to retreat to with a solid Nf3. This move is designed to defend sacrifices on f2. If White doesn’t play this approach, then White would have to be careful about any travels into f2, since they can result in deadly attacks from Black, or in some cases, it leads to softmating sequences. 
+[Board "Standard"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4 / e6 3. e3 / c5 4. Nf3
+White could also try to do a transposition of the Zigzag too by playing 4. Nf5 too, however, this line is not recommended because Black’s move order has gained the ability to enter faster to f2, which leads to many force sequences when a time travel is available to f2. The difference is that e6 first allows the Queen to gain access to the diagonal faster, which highlights, even more, the weakness of f2. 
+3. c3 – f7 sac approach
+        The idea of 2. e6 allows Black to block many threats that the Mongolian offers; however if we look at that move it can also be argued that the f7 sac hasn’t been defended. Therefore, White can try to enter into f7 sac lines. White will force Black in many of these lines to prepare a Queen’s parallel defense (more information on the f7 sac guide linked on extra resources). White can then attempt their f7 sac if they want to get an inactive softmate and exile to deter their opponent from going into this line which is nearly a forced draw at best for Black. These lines tend to enter into either an aggressive playstyle that White can utilize in their favor or enter into a forced exiled kings line which can lead to a theoretical draw (more information on the f7 sac guide linked on extra resources). However, it must be stated that there is another important consideration when entering into these lines: the f-file can become a critical liability for White. Since the f-file has been open for several turns, White must rely on a tactical defense to defend against any attempt in Black’s counterattack on the f-file.
+[Board "Standard"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4 / e6 3. c3 / c5 4. Qb3 / Qa5  
+________________
+e3 structures (excluding f2/f7 sac)
+Lately in the community, e3 structures are becoming more popular due to their flexibility and capability to create several threats at the same time that they offer many interesting sharp lines and approaches where a player can play really aggressive, solid, or defensive. These lines can transpose into almost anything, meaning that you don’t have to commit to a structure until later. For example, it is possible to enter into The Classical f7 Defense or the English, yet you haven’t committed to either of those options. 
+Despite its strength in flexibility and offensive capabilities, the development of the queenside bishop is often limited because e3 blocks its access to the kingside. The structure also allows for some potential exploitation on d4/d5 with a pawn push taking advantage of the precious e3 pawn.
+Finally, it must be said that in this section there will be no lines that show how to prevent the f2/f7 sac in e3 structures. The reason is simple, when you enter into an e3 structure, the defenses against the f2/f7 sac are too complex that they can fill down a complete section on their own. Because of this, it was decided to separate the f2/f7 sac lines from the ones that don't enter into it. 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3
+Generally, the idea for the development of an e3 structure that is not a transposition of another line will look similar to what is shown below. Bb2, Bd3, and Nc3 are all development moves that should happen at some point during the game. Bb2 is an important move to attack the Knight on f6 and threaten an attack on the f pawn. Bd3 hopes to protect some of the weaknesses of the structure like c2 while also holding other important squares like e4,f5, and g6. Nc3 is a move that should be done later in development so that the Bishop is not blocked, but it allows the knight to come out and possibly jump to e4 if properly defended(to both defend your f pawn and attack your opponent’s) or to b5 to threaten to attack c7. Another idea is to play c4, with the primary goal of stopping d5 from being played. However, c4 also has the idea of preparing a space where a Knight can hop into d5 defense which leads to direct attacks through the center otherwise though c4 can lose a tempo and weaken the structure. Qe2 should be the final move to finish development because it weakens the c2 pawn and can block the bishop on f1, but the goal of Qe2 is to free up the knight on f3 by defending the f pawn. With all the stated moves played a queen-side castle may be possible and recommended so long as c4 wasn’t played.
+2. … d5
+        This opening usually plays smoothly against the classical f7 defense. It has the advantage that it has a huge amount of traps. If the black player enters into this structure, they must play precisely. Since even though, in many cases, the black player will be able to get into a better position, in the long run, it is only possible after passing through a huge amount of traps. In other words, it’s a tricky position that requires precise gameplay to maintain its slight advantage. 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / d5
+3. c4 - Inverse Sarp’s Counterattack
+        The Inverse Sarp’s Counterattack is a line in which white can enter. The advantage that it offers is that it's a way to maintain tension in the center, meaning that white will be able to create many opportunities because of this. At the same time, it must be said that it shares a lot of the theory that Sarp’s Counterattack provides, but with an extra tempo, making it even better in many aspects. However, it must be said that since e3 has been played, black will be able to threaten in many scenarios the move d4, which can result in a devastating defeat. If d4 isn’t prevented by white, then black will gain a huge advantage, since it will shred up the pawn structure that protects the King. You can argue that the d,e, and f pawns are like the heart of e3 structures; if you damage it, in many situations, it will be unrepairable. That’s why in many situations dxc4 is recommended to avoid d4 and because your opponent will be unable to capture with the c pawn and if they capture with the Queen you can play Nc3 to hunt the Queen and begin to load pressure on the f7-pawn. 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / d5 3. c4 c6
+3. Nd4 - Mongolian Attack Transposition
+        This is a way in which the white player will be able to do a transposition to the Mongolian. The theory will be almost the same as the Mongolian Attack, please check out the Mongolian section for a more detailed description. The advantage of this way to get the position is that you are forcing a Mongolian Attack against the Classical f7 sac defense, which benefits the opening. This is advantageous because you can react to the structure your opponent goes for before committing to the Mongolian attack. 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / d5 3. Nd4 c6  
+3. Bd3 - Trojan’s Trap
+        Perhaps one of the craziest traps of the entire game, the Trojan’s Trap is a line that requires really precise gameplay from black, otherwise black will lose his advantage. On this specific setup. The Trojan’s Trap is really interesting because in many scenarios it requires a Queen sacrifice to force a mating sequence, or at the very least winning the game in a positional way. The idea of this line is to bait the natural move Bg4 after the Knight on f3 moves. However, if that happens White doesn’t try to save their Queen, instead, they can immediately sacrifice it to gain a positional advantage, king exposure, deadly time travels, and many traps that it would be impossible to write them all inside the guide. 
+[Board "Standard"][Mode "5D"] 1. e3 / Nf6 2. Nf3 / d5 3. Bd3 / c6 4. Ng5 
+        The basis of the Trojan’s Trap is to create the opportunity to take with a Bishop on f7 to create threats by exposing the king and then mating with your Knights and Bishops. These lines tend to be sharp since mistakes cost a lot for any of the 2 players. Another thing to consider is that in the case that Black somehow manages to stabilize the position, they would be winning because of their material and their time travel advantage. 
+        The next 2 positions show some of the traps that you can get with this setup: 
+[Board "Standard"][Mode "5D"] 1. e3 / Nf6 2. Nf3 / d5 3. Bd3 / c6 4. Ng5 / Bg4 5. Qxg4 / Nxg4 6. Bf5 / Qc7 7. Nxf7 / Nxe3 8. fxe3 / Nd7 9. (0T9)Bf5>>x(0T7)f7~ (>L1) / (1T7)Kd8 10. (1T8)Ne6
+[Board "Standard"][Mode "5D"] 1. e3 / Nf6 2. Nf3 / d5 3. Bd3 / c6 4. Ng5 / Bg4 5. Qxg4 / Nxg4 6. Bf5 / Nf6 7. (0T7)Bf5>>x(0T5)f7~ (>L1) / (1T5)Kd7 8. (1T6)Qxg4 / (1T6)Nxg4 9. (1T7)Bxd5 / (0T7)Ng4 (1T7)cxd5 10. (0T8)Ne6 (1T8)Nf7
+3. h3
+        h3 can be an important move for e3 structures against the Classical f7 Defense which sacrifices a turn of development to prevent Bg4 later on which could potentially pin the knight to the queen. 
+[Board "Standard"][Mode "5D"] 1. e3 / Nf6 2. Nf3 / d5 3. h3
+        If h3 is played after Bg4, Bh5 will be played to hold the pin while also defending f7 and after g4 the kingside protection becomes weak and is responded to with Bg6 which gives the bishop a place to guard f7 and still be developed upon a good diagonal. 
+[Board "Standard"][Mode "5D"] 1. e3 / Nf6 2. Nf3 / d5 3. Bd3 / c6 4. b3 / Bg4 5. h3 / Bh5 6. g4 / Bg6   
+2. … c5 Symmetrical English Invitational
+The idea of playing c5 is to invite white to play c4, therefore, creating a Symmetrical English transposition, and therefore getting into a completely different type of opening theory. As mentioned before, one of the greatest advantages of the e3 structures is their flexibility, and this idea is a great example of such. However 3. c4 is not always the move that white will play against this structure. The following lines will show what happens if white just declines the Symmetrical English Invitational.
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c5
+3. b3
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c5 3. b3 
+The goal of b3 is to immediately develop the queenside bishop to attack the knight on f6. In the long term, Bb2 develops the bishop to be able to control the center while also being able to initiate kingside attacks by removing the kingside knight. Additionally, by allowing Bb2 a deadly softmating threat/trap can arise early in the game where the bishop will trade itself with the Knight then allow a queen on h5 to jump back in time onto the f pawn for a softmate. For example, the following 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c5 3. b3 / Nc6 4. Bb2 / b6 5. Ng5 / e6 6. Bxf6 / Qxf6 7. Qh5 / g6 
+8. (0T8)Qh5>>x(0T6)f7~ (>L1)
+ If white enters into this line, then the black pieces will have a tough time, since they will have to be careful in case the white’s dark-squared Bishop threatens the Knight on f6. Black on the other hand will argue that once they’ve got a structure 
+3. … d5 center blockade
+In the case that b3 is played, Black can immediately play for a d5 push. Since the White player blocked itself to get into a triagonal or an f7 sac shenanigans, Black has a lot of time to block the triagonal to the king if it was necessary. Black is also obtaining a lot of center control that might become very useful in the future, for example, black can block the Bishop’s attack to f6 by playing d4 in the future. Another factor to consider is that the space advantage gives a lot of piece mobility for Black, while White will struggle to move their pieces on such a small space. However, it must also be said that this opening has also a lot of risks that a player has to consider before entering into this line. First of all, Black has committed to a really weak structure, meaning that it is likely for Black to over-extend, leaving the structure susceptible to exploits. Secondly, if White manages to threaten the triagonal, some of Black’s pieces can get time pinned, which might lead to a position where those pieces will not be able to move at all. Third, in the rare situation that there are many timelines, the triagonal will become a greater weakness, and in some situations even become a quadragonal, meaning that you must be more careful when dealing with the triagonal. While this move gives the ability to create aggressive lines, that also means that you have to play with everything that you have because, in the long run, this line might lead to a lot of weaknesses. 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c5 3. b3 / d5
+3. Bd3
+        The goal of Bd3 is to develop another piece soundly so that it controls a bit more of the board. Additionally, by moving the bishop to d3 you can prepare to play Qe2 defending all the squares around the king and no longer blocking the bishop’s development. Another reason to go for this is that it defends c2, a crucial weakness of the structure which ties down the queen to defense. However, the Bishop on d3 can also become a target for Black in the future since it's located in an awkward position, where a Knight can easily attack it if it gets into b4 or e5. This move can be sort of passive because Black manages to gain control of the center while this move is played.
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c5 3. Bd3
+  2. … e6
+This line is by far the most flexible line of this structure because it can transform into almost every structure and players will delay choosing the structure they enter. For example, they could enter into a classical f7 defense by playing d4/d5 or they could enter into an English structure by playing c4/c5. Continuations of this line are mostly given in transpositions of the former lines.
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / e6  
+3. c3
+Unless you are committed to going for an inactive softmate with the exiled king’s strategy, this is often not a good idea against an experienced player because it blocks in the queenside bishop. By playing c3 in this position white can threaten an f7 sac onto black. However, black still has defenses available by playing either c6 or c5 to allow for Qa5 or Qb6 which stops the softmate using the Queen’s parallel defense (more information on the f7 sac guide linked on extra resources). 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / e6 3. c3  
+________________
+e3 vs f2/f7 sac
+Due to worries about f7 sacs, structures around e3 as one of the first two moves allow for dangerous and exploitative kingside attacks on the opposing side. Using the queen and bishop that is opened by the pushing of the e pawn many traps and attacks are available within the first few turns. Unlike the classical f7 defense, e3 structures are often played with much variation depending on the opening that is opposing the structure causing it to require practice in defending the f7 sac and navigating the unique threats each opening poses to the structure. 
+For this section, there will be 2 main ways to classify the defenses against the f7/f2 sacs. The first section will consider 1. Nf3… 2. e3 which has only one open door for an f7 sac, which is the triagonal from the Queen. The second section will cover 1. e3 … 2. Nf3 where the open door for an f7 sac is the f-file, these types of lines tend to be more complex, sharper, and usually super dynamic. 
+Before proceeding with this section it is required to have at least some basic knowledge about the f7 sac, in the case that you are not familiar it is highly recommended to check out the f7 sac guide linked on extra resources. 
+1. Nf3 Nf6 2. e3
+1. Nf3 tends to be a more stable way to play an e3 structure since you only have to defend from a Queen’s f7 sac from b6. This allows a player to defend against the f7 sac shenanigans more straightforwardly compared to 1. e3 lines. However, this also means that you will be usually entering into more positional games compared to the explosiveness that can be encountered on the lines where the pawn was pushed first. For these lines to occur, c6 must be played at move 2 for the f7 sac to occur. 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 c6
+3. Bc4
+        Perhaps one of the most popular f2/f7 defense tricks that there is for 1. Nf3 Nf6 2. e3. At a first glance, Bc4 is not defending against the f7 sac, but in reality, White is inviting Black to try to f7 sac them. However, if they play 3. Qb6 to try to f7 sac the White player will sacrifice their Bishop on f7 with a check. Black, can’t take the Bishop because the Knight could immediately time travel into f5 with a softmate, and White would be winning. 
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c6 3. Bc4 / Qb6 4. Bxf7 / Kxf7 5. (0T5)Nf3>>(0T4)f5~(>1L)
+        However, it must be said that Black can have another approach against Bc4, instead of playing Qb6, Black could approach the position by attacking the Bishop with the move d5. d5 allows Black to attack the Bishop with an extra tempo, this is also considered the most critical line against 1. Nf3 … 2. e3 since it let Black try to play with an extra tempo, at the same time a stable position, that without counting that Black could prepare a future d4 idea. In other words, Black can bait White to prepare an f7 sac defense to try to get into a critical position for them.   
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c6 3. Bc4 / d5
+1. e3 / Nf6  2. Nf3 
+2. … e6  
+        To defend the threat of a phase through the f pawn, b3 must be played to allow Ba3, attacking the bishop on f8 on the turn black needs to push the f pawn. Thus Black cannot push f5 without losing their Bishop, stopping the travel to f2. In either case, the game continues with White having lost their powerful Bishop, while Black will have a weaker structure. Because either Black’s kingside Knight is misplaced or the f-Pawn is overextended. 
+[Board "Standard - Turn Zero"][Mode "5D"]1. e3 / Nf6 2. Nf3 / e6 3. b3 / Ng4 4.Ba3 / f5 5. Bxf8   
+2. … Ng4 
+Ng4 is a complex theoretical line that requires precise play on both sides. With perfect play, Black will be forced to sac a piece, but the number of tricks that this opening provides will keep an active game that Black can use against intermediate players and some advanced players due to the specifics of the line. Ng4 threatens to push f5 at some point to go for an f2 sac. Because this threat happens immediately it’s hard to calculate the multiple branches in which white can defend themselves from the threat. This is a line that is tricky for both players since Black can set up an f2 sac with their f-bishop by weakening their own structure. At the end of the sequence, White should be winning material, yet the lines that enter into this situation are really specific. 
+A recommended line is shown below where White can play Ng5 to then play Nf7 blocking the Bishop's travel. If the king takes on f7 it leaves their king exposed to threats and travels which can be mating. However, white must first sacrifice their queen to stop the knight on g4 from staring at the f-pawn too long. After both queens are traded off both players will have to travel to the f-pawn with their bishop with the right timing, but white’s travels are stronger and prevent black from traveling first. By playing a3 you can stop the knight from getting any free checks(you must also be careful of other checks) and then by playing f4 on turn 8 you threaten a deadly travel to the f pawn. At this point to avoid certain death, Black must sacrifice their Knight. If instead, they do a seemingly good travel to the f pawn white can counter by exiling their king and doing their travel immediately winning. 
+Black has to sacrifice their Knight on d3 to prevent White’s time travel. 
+[Board "Standard - Turn Zero"][Mode "5D"]1. e3 / Nf6 2. Nf3 / Ng4 3. Ng5 / f5 4. Qxg4 / fxg4 5. Nf7 / e6 6. Nxd8 / Kxd8 7. a3 / Na6 8. f4
+In the case that Black time travels, White will have the following counter time travel.   
+[Board "Standard - Turn Zero"][Mode "5D"] 1. e3 / Nf6 2. Nf3 / Ng4 3. Ng5 / f5 4. Qxg4 / fxg4 5. Nf7 / e6 6. Nxd8 / Kxd8 7. a3 / Na6 8. f4 / Nc5 9. g3 / (0T9)Bf8>>x(0T3)f2~ (>L-1) 10. (-1T4)Ke1>>(0T5)d1~ (>L1) / (-1T4)e6 11. (0T10)Bf1>>(0T4)f7~ (>L2)
+________________
+Contributions 
+* Authors
+   * Los Bro SPQR
+   * PseudoAbstractMeta
+   * Mage
+   * Neathp
+   * CrazyPenguin
+   * Narik
+* Editors
+   * CrazyPenguin
+   * Dreamer
+   * Mage
+   * Narik
+   * Neathp
+   * Samet
+* Consulted people to learn more about the lines
+   * Crazy Penguin
+   * Dreamer
+   * Icemoe
+   * Lexy
+   * Mage
+   * Narik
+   * Neathp
+   * Romad
+   * Samet
+   * Sarp
+   * Tesseract
+   * Write and Wrong
+________________
+Versions and main patch notes
+* Version 1.0 
+   * Published on May 17, 2021
+   * Openings added
+      * Classical f7 defense
+      * Symmetrical English Four Knights
+      * Sarp’s Counterattack
+* Version 2.0 
+   * Published on January 8th, 2022
+   * Openings added
+      * Mongolian
+      * e3 structures (excluding f2/f7 sac)
+      * e3 structures vs f2/f7 sac
+   * Lines added from previous openings
+      * Sarp’s Counterattack
+         * Dreamer’s Variation
+         * Monte Carlo’s Gambit
+         * 5. Bc4
+* In future versions the following openings will be included:
+   * More symmetrical and nonsymmetrical English variations
+   * More Classical f7 variations
+   * The Digolian
+   * e4 openings
+   * The Graven’s Defense
+   * Updates on the variants.
+   * And more theory on development
+________________
+Extra resources 
+5D Chess Terminology:
+https://docs.google.com/document/d/1njNezDQfBqEVEwYw2QIEJbTupWx7FbcPsCLWcn2hTV4/
+5D Chess Wiki:
+        https://5d-chess.fandom.com/wiki/5D_Chess_Wiki
+Chessin5D:
+https://chessin5d.net/#/local 
+Common 5D chess openings (Basically this guide but less in-depth): https://docs.google.com/document/d/10c7CvySjnI74WXSp6SkQeirZXTEbEK889ENcQky2_Hw/edit
+F7 Sac guide: 
+https://steamcommunity.com/sharedfiles/filedetails/?id=2218187793
+PseudoAbstractMeta’s Interview with Lexi about some of these lines:
+https://www.youtube.com/watch?v=HkDq5fejbvI&t=1548s 
+Shad's 5D chess algebraic notation (5dpgn): 
+https://github.com/adri326/5dchess-notation

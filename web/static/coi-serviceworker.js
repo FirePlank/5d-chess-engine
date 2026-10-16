@@ -10,7 +10,9 @@ if (typeof window === 'undefined') {
   self.addEventListener('fetch', (e) => {
     const req = e.request;
     if (req.cache === 'only-if-cached' && req.mode !== 'same-origin') return;
-    e.respondWith(fetch(req).then((res) => {
+    // Revalidate every file (a cheap 304 when unchanged): GitHub Pages lets browsers keep a file
+    // for ten minutes, which would mix an old script with a new page after a deploy.
+    e.respondWith(fetch(req, { cache: 'no-cache' }).then((res) => {
       if (res.status === 0) return res;
       const headers = new Headers(res.headers);
       headers.set('Cross-Origin-Embedder-Policy', 'require-corp');

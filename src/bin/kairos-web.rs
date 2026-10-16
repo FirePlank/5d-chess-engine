@@ -525,6 +525,8 @@ struct Session {
     turn_start: Instant,
     /// Engine think time per action in an untimed game (ms).
     movetime: u64,
+    /// The engine plays from its opening book (`OwnBook`) in book positions.
+    book: bool,
     over: Option<(String, String)>,
     ended_at: Option<Instant>,
     thinking: bool,
@@ -568,6 +570,8 @@ struct EngineJob {
     limits: Limits,
     /// Search the human's position until stopped, only to fill the table for the reply.
     ponder: bool,
+    /// Answer book positions from the opening book (`OwnBook`).
+    book: bool,
 }
 
 fn new_token() -> String {
@@ -662,6 +666,7 @@ impl Play {
                 self.stop.store(false, Ordering::SeqCst);
                 g.take().unwrap()
             };
+            eng.set_option("OwnBook", &OptionValue::Bool(job.book && !job.ponder));
             if job.ponder {
                 // Think on the human's time: the table (kept across actions) fills for the
                 // reply. Stopped when the human moves or the game ends; the result is unused.
@@ -714,6 +719,7 @@ impl Play {
                 ("left", now_left.map(|l| Json::Arr(vec![l[0].into(), l[1].into()]))),
                 ("toMove", if s.state.get_present().1 { "b" } else { "w" }),
                 ("movetime", s.movetime),
+                ("book", s.book),
                 ("thinking", s.thinking),
                 ("over", s.over.as_ref().map(|(r, why)| obj![("result", r.as_str()), ("reason", why.as_str())])),
                 ("info", s.info.clone()),
@@ -911,9 +917,9 @@ impl Play {
                 }
                 None => Limits { movetime: Some(s.movetime), ..Limits::default() },
             };
-            self.post_job(EngineJob { game_id: gid, state: s.state.clone(), limits, ponder: false });
+            self.post_job(EngineJob { game_id: gid, state: s.state.clone(), limits, ponder: false, book: s.book });
         } else {
-            self.post_job(EngineJob { game_id: gid, state: s.state.clone(), limits: Limits::default(), ponder: true });
+            self.post_job(EngineJob { game_id: gid, state: s.state.clone(), limits: Limits::default(), ponder: true, book: false });
         }
     }
 
@@ -1027,6 +1033,8 @@ impl Play {
                     Some(Clock { base_ms: base, inc_ms: inc })
                 };
                 let movetime = body.get("movetime").int().unwrap_or(2000).clamp(100, 60_000) as u64;
+                // The opening book is on unless the player turns it off.
+                let book = body.get("book").bool().unwrap_or(true);
                 // Replace any previous game (the caller's own, or a finished one).
                 self.end_session(&mut st, "abandoned");
                 let token = who.clone().filter(|t| st.queue.iter().any(|q| &q.ticket == t)).unwrap_or_else(new_token);
@@ -1044,6 +1052,7 @@ impl Play {
                     left: [base, base],
                     turn_start: Instant::now(),
                     movetime,
+                    book,
                     over: None,
                     ended_at: None,
                     thinking: false,

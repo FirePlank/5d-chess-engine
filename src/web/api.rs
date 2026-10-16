@@ -219,6 +219,23 @@ impl Api {
                 Ok(ok(obj![("pgn", pgn), ("uci", g.position_command(last))]))
             }
             "search" => self.search(j, info),
+            "book" => {
+                // The opening book's actions for a node of the game (or a 5DUCI `position`):
+                // [{lan, pgn, play, weight}], `play` ones first by weight, then the known ones.
+                let s = match j.get("position").str() {
+                    Some(p) => Self::uci_state(p)?,
+                    None => {
+                        let id = self.node_arg(j);
+                        self.game()?.node(id)?.state.clone()
+                    }
+                };
+                let mut moves: Vec<&crate::engine::book::BookMove> =
+                    crate::engine::book::Book::theory().probe(&s).map(|v| v.iter().collect()).unwrap_or_default();
+                moves.sort_by_key(|m| (!m.play, std::cmp::Reverse(m.weight)));
+                let list: Vec<Json> =
+                    moves.iter().map(|m| obj![("lan", m.lan.as_str()), ("pgn", m.pgn.as_str()), ("play", m.play), ("weight", m.weight as i64)]).collect();
+                Ok(ok(obj![("moves", Json::Arr(list))]))
+            }
             "set_hash" => {
                 let mb = j.get("mb").int().unwrap_or(32).max(1) as usize;
                 self.hash_mb = Some(mb);
@@ -239,15 +256,21 @@ impl Api {
         }
     }
 
-    /// Run the engine on a 5DUCI position (`position` plus optional `moves`).
-    fn search(&mut self, j: &Json, info: &mut dyn FnMut(&str)) -> Result<Json, String> {
-        let pos = j.get("position").str().ok_or("missing position")?;
+    /// The position of a 5DUCI `position` argument (with optional `moves`).
+    fn uci_state(pos: &str) -> Result<crate::core::state::State, String> {
         let (p, moves) = match pos.find(" moves") {
             Some(i) => (&pos[..i], &pos[i + 6..]),
             None => (pos, ""),
         };
         let mut s = if p.trim() == "startpos" { crate::core::variants::startpos() } else { position_from_uci(p)? };
         crate::core::variants::apply_uci_moves(&mut s, moves)?;
+        Ok(s)
+    }
+
+    /// Run the engine on a 5DUCI position (`position` plus optional `moves`). With `book`
+    /// true, a book position is answered from the opening book without a search (`OwnBook`).
+    fn search(&mut self, j: &Json, info: &mut dyn FnMut(&str)) -> Result<Json, String> {
+        let s = Self::uci_state(j.get("position").str().ok_or("missing position")?)?;
         let limits = Limits {
             depth: j.get("depth").int().map(|d| d as u32),
             movetime: j.get("movetime").int().map(|d| d as u64),
@@ -271,6 +294,7 @@ impl Api {
         if j.get("newGame").bool() == Some(true) {
             eng.new_game();
         }
+        eng.set_option("OwnBook", &crate::engine::OptionValue::Bool(j.get("book").bool() == Some(true)));
         let stop = AtomicBool::new(false);
         let best = eng.find_best_move(&s, &limits, &stop, &mut |m| info(&m));
         let bestmove = best.map(|a| super::tree::action_lan(&s, &a));
