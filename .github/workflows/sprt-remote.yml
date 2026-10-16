@@ -72,7 +72,8 @@ jobs:
         id: keys
         run: |
           key() {
-            { git ls-tree -r "$1" -- src Cargo.toml Cargo.lock build.rs | grep -v $'\tsrc/bin/'
+            # Everything compiled into the engine, including embedded data (the eval net).
+            { git ls-tree -r "$1" -- src data Cargo.toml Cargo.lock build.rs | grep -v $'\tsrc/bin/'
               git ls-tree "$1" -- src/bin/kairos.rs; } | sha256sum | cut -c1-24
           }
           echo "new=$(key HEAD)" >> "$GITHUB_OUTPUT"
