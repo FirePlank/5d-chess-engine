@@ -69,6 +69,11 @@ fn lmr(depth: i32, index: usize) -> i32 {
 }
 /// Ordering bonus of a checking semimove (above every capture).
 const CHECK_BONUS: i32 = 30_000;
+/// Ordering bonus of a travel the f7 sac table knows to win (`sac`), above checks.
+const SAC_BONUS: i32 = 60_000;
+/// Share of the optimum time the f7 sac table's probes may take (a search without a clock
+/// only reads the tables).
+const SAC_PREP_DIV: u64 = 100;
 /// Reverse futility pruning: at non-PV nodes up to this depth, return the static eval when
 /// it beats beta by RFP_MARGIN per ply.
 const RFP_DEPTH: i32 = 2;
@@ -645,12 +650,25 @@ impl AlphaBeta {
             return e.eval;
         }
         let sd = hce::sides_with(s, &mut *self.terms);
-        let f = hce::features_from(&sd, s, hce::needs_checks(&self.hce));
+        let mut f = hce::features_from(&sd, s, hce::needs_checks(&self.hce));
+        let sac = hce::split_sac(&mut f);
         let base = hce::score(&f, &self.hce, s.get_present().1);
         let v = match super::evalnet::embedded() {
             Some(net) => base + net.residual(&super::evalnet::inputs_from(&sd, s, base)),
             None => base,
         };
+        // A created timeline whose latest board is a local mate in the sac table: the winner's
+        // score is at least even before the table's bonus (the rest of the evaluation counts
+        // the piece given and the timeline made as a heavy loss).
+        let line = sac[hce::fi::SAC_LINE] * if s.get_present().1 { -1 } else { 1 };
+        let v = if line > 0 {
+            v.max(0)
+        } else if line < 0 {
+            v.min(0)
+        } else {
+            v
+        };
+        let v = v + hce::score(&sac, &self.hce, s.get_present().1);
         // Terms add up over every board, so with many timelines the sum can reach the mate
         // range (where it would be taken for a mate score).
         let v = v.clamp(-EVAL_MAX, EVAL_MAX);
@@ -726,6 +744,9 @@ impl AlphaBeta {
                 }
                 if checks.as_mut().map(|c| c.gives_check(n, i)).unwrap_or(false) {
                     sc += CHECK_BONUS;
+                }
+                if super::sac::active() && super::sac::winning_travel(s, m) {
+                    sc += SAC_BONUS;
                 }
                 sc
             }
@@ -946,6 +967,9 @@ impl AlphaBeta {
             }
             if m.from.tl() != m.to.tl() && victim == NO_PIECE {
                 sc -= 300;
+            }
+            if super::sac::active() && super::sac::winning_travel(s, m) {
+                sc += SAC_BONUS;
             }
         }
         if ply <= MAX_PLY {
@@ -1856,6 +1880,12 @@ impl AlphaBeta {
         let start = Instant::now();
         let plan = TimePlan::new(limits, Self::mandatory_boards(root));
         let deadline = plan.as_ref().map(|p| start + Duration::from_millis(p.maximum.saturating_sub(5).max(1)));
+        // The f7 sac table: local outcomes of the travels (and created timelines) this
+        // position may need, kept for the rest of the game.
+        match plan.as_ref() {
+            Some(p) => super::sac::prepare(root, u64::MAX, Some(start + Duration::from_millis(p.optimum / SAC_PREP_DIV)), Some(stop), super::sac::PROBE_NODES, false),
+            None => super::sac::prepare(root, 0, None, Some(stop), super::sac::PROBE_NODES, false),
+        };
         self.begin_search(stop, limits.nodes, deadline);
         // Enumerating actions stops at the deadline or when told to stop (see `interrupted`).
         let _interrupt = interrupt_on(stop, deadline);
@@ -2036,6 +2066,8 @@ impl AlphaBeta {
         resume: Option<&SearchResume>,
     ) -> ThreadResult {
         let main = self.thread_id == 0;
+        // The f7 sac table's winning travels at this root, for the evaluation.
+        self.terms.sac_root = super::sac::root_travels(root);
         let mut work = root.clone();
         work.enable_undo();
         let mut best: MoveSeq = resume.map_or_else(|| roots[0].1.clone(), |r| r.best.clone());
