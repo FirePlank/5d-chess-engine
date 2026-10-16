@@ -194,8 +194,13 @@ pub fn load_json(j: &Json) -> Result<Loaded, String> {
     };
     // Evals are kept on the engine's reported scale (+100 = about a 75% expected score);
     // records without "eval_scale" are older and hold internal units. Mates are +-20000.
-    let scaled = j.get("eval_scale").int().is_some();
-    let report = |e: i32| if scaled || e.abs() >= 20000 { e } else { crate::engine::report_cp(e) };
+    // Records keep the scale they were written with: rescale them to the current one.
+    let scale = j.get("eval_scale").int();
+    let report = |e: i32| match scale {
+        _ if e.abs() >= 20000 => e,
+        Some(sc) => (e as f64 * sc as f64 / crate::engine::REPORT_SCALE as f64).round() as i32,
+        None => crate::engine::report_cp(e),
+    };
     for (i, &id) in ids.iter().enumerate() {
         let n = &mut game.nodes[id];
         n.book = i < book;

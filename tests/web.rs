@@ -61,9 +61,11 @@ fn sprt_records_replay() {
 #[test]
 fn record_eval_scales() {
     // New records are on the reported scale; old ones hold internal units; mates stay.
-    let new = r#"{"position":"startpos","book":0,"moves":"(0T1)e2e4 submit (0T1)e7e5 submit (0T2)g1f3 submit","evals":[100,-20000,null],"eval_scale":275}"#;
-    let old = r#"{"position":"startpos","book":0,"moves":"(0T1)e2e4 submit (0T1)e7e5 submit (0T2)g1f3 submit","evals":[275,-20000,null]}"#;
-    for text in [new, old] {
+    let new = r#"{"position":"startpos","book":0,"moves":"(0T1)e2e4 submit (0T1)e7e5 submit (0T2)g1f3 submit","evals":[100,-20000,null],"eval_scale":3000}"#;
+    // Written with the earlier 275 scale: rescaled to the current one.
+    let mid = r#"{"position":"startpos","book":0,"moves":"(0T1)e2e4 submit (0T1)e7e5 submit (0T2)g1f3 submit","evals":[1091,-20000,null],"eval_scale":275}"#;
+    let old = r#"{"position":"startpos","book":0,"moves":"(0T1)e2e4 submit (0T1)e7e5 submit (0T2)g1f3 submit","evals":[3000,-20000,null]}"#;
+    for text in [new, mid, old] {
         let l = record::load(text, None).unwrap();
         let evals: Vec<Option<i32>> = l.game.mainline()[1..].iter().map(|&id| l.game.nodes[id].eval).collect();
         assert_eq!(evals, vec![Some(100), Some(-20000), None]);
