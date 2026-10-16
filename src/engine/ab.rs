@@ -1424,7 +1424,10 @@ impl AlphaBeta {
         }
         let bound = if best > alpha0 { Bound::Exact } else { Bound::Upper };
         let proven = mate_proven(best, best_proven, all_proven);
-        self.tt_store(key, depth, bound, mate_to_tt(best, ply), proven, &best_action);
+        // A fail-low with actions the action cap left unsearched is only a weak bound (one of
+        // those might score higher): it is stored shallower, so deeper searches redo the node.
+        let tt_depth = if bound == Bound::Upper && (!exhausted || skipped) { (depth - 2).max(0) } else { depth };
+        self.tt_store(key, tt_depth, bound, mate_to_tt(best, ply), proven, &best_action);
         self.proven = proven;
         best
     }

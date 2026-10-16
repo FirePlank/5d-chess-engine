@@ -1,0 +1,12 @@
+{
+  "name": "tt_capped_upper_shallow",
+  "old": "00e12873281200bc5b01f3a4c6a69ec178d60832",
+  "games": 9000,
+  "shards": 40,
+  "tc": "tc 10+0.1",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}
