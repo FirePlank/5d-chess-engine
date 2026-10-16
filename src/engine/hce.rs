@@ -6,7 +6,7 @@ use crate::core::board::Board;
 use crate::core::check_position::CheckPosition;
 use crate::core::state::State;
 
-pub const NF: usize = 98;
+pub const NF: usize = 93;
 
 /// Feature indices.
 pub mod fi {
@@ -95,10 +95,6 @@ pub mod fi {
     /// every board, and travel landings next to own royals where the enemy moves next (white's
     /// minus black's).
     pub const DEF: usize = 90;
-    /// Round 4: royal escapes through timelines, danger on the must-move boards of the side to
-    /// move (its royals and the opponent's, + for white to move), pawn storms and the worst board
-    /// for attackers near a royal.
-    pub const G4: usize = 93;
 }
 
 pub const FEATURE_NAMES: [&str; NF] = [
@@ -116,7 +112,6 @@ pub const FEATURE_NAMES: [&str; NF] = [
     "k_def", "k_flight",
     "tl_lost", "to_move", "zone_mand_stm", "zone_mand_opp",
     "def_hot", "def_board", "travel_hot",
-    "esc5", "mand_danger_stm", "mand_danger_opp", "storm", "prox_max",
 ];
 
 pub type Features = [i32; NF];
@@ -145,81 +140,81 @@ pub fn default_weights() -> Weights {
 /// Weights used by the alpha-beta search with `use_hce` (Texel-tuned, see bin/tune.rs).
 pub fn tuned_weights() -> Weights {
     weights_by_name(&[
-        ("mat_a_pawn", 515.3),
+        ("mat_a_pawn", 508.5),
         ("mat_a_brawn", 150.0),
-        ("mat_a_knight", 948.9),
-        ("mat_a_bishop", 1648.5),
-        ("mat_a_rook", 1054.9),
-        ("mat_a_queen", 2498.9),
+        ("mat_a_knight", 909.1),
+        ("mat_a_bishop", 1638.7),
+        ("mat_a_rook", 1094.2),
+        ("mat_a_queen", 2341.8),
         ("mat_a_princess", 899.8),
         ("mat_a_unicorn", 250.0),
         ("mat_a_dragon", 150.0),
-        ("mat_a_cking", 215.8),
-        ("mat_i_pawn", -84.4),
+        ("mat_a_cking", 251.3),
+        ("mat_i_pawn", -69.3),
         ("mat_i_brawn", 74.9),
-        ("mat_i_knight", 200.0),
-        ("mat_i_bishop", 608.7),
-        ("mat_i_rook", 319.8),
-        ("mat_i_queen", 1048.0),
+        ("mat_i_knight", 218.9),
+        ("mat_i_bishop", 656.9),
+        ("mat_i_rook", 329.3),
+        ("mat_i_queen", 1076.5),
         ("mat_i_princess", 450.0),
         ("mat_i_unicorn", 125.1),
         ("mat_i_dragon", 74.9),
         ("mat_i_cking", 150.0),
-        ("cent_knight", 103.5),
-        ("cent_bishop", -30.0),
-        ("cent_rook", 26.9),
-        ("cent_queen", -10.2),
-        ("cent_other", 111.3),
-        ("pawn_adv", -60.9),
-        ("pawn_near", 380.5),
-        ("king_cent", -39.6),
-        ("tl_slots", 2453.6),
-        ("tl_slots_heavy", -103.1),
-        ("k_holes", -248.9),
-        ("k_knights", 2526.7),
-        ("k_open_orth", -534.2),
-        ("k_open_diag", 112.9),
-        ("k_shield", 746.4),
-        ("k_zone_att", 270.5),
-        ("mob_knight", 93.8),
-        ("mob_bishop", 135.6),
-        ("mob_rook", 131.6),
-        ("mob_queen", 86.4),
-        ("mob_king", 149.1),
+        ("cent_knight", 105.1),
+        ("cent_bishop", -27.6),
+        ("cent_rook", 22.7),
+        ("cent_queen", 0.4),
+        ("cent_other", 95.8),
+        ("pawn_adv", -52.7),
+        ("pawn_near", 374.2),
+        ("king_cent", -49.3),
+        ("tl_slots", 2516.4),
+        ("tl_slots_heavy", -118.4),
+        ("k_holes", -247.3),
+        ("k_knights", 2548.7),
+        ("k_open_orth", -540.5),
+        ("k_open_diag", 113.6),
+        ("k_shield", 763.6),
+        ("k_zone_att", 105.1),
+        ("mob_knight", 98.2),
+        ("mob_bishop", 137.3),
+        ("mob_rook", 130.5),
+        ("mob_queen", 89.8),
+        ("mob_king", 155.1),
         ("hanging", -16.7),
-        ("royal_att", -2070.5),
-        ("tempo", -157.1),
-        ("active_lines", 83.8),
+        ("royal_att", -2034.7),
+        ("tempo", -140.4),
+        ("active_lines", 75.3),
         ("checks_5d", 0.0),
         ("sp_checks", 0.0),
-        ("mandatory", 200.0),
-        ("passed", 81.1),
-        ("doubled", 2.9),
-        ("isolated", -36.9),
-        ("king_prox", 937.3),
-        ("undeveloped", -286.9),
-        ("king_prox_5d", 111.5),
-        ("queen_prox", -330.2),
-        ("travel_past", 86.4),
-        ("travel_now", 554.7),
-        ("travel_backed", -590.0),
-        ("weak_sq", 470.2),
+        ("mandatory", 454.0),
+        ("passed", 107.8),
+        ("doubled", 7.8),
+        ("isolated", -42.7),
+        ("king_prox", 991.5),
+        ("undeveloped", -252.9),
+        ("king_prox_5d", 62.7),
+        ("queen_prox", -379.6),
+        ("travel_past", 80.5),
+        ("travel_now", 461.6),
+        ("travel_backed", -522.7),
+        ("weak_sq", 325.5),
         ("open_orth5", 0.0),
-        ("open_diag5", -17.5),
-        ("open_multi5", -19.8),
-        ("king_off", -763.5),
-        ("king_off_new", -1497.5),
-        ("low_flight", 743.5),
-        ("exiled", -20.0),
+        ("open_diag5", -7.5),
+        ("open_multi5", -16.5),
+        ("king_off", -788.5),
+        ("king_off_new", -1323.5),
+        ("low_flight", 713.3),
+        ("exiled", -8.7),
         ("inactive_royal_att", 0.0),
-        ("travel_stm", 565.3),
-        ("tl_slots_threat", 551.3),
-        ("tl_slots_stm", -408.7),
-        ("f7_weak", 22.2),
-        ("f7_open", 77.3),
-        ("f7_qreach", 229.1),
-        ("f7_broute", 71.5),
-        ("kn_checks", 294.7),
+        ("travel_stm", 596.0),
+        ("tl_slots_threat", 553.8),
+        ("tl_slots_stm", -369.3),
+        ("f7_weak", 15.1),
+        ("f7_open", 76.0),
+        ("f7_qreach", 197.5),
+        ("f7_broute", 66.4),
+        ("kn_checks", 280.9),
         // Set by hand (untuned; see `split_sac`), for defence: the local proofs ignore
         // time-travel defences and the other timelines, so they only nudge. A side to move
         // with a verified f7 travel on hand is a pawn and a half up (its opponent should have
@@ -233,24 +228,19 @@ pub fn tuned_weights() -> Weights {
         ("sac_now", 0.0),
         ("sac_now_stm", 700.0),
         ("sac_open", 150.0),
-        ("zone_hot", 443.6),
-        ("weak_hot", -19.6),
-        ("dmax5", -155.6),
-        ("zone_max", -495.8),
-        ("k_def", 0.4),
-        ("k_flight", 234.5),
-        ("tl_lost", -132.9),
-        ("to_move", 398.5),
-        ("zone_mand_stm", -23.3),
-        ("zone_mand_opp", 677.1),
-        ("def_hot", -112.0),
-        ("def_board", 0.4),
-        ("travel_hot", -133.3),
-        ("esc5", -103.6),
-        ("mand_danger_stm", -129.3),
-        ("mand_danger_opp", 259.3),
-        ("storm", 164.7),
-        ("prox_max", 81.1),
+        ("zone_hot", 236.7),
+        ("weak_hot", -42.4),
+        ("dmax5", -136.7),
+        ("zone_max", -338.5),
+        ("k_def", -3.1),
+        ("k_flight", 180.5),
+        ("tl_lost", -61.3),
+        ("to_move", 197.5),
+        ("zone_mand_stm", -6.0),
+        ("zone_mand_opp", 447.6),
+        ("def_hot", -91.3),
+        ("def_board", -3.1),
+        ("travel_hot", -71.5),
     ])
 }
 
@@ -490,18 +480,7 @@ pub mod ex {
     pub const DEF_HOT: usize = 26;
     /// `si::TRAVEL_NOW` landings next to own royals on boards where the enemy moves next.
     pub const TRAVEL_HOT: usize = 27;
-    /// Safe squares for own royals on the neighbouring timelines' latest boards at the same
-    /// time (escapes through timelines, at most 3 per board).
-    pub const ESC5: usize = 28;
-    /// Weak squares and travel landings around own royals on the boards the side to move must
-    /// play on.
-    pub const DANGER_MAND: usize = 29;
-    /// Own pawns and brawns up to three ranks in front of an enemy royal, on its file and the
-    /// neighbouring ones.
-    pub const STORM: usize = 30;
-    /// The most own pieces near an enemy royal on any one board (`KING_PROX`).
-    pub const PROX_MAX: usize = 31;
-    pub const COUNT: usize = 32;
+    pub const COUNT: usize = 28;
 }
 
 /// Squares within king distance 2.
@@ -544,18 +523,6 @@ fn board_extra(b: &Board, extra: &mut [[i32; ex::COUNT]; 2], w: i32, h: i32, att
         for k in marked_pos(b.royal() & them) {
             let r = ring2(k);
             f[ex::KING_PROX] += (r & pieces).count_ones() as i32;
-            let (kx, ky) = (k & 7, k >> 3);
-            let mut storm = 0u64;
-            for dy in 1..=3 {
-                let y = if c == 0 { ky - dy } else { ky + dy };
-                if y < 0 || y >= h {
-                    continue;
-                }
-                for x in (kx - 1).max(0)..=(kx + 1).min(w - 1) {
-                    storm |= pmask(x + 8 * y);
-                }
-            }
-            f[ex::STORM] += (storm & b.lpawn() & me).count_ones() as i32;
             f[ex::QUEEN_PROX] += (r & b.queen() & me).count_ones() as i32;
         }
         let back = if c == 0 { 0xff } else { 0xffu64 << (8 * (h - 1)) };
@@ -819,9 +786,6 @@ pub fn sides_with(s: &State, src: &mut impl TermSource) -> Sides {
             sd.heavy += bt.heavy;
             sd.active += 1;
             sd.mandatory += ((t, c) == present) as i32;
-            for cc in 0..2 {
-                sd.extra[cc][ex::PROX_MAX] = sd.extra[cc][ex::PROX_MAX].max(bt.extra[cc][ex::KING_PROX]);
-            }
             for d in 0..2 {
                 if c as usize != d {
                     sd.extra[d][ex::DEF_HOT] += bt.extra[d][ex::DEF_BOARD];
@@ -1109,7 +1073,6 @@ const ATT_LINES: usize = 32;
 
 /// 5D danger terms of each side's royals (`si::TRAVEL_PAST` ..= `si::INACTIVE_ROYAL_ATT`).
 fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitboard; 4]; ATT_LINES]) {
-    let present = s.get_present();
     let (lo, hi) = s.get_lines_range();
     let (amin, amax) = s.get_active_range();
     let (l0_min, l0_max) = s.get_initial_lines_range();
@@ -1274,22 +1237,6 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
                 e[ex::WEAK_HOT] += weak;
             }
             e[ex::DMAX5] = e[ex::DMAX5].max(weak + now[0]);
-            if s.get_timeline_end(l2) == present {
-                e[ex::DANGER_MAND] += weak + now[0];
-            }
-            for dl in [-1i32, 1] {
-                let l1 = l2 + dl;
-                if l1 < amin || l1 > amax || g.end(l1) != g.end(l2) {
-                    continue;
-                }
-                let Some(b1) = g.at(l1, g.end(l1)) else { continue };
-                let a1 = match atts.get((l1 - lo) as usize) {
-                    Some(a) => a[ci],
-                    None => src.terms(b1, w, h).att[ci],
-                };
-                let safe = spread1(r) & !b1.friendly(d == 1) & !b1.wall() & !a1;
-                e[ex::ESC5] += safe.count_ones().min(3) as i32;
-            }
             let home = if d == 0 { 0 } else { h - 1 };
             let created = l2 < l0_min || l2 > l0_max;
             for k in marked_pos(r) {
@@ -1379,11 +1326,6 @@ pub fn features_from(sd: &Sides, s: &State, checks: bool) -> Features {
     f[fi::DEF] = e(ex::DEF_HOT);
     f[fi::DEF + 1] = e(ex::DEF_BOARD);
     f[fi::DEF + 2] = e(ex::TRAVEL_HOT);
-    f[fi::G4] = e(ex::ESC5);
-    f[fi::G4 + 1] = sign * sd.extra[stm as usize][ex::DANGER_MAND];
-    f[fi::G4 + 2] = sign * sd.extra[1 - stm as usize][ex::DANGER_MAND];
-    f[fi::G4 + 3] = e(ex::STORM);
-    f[fi::G4 + 4] = e(ex::PROX_MAX);
     for k in 0..=si::INACTIVE_ROYAL_ATT - si::TRAVEL_PAST {
         f[fi::DANGER_5D + k] = d(si::TRAVEL_PAST + k);
     }
