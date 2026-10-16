@@ -31,6 +31,8 @@ go movetime 1000
 
 The engine answers with `bestmove <moves>`; the GUI applies them and sends `submit`.
 
+Clocks: `go wtime <ms> btime <ms> [winc <ms> binc <ms>]`, with an optional delay (the clock waits before running down; unused delay is lost): `wdelay/bdelay <ms>` per action and `wtldelay/btldelay <ms>` per active timeline of the position. The 5D tournament clock (5 min + 3 s per active timeline) is `go wtime 300000 btime 300000 wtldelay 3000 btldelay 3000`. The JSON API's `search` takes the same as `timeLeft`, `increment`, `delay` and `delayPerTimeline` (ms).
+
 ## Testing
 
 ```bash
