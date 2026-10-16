@@ -17,11 +17,24 @@ const LUNICORN: usize = 9;
 const LDRAGON: usize = 10;
 const N_BBS: usize = 11;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, Hash, Default)]
 pub struct Board {
     bbs: [Bitboard; N_BBS],
     umove_mask: Bitboard,
 }
+
+impl PartialEq for Board {
+    /// Word by word without branching (the derived comparison calls `memcmp`).
+    #[inline]
+    fn eq(&self, o: &Self) -> bool {
+        let mut d = self.umove_mask ^ o.umove_mask;
+        for (a, b) in self.bbs.iter().zip(o.bbs.iter()) {
+            d |= a ^ b;
+        }
+        d == 0
+    }
+}
+impl Eq for Board {}
 
 #[derive(Debug, Clone)]
 pub struct FenError(pub String);

@@ -370,6 +370,12 @@ impl Multiverse {
     pub fn hash(&self) -> u64 {
         self.hash
     }
+    /// `board_key` of the board (l, t, c), which must exist.
+    #[inline(always)]
+    pub fn key_of(&self, l: i32, t: i32, c: bool) -> u64 {
+        let tl = self.timeline(l);
+        tl.keys[(tc_to_v(t, c) - tl.start) as usize]
+    }
 
     fn insert_board_impl(&mut self, l: i32, t: i32, c: bool, b: Board) {
         let u = l_to_u(l) as usize;
