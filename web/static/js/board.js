@@ -760,12 +760,18 @@ export class MultiverseView {
       const [cx, cy] = this.squareCenter(t[0], vv, t[2], t[3]);
       ctx.fillStyle = o.peek ? C.peek : C.target;
       if (b.squares[t[3] * this.bw + t[2]]) {
-        // A capture: the square's corners, like lichess.
+        // A capture: the square's corners, like lichess (the square less a circle, cut to
+        // the square: the circle is wider than it).
         const [x0, y0] = [cx - 0.5, cy - 0.5];
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x0, y0, 1, 1);
+        ctx.clip();
         ctx.beginPath();
         ctx.rect(x0, y0, 1, 1);
         ctx.arc(cx, cy, 0.6, 0, Math.PI * 2, true);
         ctx.fill('evenodd');
+        ctx.restore();
       } else {
         ctx.beginPath();
         ctx.arc(cx, cy, 0.17, 0, Math.PI * 2);
