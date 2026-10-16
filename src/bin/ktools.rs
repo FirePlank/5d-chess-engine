@@ -289,6 +289,8 @@ fn main() {
             args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20),
             &mut out,
         ),
+        "overrunpos" => overrunpos(&args[2..], &mut out),
+        "firstact" => firstact(args.get(2).map(|s| s.as_str()).unwrap_or("games/ov_hard.g"), args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20000), &mut out),
         "overrun" => overrun(
             args.get(2).map(|s| s.as_str()).expect("overrun <games.jsonl> [threads] [ms] [games] [step]"),
             args.get(3).and_then(|s| s.parse().ok()).unwrap_or(8),
@@ -960,7 +962,9 @@ fn main() {
                  bench [file]            perft oracle\n  \
                  abbench [file] [depth]  alpha-beta node oracle (AB_NODES caps nodes per position)\n  \
                  puzzles [file] [ms]     time to find each mate in data/puzzles.g
-                   blunders <games.jsonl> [n] | materank <games.jsonl> [n] | depthstat <games.jsonl> [ms] | rootgen [file]"
+                   blunders <games.jsonl> [n] | materank <games.jsonl> [n] | depthstat <games.jsonl> [ms] | rootgen [file]
+                   overrunpos <file.g>... [threads=1,4] [ms=100,1000] [clock=2000+100,30000+300]   worst time overrun
+                   firstact [file.g] [cap ms]   time to the first legal action by enumeration strategy"
             );
         }
     }
@@ -1586,4 +1590,150 @@ fn hcverify(s: &State, cap: usize, seeds: u64) -> Result<(usize, bool, Option<St
     let acts = take(&mut || cur.next(&w3, s));
     compare("depth-first (engine order)", &acts)?;
     Ok((reference.len(), full, repeats))
+}
+
+/// Time overruns over positions: every G line of the files (labelled by a preceding "# "
+/// line) is searched with each thread count and each limit, one search at a time, and the
+/// time past the hard limit (`TimePlan::maximum`) is reported, with searches that return no
+/// action or an illegal one. A search running 30 s past its limit is reported as hung (and
+/// left behind).
+///   ktools overrunpos <file.g>... [threads=1,4] [ms=100,1000] [clock=2000+100,30000+300]
+/// (`clock` is time left + increment in ms).
+fn overrunpos(args: &[String], out: &mut impl Write) {
+    use kairos::engine::ab::AlphaBeta;
+    use kairos::engine::time::TimePlan;
+    use kairos::engine::{Limits, OptionValue};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    let mut threads: Vec<usize> = vec![1, 4];
+    let mut limits: Vec<(String, Limits)> = Vec::new();
+    let mut items: Vec<(String, State)> = Vec::new();
+    let list = |v: &str| v.split(',').map(|x| x.to_string()).collect::<Vec<_>>();
+    let (mut mss, mut clocks) = (list("100,1000"), list("2000+100,30000+300"));
+    for a in args {
+        if let Some(v) = a.strip_prefix("threads=") {
+            threads = v.split(',').filter_map(|x| x.parse().ok()).collect();
+        } else if let Some(v) = a.strip_prefix("ms=") {
+            mss = list(v);
+        } else if let Some(v) = a.strip_prefix("clock=") {
+            clocks = list(v);
+        } else {
+            let text = std::fs::read_to_string(a).expect("positions");
+            let mut label = String::new();
+            for line in text.lines() {
+                if let Some(l) = line.strip_prefix("# ") {
+                    label = l.to_string();
+                } else if line.starts_with("G ") {
+                    let s = parse_g_line(line).unwrap();
+                    let name = if label.is_empty() { format!("{} #{}", a, items.len()) } else { std::mem::take(&mut label) };
+                    items.push((name, s));
+                }
+            }
+        }
+    }
+    for m in mss.iter().filter(|m| !m.is_empty()) {
+        limits.push((format!("movetime {}", m), Limits { movetime: m.parse().ok(), ..Default::default() }));
+    }
+    for c in clocks.iter().filter(|c| !c.is_empty()) {
+        let (t, i) = c.split_once('+').unwrap_or((c, "0"));
+        limits.push((format!("clock {}", c), Limits { time_left: t.parse().ok(), increment: i.parse().ok(), ..Default::default() }));
+    }
+    let mut worst_all = 0.0f64;
+    for &th in &threads {
+        for (lname, lim) in &limits {
+            let (mut worst, mut late, mut bad, mut n) = (f64::MIN, 0, 0, 0);
+            let mut worst_at = String::new();
+            for (name, s) in &items {
+                let boards = {
+                    let present = s.get_present();
+                    let (amin, amax) = s.get_active_range();
+                    (amin..=amax).filter(|&l| s.get_timeline_end(l) == present).count()
+                };
+                let hard = TimePlan::new(lim, boards).map(|p| p.maximum).unwrap_or(0) as f64;
+                let stop = Arc::new(AtomicBool::new(false));
+                let (tx, rx) = std::sync::mpsc::channel();
+                let (s2, lim2, stop2) = (s.clone(), lim.clone(), stop.clone());
+                std::thread::spawn(move || {
+                    let mut e = AlphaBeta::new();
+                    e.set_option("Threads", &OptionValue::Int(th as i64));
+                    let t0 = Instant::now();
+                    let a = e.find_best_move(&s2, &lim2, &stop2, &mut |_| {});
+                    let legal = a.as_ref().map(|a| s2.can_apply_action(a).is_some());
+                    let _ = tx.send((t0.elapsed().as_secs_f64() * 1e3, legal));
+                });
+                n += 1;
+                let (ms, legal) = match rx.recv_timeout(std::time::Duration::from_millis(hard as u64 + 30_000)) {
+                    Ok(r) => r,
+                    Err(_) => {
+                        stop.store(true, Ordering::Relaxed);
+                        (f64::INFINITY, None)
+                    }
+                };
+                let over = ms - hard;
+                if over > worst {
+                    worst = over;
+                    worst_at = name.clone();
+                }
+                let note = match legal {
+                    Some(true) => "",
+                    Some(false) => " ILLEGAL ACTION",
+                    None if ms.is_finite() => " no action",
+                    None => " HUNG",
+                };
+                if !note.is_empty() && note != " no action" {
+                    bad += 1;
+                }
+                if over > 50.0 || !note.is_empty() {
+                    late += (over > 50.0) as usize;
+                    writeln!(out, "  threads {} {} | {} | limit {:.0} ms, took {:.0} ms ({:+.0}){}", th, lname, name, hard, ms, over, note).unwrap();
+                }
+                out.flush().unwrap();
+            }
+            worst_all = worst_all.max(worst);
+            writeln!(out, "threads {} {}: {} searches, {} over by more than 50 ms, {} hung/illegal, worst {:+.0} ms ({})", th, lname, n, late, bad, worst, worst_at).unwrap();
+            out.flush().unwrap();
+        }
+    }
+    writeln!(out, "worst overrun {:+.0} ms", worst_all).unwrap();
+    out.flush().unwrap();
+    std::process::exit(0);
+}
+
+/// Time to the first legal action under several enumeration strategies (each capped).
+///   ktools firstact <file.g> [cap ms]
+fn firstact(path: &str, cap: u64, out: &mut impl Write) {
+    use kairos::core::hypercuboid::{interrupt_on, interrupted, HcCursor};
+    let text = std::fs::read_to_string(path).expect("positions");
+    let e = kairos::engine::ab::AlphaBeta::new();
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let deadline = || Some(Instant::now() + std::time::Duration::from_millis(cap));
+    for line in text.lines().filter(|l| l.starts_with("G ")) {
+        let s = parse_g_line(line).unwrap();
+        let t = Instant::now();
+        let (w, ss) = HcInfo::build_hc(&s);
+        writeln!(out, "dim {} playable {} hcs {} in_check {} build {:.1}ms", w.dimension(), w.first_branch_axis(), ss.len(), s.has_phantom_check(), t.elapsed().as_secs_f64() * 1e3).unwrap();
+        out.flush().unwrap();
+        {
+            let _g = interrupt_on(&stop, deadline());
+            let t = Instant::now();
+            let a = w.search(&s, ss.clone()).next();
+            writeln!(out, "  natural, full: {} in {:.0}ms (interrupted {})", a.is_some(), t.elapsed().as_secs_f64() * 1e3, interrupted()).unwrap();
+            out.flush().unwrap();
+        }
+        {
+            let _g = interrupt_on(&stop, deadline());
+            let t = Instant::now();
+            let mut cur = HcCursor::new(ss.clone(), e.ordering(&s, &w));
+            let a = cur.next(&w, &s);
+            writeln!(out, "  engine order depth-first, full: {} in {:.0}ms (interrupted {})", a.is_some(), t.elapsed().as_secs_f64() * 1e3, interrupted()).unwrap();
+            out.flush().unwrap();
+        }
+        {
+            let _g = interrupt_on(&stop, deadline());
+            let t = Instant::now();
+            let a = e.node_order(&s, 1);
+            writeln!(out, "  best-first, full: {} in {:.0}ms (interrupted {})", !a.is_empty(), t.elapsed().as_secs_f64() * 1e3, interrupted()).unwrap();
+            out.flush().unwrap();
+        }
+    }
 }
