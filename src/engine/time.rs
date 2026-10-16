@@ -31,7 +31,7 @@ impl TimePlan {
         let left = (remaining + inc * (MOVES_TO_GO - 1)).saturating_sub(MOVE_OVERHEAD * (MOVES_TO_GO + 2)).max(1);
         // An action on several boards is several moves' worth of decisions, with a branching
         // factor that multiplies per board.
-        let scale = (1.0 + 0.15 * (boards.max(1) - 1) as f64).min(1.6);
+        let scale = (1.0 + 0.25 * (boards.max(1) - 1) as f64).min(2.0);
         let mut optimum = (left as f64 * scale / MOVES_TO_GO as f64) as u64;
         let mut maximum = (optimum * 4).min((remaining / 3).saturating_sub(MOVE_OVERHEAD));
         if inc > 0 && remaining < inc * LOW_CLOCK_INCS {
