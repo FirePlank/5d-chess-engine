@@ -13,7 +13,7 @@ use crate::core::action::{Action, FullMove, MoveSeq};
 use crate::core::bitboard::{marked_pos, pmask};
 use crate::core::board::Board;
 use crate::core::check_position::{BoardOverlay, CheckBuf, CheckKind, CheckPosition, SpReach};
-use crate::core::hypercuboid::{has_physical_check, BestFirstCursor, Entry, HcCursor, HcInfo, NeedBranch};
+use crate::core::hypercuboid::{has_physical_check, plays_wasted_move, BestFirstCursor, Entry, HcCursor, HcInfo, NeedBranch};
 use crate::core::multiverse::next_turn;
 use crate::core::piece::*;
 use crate::core::state::{Mark, State};
@@ -880,16 +880,27 @@ impl AlphaBeta {
         let player = s.get_present().1;
         let mark = s.mark();
         let mut ok = true;
-        for &m in act {
+        // Bit i: move i created a timeline (moves past the 64th count as creating one).
+        let mut branching = 0u64;
+        for (i, &m) in act.iter().enumerate() {
             if s.get_board_ptr(m.from.l(), m.from.t(), player).is_none()
                 || s.get_timeline_end(m.from.l()) != (m.from.t(), player)
-                || !s.apply_move::<false>(m)
+                || s.get_board_ptr(m.to.l(), m.to.t(), player).is_none()
             {
                 ok = false;
                 break;
             }
+            if i < 64 && s.get_timeline_end(m.to.l()) != (m.to.t(), player) {
+                branching |= 1 << i;
+            }
+            if !s.apply_move::<false>(m) {
+                ok = false;
+                break;
+            }
         }
-        if ok && s.submit::<false>() && !s.royal_capturable(s.get_present().1) {
+        // A remembered action that wastes a move here is not one the search would generate.
+        let wasted = |s: &State| branching != 0 && plays_wasted_move(s, act, |i| i >= 64 || branching >> i & 1 != 0);
+        if ok && !wasted(s) && s.submit::<false>() && !s.royal_capturable(s.get_present().1) {
             return Some(mark);
         }
         s.unmake(mark);
