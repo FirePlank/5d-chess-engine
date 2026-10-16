@@ -5,7 +5,7 @@ import { Engine } from './kairos.js';
 import { Analysis } from './analysis.js';
 import { Play } from './play.js';
 import { Games } from './games.js';
-import { $, $$, toast } from './util.js';
+import { $, $$, toast, store } from './util.js';
 
 const app = {
   route: null,
@@ -88,6 +88,15 @@ async function main() {
     $('#tool-flip').classList.toggle('on', app.board.flipped);
   };
   $('#btn-theme').onclick = () => setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+  // Board square colours: brown, blue, green (lichess themes).
+  $('#btn-board-theme').onclick = () => {
+    const themes = ['brown', 'blue', 'green'];
+    const next = themes[(themes.indexOf(document.documentElement.dataset.board) + 1) % themes.length];
+    document.documentElement.dataset.board = next;
+    store('boardTheme', next);
+    app.board.readColors();
+    toast(`Board: ${next}`);
+  };
   $('#btn-help').onclick = () => $('#dlg-help').showModal();
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
     let saved = null;

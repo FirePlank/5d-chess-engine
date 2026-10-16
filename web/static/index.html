@@ -3,65 +3,56 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Kairos — 5D Chess Engine</title>
+<title>Kairos · 5D chess engine</title>
 <meta name="description" content="Kairos, a 5D Chess With Multiverse Time Travel engine: game viewer, analysis board and play against the engine.">
-<meta name="color-scheme" content="light dark">
+<meta name="color-scheme" content="dark light">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <script>
-  // Theme before first paint: saved choice, else the system preference.
+  // Theme and board colours before first paint: saved choice, else the system preference.
   (() => {
-    let t = null;
-    try { t = localStorage.getItem('kairos.theme'); } catch (e) {}
-    if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    let t = null, b = null;
+    try { t = localStorage.getItem('kairos.theme'); b = JSON.parse(localStorage.getItem('kairos.boardTheme')); } catch (e) {}
+    if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
     document.documentElement.dataset.theme = t;
+    document.documentElement.dataset.board = ['brown', 'blue', 'green'].includes(b) ? b : 'brown';
   })();
 </script>
 <link rel="stylesheet" href="css/app.css">
 <script type="module" src="js/main.js"></script>
 </head>
 <body>
-<header class="topbar">
-  <a class="brand" href="#/analysis" aria-label="Kairos home">
-    <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><use href="#i-logo"/></svg>
-    <span class="brand-name">Kairos</span>
-  </a>
-  <nav class="tabs" aria-label="Sections">
+<header class="site-header">
+  <a class="site-logo" href="#/analysis" aria-label="Kairos home">kairos<span class="tld">5D</span></a>
+  <nav class="site-nav" aria-label="Sections">
     <a href="#/analysis" data-route="analysis">Analysis</a>
     <a href="#/play" data-route="play">Play</a>
     <a href="#/games" data-route="games">Games</a>
   </nav>
-  <div class="topbar-actions">
+  <div class="site-actions">
+    <button class="icon-btn" id="btn-board-theme" title="Board colours" aria-label="Board colours"><svg><use href="#i-palette"/></svg></button>
     <button class="icon-btn" id="btn-help" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts"><svg><use href="#i-keyboard"/></svg></button>
-    <button class="icon-btn" id="btn-theme" title="Toggle light/dark theme" aria-label="Toggle theme"><svg class="only-light"><use href="#i-moon"/></svg><svg class="only-dark"><use href="#i-sun"/></svg></button>
+    <button class="icon-btn" id="btn-theme" title="Light / dark" aria-label="Toggle light or dark theme"><svg class="only-light"><use href="#i-moon"/></svg><svg class="only-dark"><use href="#i-sun"/></svg></button>
   </div>
 </header>
 
 <main id="app">
-  <!-- ============================== Board workspace (shared by Analysis and Play) -->
+  <!-- ============================== Board workspace (Analysis and Play) -->
   <section class="workspace" id="workspace">
     <div class="board-area" id="board-area">
-      <div class="eval-bar hidden" id="eval-bar" title="Engine evaluation (White's point of view)">
-        <div class="eval-bar-black" id="eval-bar-black"></div>
-        <div class="eval-bar-mid"></div>
-        <span class="eval-bar-label" id="eval-bar-label"></span>
-      </div>
       <canvas id="board" tabindex="0" aria-label="Multiverse board"></canvas>
-      <div class="board-hud board-hud-top">
-        <div class="status-chip" id="status-chip"></div>
-      </div>
       <div class="board-tools" role="toolbar" aria-label="View">
-        <button class="tool" id="tool-fit" title="Fit everything (0)"><svg><use href="#i-fit"/></svg></button>
-        <button class="tool" id="tool-present" title="Go to the present (P)"><svg><use href="#i-target"/></svg></button>
-        <button class="tool" id="tool-zoom-in" title="Zoom in (+)"><svg><use href="#i-plus"/></svg></button>
-        <button class="tool" id="tool-zoom-out" title="Zoom out (−)"><svg><use href="#i-minus"/></svg></button>
-        <button class="tool" id="tool-flip" title="Flip board (F)"><svg><use href="#i-flip"/></svg></button>
+        <button class="tool" id="tool-fit" title="Fit all boards (0)" aria-label="Fit all boards"><svg><use href="#i-fit"/></svg></button>
+        <button class="tool" id="tool-present" title="Go to the present (P)" aria-label="Go to the present"><svg><use href="#i-target"/></svg></button>
+        <button class="tool" id="tool-zoom-in" title="Zoom in (+)" aria-label="Zoom in"><svg><use href="#i-plus"/></svg></button>
+        <button class="tool" id="tool-zoom-out" title="Zoom out (−)" aria-label="Zoom out"><svg><use href="#i-minus"/></svg></button>
+        <button class="tool" id="tool-flip" title="Flip board (F)" aria-label="Flip board"><svg><use href="#i-flip"/></svg></button>
       </div>
       <div class="draft-bar hidden" id="draft-bar">
         <div class="draft-moves" id="draft-moves"></div>
         <div class="draft-actions">
-          <button class="btn ghost sm" id="draft-undo" title="Take back the last move of this action (Backspace)">Undo</button>
-          <button class="btn ghost sm" id="draft-reset" title="Clear this action (Esc)">Clear</button>
-          <button class="btn primary sm" id="draft-submit" title="Submit the action (Enter)">Submit</button>
+          <button class="btn sm" id="draft-undo" title="Take back the last move of this action (Backspace)">Undo</button>
+          <button class="btn sm" id="draft-reset" title="Clear this action (Esc)">Clear</button>
+          <button class="btn sm primary" id="draft-submit" title="Submit the action (Enter)">Submit</button>
         </div>
         <div class="draft-hint" id="draft-hint"></div>
       </div>
@@ -69,114 +60,109 @@
       <div class="toast-host" id="toasts" aria-live="polite"></div>
     </div>
 
+    <div class="eval-gauge hidden" id="eval-bar" title="Evaluation (White's point of view)">
+      <div class="gauge-black" id="eval-bar-black"></div>
+      <div class="gauge-tick" style="top:12.5%"></div><div class="gauge-tick" style="top:25%"></div><div class="gauge-tick" style="top:37.5%"></div>
+      <div class="gauge-tick zero" style="top:50%"></div>
+      <div class="gauge-tick" style="top:62.5%"></div><div class="gauge-tick" style="top:75%"></div><div class="gauge-tick" style="top:87.5%"></div>
+    </div>
+
     <aside class="side" id="side">
-      <!-- Analysis side panel -->
+      <!-- Analysis -->
       <div class="side-view" id="side-analysis">
-        <div class="card game-card" id="game-card">
+        <div class="panel game-info">
           <div class="players">
-            <div class="player"><span class="dot white"></span><span id="pl-white">White</span></div>
-            <div class="result" id="gm-result">—</div>
-            <div class="player right"><span id="pl-black">Black</span><span class="dot black"></span></div>
+            <span class="player"><i class="side-dot white"></i><span id="pl-white">White</span></span>
+            <span class="result" id="gm-result">*</span>
+            <span class="player right"><span id="pl-black">Black</span><i class="side-dot black"></i></span>
           </div>
           <div class="game-meta" id="gm-meta"></div>
-          <div class="game-buttons">
-            <button class="btn sm" id="btn-load" title="Load a game (L)"><svg><use href="#i-upload"/></svg>Load</button>
-            <button class="btn sm" id="btn-new" title="New board"><svg><use href="#i-plus"/></svg>New</button>
-            <button class="btn sm" id="btn-export" title="Export / copy"><svg><use href="#i-share"/></svg>Export</button>
-          </div>
+          <div class="status-line" id="status-chip"></div>
         </div>
 
-        <div class="card engine-card" id="engine-card">
-          <div class="engine-progress"><div class="engine-progress-fill" id="engine-progress"></div></div>
-          <div class="engine-head">
-            <label class="switch" title="Engine analysis (E)">
-              <input type="checkbox" id="engine-toggle"><span class="slider"></span>
-            </label>
-            <div class="engine-eval" id="engine-eval">—</div>
-            <div class="engine-title">
-              <div class="engine-name">Kairos <span class="muted" id="engine-where">in your browser</span></div>
-              <div class="engine-stats" id="engine-stats">Analysis off</div>
+        <div class="panel ceval" id="engine-card">
+          <div class="ceval-progress"><div id="engine-progress"></div></div>
+          <div class="ceval-head">
+            <label class="switch" title="Engine analysis (E)"><input type="checkbox" id="engine-toggle" aria-label="Engine analysis"><span></span></label>
+            <div class="ceval-eval" id="engine-eval">-</div>
+            <div class="ceval-info">
+              <div class="ceval-name">Kairos <span id="engine-where">· in browser</span></div>
+              <div class="ceval-stats" id="engine-stats">Off</div>
             </div>
-            <button class="icon-btn sm" id="engine-deeper" title="Search longer"><svg><use href="#i-plus"/></svg></button>
+            <button class="icon-btn sm" id="engine-deeper" title="Keep searching" aria-label="Keep searching"><svg><use href="#i-plus"/></svg></button>
           </div>
-          <div class="engine-lines" id="engine-lines"></div>
+          <div class="ceval-lines" id="engine-lines"></div>
         </div>
 
-        <div class="card moves-card">
-          <div class="moves-head">
-            <span>Actions</span>
-            <span class="legend"><span class="tag book">book</span><span class="tag eng">engine</span></span>
+        <div class="panel moves-panel">
+          <div class="moves" id="moves" tabindex="0" aria-label="Actions"></div>
+          <div class="graph-wrap" id="graph-wrap"><canvas id="graph" aria-label="Evaluation graph"></canvas></div>
+          <div class="controls" role="toolbar" aria-label="Navigate">
+            <button class="ctrl" id="nav-first" title="First (Home)" aria-label="First"><svg><use href="#i-first"/></svg></button>
+            <button class="ctrl" id="nav-prev" title="Previous (←)" aria-label="Previous"><svg><use href="#i-prev"/></svg></button>
+            <button class="ctrl" id="nav-play" title="Auto-play (Space)" aria-label="Auto-play"><svg class="when-paused"><use href="#i-play"/></svg><svg class="when-playing"><use href="#i-pause"/></svg></button>
+            <button class="ctrl" id="nav-next" title="Next (→)" aria-label="Next"><svg><use href="#i-next"/></svg></button>
+            <button class="ctrl" id="nav-last" title="Last (End)" aria-label="Last"><svg><use href="#i-last"/></svg></button>
           </div>
-          <div class="moves" id="moves" tabindex="0" aria-label="Action list"></div>
-          <div class="graph-wrap" id="graph-wrap">
-            <canvas id="graph" aria-label="Evaluation graph"></canvas>
-          </div>
-          <div class="nav-buttons" role="toolbar" aria-label="Navigate">
-            <button class="nav-btn" id="nav-first" title="Start (Home)"><svg><use href="#i-first"/></svg></button>
-            <button class="nav-btn" id="nav-prev" title="Previous action (←)"><svg><use href="#i-prev"/></svg></button>
-            <button class="nav-btn" id="nav-play" title="Auto-play (Space)"><svg class="when-paused"><use href="#i-play"/></svg><svg class="when-playing"><use href="#i-pause"/></svg></button>
-            <button class="nav-btn" id="nav-next" title="Next action (→)"><svg><use href="#i-next"/></svg></button>
-            <button class="nav-btn" id="nav-last" title="End (End)"><svg><use href="#i-last"/></svg></button>
-          </div>
+        </div>
+
+        <div class="side-links">
+          <button class="link-btn" id="btn-load" title="Load a game (L)"><svg><use href="#i-upload"/></svg>Load game</button>
+          <button class="link-btn" id="btn-new"><svg><use href="#i-plus"/></svg>New board</button>
+          <button class="link-btn" id="btn-export"><svg><use href="#i-share"/></svg>Export</button>
         </div>
       </div>
 
-      <!-- Play side panel -->
+      <!-- Play -->
       <div class="side-view hidden" id="side-play">
-        <div class="card" id="play-setup">
-          <h2 class="card-title">Play Kairos</h2>
-          <div class="play-busy hidden" id="play-busy">
-            <div class="busy-badge"><span class="pulse"></span>Kairos is busy playing someone else</div>
-            <p class="muted" id="play-queue-text">You can watch the game live. Join the queue to play next.</p>
-            <div class="row gap">
+        <div class="panel play-setup" id="play-setup">
+          <div class="busy hidden" id="play-busy">
+            <div class="busy-title">Kairos is playing someone else</div>
+            <p class="muted" id="play-queue-text">You can watch the game. Join the queue to play next.</p>
+            <div class="row">
               <button class="btn primary" id="play-queue">Join queue</button>
-              <button class="btn ghost hidden" id="play-unqueue">Leave queue</button>
+              <button class="btn hidden" id="play-unqueue">Leave queue</button>
             </div>
           </div>
           <form class="form" id="play-form">
-            <label class="field">
-              <span>Variant</span>
-              <select id="play-variant"></select>
-            </label>
+            <h2 class="panel-title">Play against Kairos</h2>
+            <label class="field"><span>Variant</span><select id="play-variant"></select></label>
             <div class="field">
-              <span>Your side</span>
-              <div class="seg" id="play-color">
-                <button type="button" data-v="w" class="on"><span class="dot white"></span>White</button>
-                <button type="button" data-v="r">Random</button>
-                <button type="button" data-v="b"><span class="dot black"></span>Black</button>
+              <span>Side</span>
+              <div class="color-pick" id="play-color">
+                <button type="button" data-v="w" title="White"><img src="pieces/king-white.svg" alt="White"></button>
+                <button type="button" data-v="r" title="Random"><img src="pieces/king-white.svg" alt="" class="half"><img src="pieces/king-black.svg" alt="Random" class="half"></button>
+                <button type="button" data-v="b" title="Black"><img src="pieces/king-black.svg" alt="Black"></button>
               </div>
             </div>
             <div class="field">
               <span>Time control</span>
-              <div class="chips" id="play-tc">
+              <div class="tc-grid" id="play-tc">
                 <button type="button" data-base="60" data-inc="1">1+1</button>
                 <button type="button" data-base="180" data-inc="2">3+2</button>
                 <button type="button" data-base="300" data-inc="3" class="on">5+3</button>
                 <button type="button" data-base="600" data-inc="5">10+5</button>
                 <button type="button" data-base="900" data-inc="10">15+10</button>
-                <button type="button" data-base="0" data-inc="0" data-movetime="3000">Untimed · 3 s/move</button>
+                <button type="button" data-base="0" data-inc="0" data-movetime="3000">Untimed</button>
               </div>
             </div>
             <button class="btn primary block" type="submit" id="play-start">Start game</button>
-            <p class="fine">One player at a time: while you play, others can watch.</p>
+            <p class="fine">One player at a time; others can watch the game live.</p>
           </form>
         </div>
 
-        <div class="card hidden" id="play-live">
-          <div class="clock clock-top" id="clock-top"><span class="clock-name" id="clock-top-name">Kairos</span><span class="clock-time" id="clock-top-time">--:--</span></div>
+        <div class="panel play-live hidden" id="play-live">
+          <div class="player-bar" id="clock-top"><span class="pname" id="clock-top-name">Kairos</span><span class="clock" id="clock-top-time">-:--</span></div>
           <div class="play-status" id="play-status"></div>
+          <div class="moves play-moves" id="play-moves"></div>
           <div class="thinking" id="play-thinking"></div>
-          <div class="clock clock-bottom" id="clock-bottom"><span class="clock-name" id="clock-bottom-name">You</span><span class="clock-time" id="clock-bottom-time">--:--</span></div>
-          <div class="row gap wrap">
-            <button class="btn ghost" id="play-resign">Resign</button>
-            <button class="btn" id="play-new">New game</button>
-            <button class="btn ghost" id="play-analyze">Analyze</button>
+          <div class="play-actions">
+            <button class="ctrl-text" id="play-resign" title="Resign"><svg><use href="#i-flag"/></svg>Resign</button>
+            <button class="ctrl-text" id="play-new" title="New game"><svg><use href="#i-plus"/></svg>New game</button>
+            <button class="ctrl-text" id="play-analyze" title="Open in the analysis board"><svg><use href="#i-search"/></svg>Analyse</button>
           </div>
-        </div>
-
-        <div class="card moves-card">
-          <div class="moves-head"><span>Actions</span><span class="muted" id="play-spectators"></span></div>
-          <div class="moves" id="play-moves"></div>
+          <div class="player-bar" id="clock-bottom"><span class="pname" id="clock-bottom-name">You</span><span class="clock" id="clock-bottom-time">-:--</span></div>
+          <div class="spectators" id="play-spectators"></div>
         </div>
       </div>
     </aside>
@@ -184,25 +170,25 @@
 
   <!-- ============================== Game browser -->
   <section class="browser hidden" id="browser">
-    <div class="browser-files card">
-      <div class="card-title-row"><h2 class="card-title">Game files</h2><input class="input sm" id="file-filter" placeholder="Filter files"></div>
+    <div class="panel files">
+      <div class="files-head"><h2 class="panel-title">Files</h2><input class="input sm" id="file-filter" placeholder="Filter" aria-label="Filter files"></div>
       <div class="file-list" id="file-list"></div>
     </div>
-    <div class="browser-main card">
-      <div class="browser-head">
-        <h2 class="card-title" id="browser-title">Games</h2>
+    <div class="panel games-panel">
+      <div class="games-head">
+        <h2 class="panel-title" id="browser-title">Games</h2>
         <div class="filters">
-          <select id="f-variant"><option value="">All variants</option></select>
-          <select id="f-result"><option value="">All results</option><option value="1-0">1-0</option><option value="0-1">0-1</option><option value="1/2-1/2">½-½</option><option value="decisive">Decisive</option></select>
-          <select id="f-reason"><option value="">All endings</option></select>
-          <input class="input sm num" id="f-min" type="number" min="0" placeholder="min len">
-          <input class="input sm num" id="f-max" type="number" min="0" placeholder="max len">
-          <select id="f-sort"><option value="">File order</option><option value="long">Longest</option><option value="short">Shortest</option></select>
+          <select id="f-variant" aria-label="Variant"><option value="">All variants</option></select>
+          <select id="f-result" aria-label="Result"><option value="">All results</option><option value="1-0">1-0</option><option value="0-1">0-1</option><option value="1/2-1/2">½-½</option><option value="decisive">Decisive</option></select>
+          <select id="f-reason" aria-label="Ending"><option value="">All endings</option></select>
+          <input class="input sm num" id="f-min" type="number" min="0" placeholder="Min actions" aria-label="Minimum actions">
+          <input class="input sm num" id="f-max" type="number" min="0" placeholder="Max actions" aria-label="Maximum actions">
+          <select id="f-sort" aria-label="Sort"><option value="">File order</option><option value="long">Longest first</option><option value="short">Shortest first</option></select>
         </div>
       </div>
       <div class="table-wrap">
         <table class="games">
-          <thead><tr><th>#</th><th>Variant</th><th>White</th><th>Result</th><th>Black</th><th>Ending</th><th class="num">Actions</th><th class="num">Book</th></tr></thead>
+          <thead><tr><th class="num">#</th><th>Variant</th><th>White</th><th class="center">Result</th><th>Black</th><th>Ending</th><th class="num">Actions</th><th class="num">Book</th></tr></thead>
           <tbody id="games-body"></tbody>
         </table>
       </div>
@@ -215,19 +201,19 @@
 <dialog class="modal" id="dlg-load">
   <form method="dialog" class="modal-body">
     <h2>Load a game</h2>
-    <p class="muted">Paste an SPRT <code>--games-out</code> line (or several), a 5dpgn game, or a 5DUCI <code>position … moves …</code> line. You can also drop a file on the board.</p>
+    <p class="muted">Paste SPRT <code>--games-out</code> lines, a 5dpgn game or a 5DUCI <code>position … moves …</code> line, or drop a file on the board.</p>
     <textarea id="load-text" spellcheck="false" placeholder='{"game":0,"position":"size 8x8 odd fen [...]","book":6,"moves":"(0T1)e2e4 submit ...","evals":[...]}'></textarea>
-    <div class="row gap wrap">
+    <div class="load-row">
       <label class="field grow">
-        <span>Start position for records that do not name one</span>
+        <span>Start position, if the record has none</span>
         <input class="input" id="load-position" list="variant-list" placeholder="Standard, a variant name, or size 8x8 odd fen [...]">
       </label>
-      <label class="btn ghost file-btn">Open file…<input type="file" id="load-file" accept=".jsonl,.json,.5dpgn,.txt,.g" hidden></label>
+      <label class="btn file-btn">Open file<input type="file" id="load-file" accept=".jsonl,.json,.5dpgn,.txt,.g" hidden></label>
     </div>
     <div class="jsonl-pick hidden" id="load-pick"></div>
     <div class="error hidden" id="load-error"></div>
     <div class="modal-actions">
-      <button class="btn ghost" value="cancel">Cancel</button>
+      <button class="btn" value="cancel">Cancel</button>
       <button class="btn primary" id="load-go" value="default">Load</button>
     </div>
   </form>
@@ -237,10 +223,10 @@
   <form method="dialog" class="modal-body">
     <h2>New analysis board</h2>
     <label class="field"><span>Variant</span><select id="new-variant"></select></label>
-    <label class="field"><span>…or a 5DUCI position</span><input class="input" id="new-position" placeholder="size 8x8 odd fen [r*nbqk*bnr*/...:0:1:w]"></label>
+    <label class="field"><span>Or a 5DUCI position</span><input class="input" id="new-position" placeholder="size 8x8 odd fen [r*nbqk*bnr*/...:0:1:w]"></label>
     <div class="error hidden" id="new-error"></div>
     <div class="modal-actions">
-      <button class="btn ghost" value="cancel">Cancel</button>
+      <button class="btn" value="cancel">Cancel</button>
       <button class="btn primary" id="new-go" value="default">Create</button>
     </div>
   </form>
@@ -256,7 +242,7 @@
     </div>
     <textarea id="export-text" readonly spellcheck="false"></textarea>
     <div class="modal-actions">
-      <button class="btn ghost" value="cancel">Close</button>
+      <button class="btn" value="cancel">Close</button>
       <button class="btn primary" type="button" id="export-copy">Copy</button>
     </div>
   </form>
@@ -264,21 +250,21 @@
 
 <dialog class="modal" id="dlg-help">
   <form method="dialog" class="modal-body">
-    <h2>Keyboard &amp; mouse</h2>
+    <h2>Keyboard and mouse</h2>
     <table class="keys">
       <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Previous / next action</td></tr>
       <tr><td><kbd>Home</kbd> <kbd>End</kbd></td><td>Start / end of the line</td></tr>
       <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>Switch between variations</td></tr>
       <tr><td><kbd>Space</kbd></td><td>Auto-play</td></tr>
       <tr><td><kbd>E</kbd></td><td>Engine analysis on/off</td></tr>
-      <tr><td><kbd>Enter</kbd> / <kbd>Backspace</kbd> / <kbd>Esc</kbd></td><td>Submit / undo / clear the action you are building</td></tr>
+      <tr><td><kbd>Enter</kbd> <kbd>Backspace</kbd> <kbd>Esc</kbd></td><td>Submit / undo / clear the action you are building</td></tr>
       <tr><td><kbd>F</kbd> <kbd>P</kbd> <kbd>0</kbd></td><td>Flip, go to the present, fit all boards</td></tr>
       <tr><td><kbd>L</kbd></td><td>Load a game</td></tr>
-      <tr><td>Drag · wheel · pinch</td><td>Pan and zoom the multiverse</td></tr>
+      <tr><td>Drag, wheel, pinch</td><td>Pan and zoom</td></tr>
       <tr><td>Double-click a board</td><td>Zoom to that board</td></tr>
-      <tr><td>Click a piece, then a square</td><td>Make a move; play every board you must, then submit</td></tr>
+      <tr><td>Click a piece, then a square</td><td>Move; play every board you must, then submit</td></tr>
     </table>
-    <div class="modal-actions"><button class="btn primary" value="ok">Got it</button></div>
+    <div class="modal-actions"><button class="btn primary" value="ok">Close</button></div>
   </form>
 </dialog>
 
@@ -287,7 +273,7 @@
     <h2 id="confirm-title"></h2>
     <p class="muted" id="confirm-text"></p>
     <div class="modal-actions">
-      <button class="btn ghost" value="cancel" id="confirm-cancel">Cancel</button>
+      <button class="btn" value="cancel" id="confirm-cancel">Cancel</button>
       <button class="btn primary" value="ok" id="confirm-ok">OK</button>
     </div>
   </form>
@@ -295,27 +281,28 @@
 
 <datalist id="variant-list"></datalist>
 
-<!-- ============================== Icons (Lucide, ISC license; see icons/LICENSE.txt) -->
-<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<!-- ============================== Icons (after Lucide, ISC licence; see icons/LICENSE.txt) -->
+<svg width="0" height="0" style="position:absolute;left:0;top:0;overflow:hidden" aria-hidden="true">
   <defs>
-    <symbol id="i-logo" viewBox="0 0 32 32"><rect x="3" y="3" width="11" height="11" rx="2.5" fill="currentColor" opacity=".35"/><rect x="18" y="3" width="11" height="11" rx="2.5" fill="currentColor" opacity=".65"/><rect x="18" y="18" width="11" height="11" rx="2.5" fill="currentColor"/><path d="M8.5 14v4.5a5 5 0 0 0 5 5H17" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M14.5 20.5 17.5 23.5 14.5 26.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
     <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></symbol>
+    <symbol id="i-palette" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 12h18M12 3v18"/><rect x="3" y="3" width="9" height="9" fill="currentColor" stroke="none" opacity=".6"/><rect x="12" y="12" width="9" height="9" fill="currentColor" stroke="none" opacity=".6"/></symbol>
     <symbol id="i-keyboard" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/></symbol>
     <symbol id="i-fit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/></symbol>
-    <symbol id="i-target" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></symbol>
+    <symbol id="i-target" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5v14"/></symbol>
     <symbol id="i-minus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></symbol>
-    <symbol id="i-flip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></symbol>
+    <symbol id="i-flip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v18M7 21l-4-4M7 21l4-4M17 21V3M17 3l-4 4M17 3l4 4"/></symbol>
     <symbol id="i-upload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></symbol>
-    <symbol id="i-share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="m16 6-4-4-4 4"/><path d="M12 2v13"/></symbol>
-    <symbol id="i-first" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m11 17-5-5 5-5M18 17l-5-5 5-5"/></symbol>
-    <symbol id="i-prev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></symbol>
-    <symbol id="i-next" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></symbol>
-    <symbol id="i-last" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 17 5-5-5-5M13 17l5-5-5-5"/></symbol>
-    <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.4-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5Z"/></symbol>
-    <symbol id="i-pause" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></symbol>
-    <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-share" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></symbol>
+    <symbol id="i-flag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22V4M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
+    <symbol id="i-first" viewBox="0 0 24 24" fill="currentColor"><path d="M5 5h2v14H5zM19 5.5v13a.5.5 0 0 1-.8.4L9 12.4a.5.5 0 0 1 0-.8l9.2-6.5a.5.5 0 0 1 .8.4Z"/></symbol>
+    <symbol id="i-prev" viewBox="0 0 24 24" fill="currentColor"><path d="M16 5.5v13a.5.5 0 0 1-.8.4L6 12.4a.5.5 0 0 1 0-.8l9.2-6.5a.5.5 0 0 1 .8.4Z"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a.5.5 0 0 0 .8.4l9.2-6.5a.5.5 0 0 0 0-.8L8.8 5.1a.5.5 0 0 0-.8.4Z"/></symbol>
+    <symbol id="i-last" viewBox="0 0 24 24" fill="currentColor"><path d="M17 5h2v14h-2zM5 5.5v13a.5.5 0 0 0 .8.4l9.2-6.5a.5.5 0 0 0 0-.8L5.8 5.1a.5.5 0 0 0-.8.4Z"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a.5.5 0 0 0 .8.4l9.2-6.5a.5.5 0 0 0 0-.8L8.8 5.1a.5.5 0 0 0-.8.4Z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx=".5"/><rect x="14" y="5" width="4" height="14" rx=".5"/></symbol>
   </defs>
 </svg>
 </body>

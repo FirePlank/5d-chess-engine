@@ -58,11 +58,11 @@ export function confirmDialog(title, { text = '', ok = 'OK', danger = false } = 
 
 /** Engine score (White's view): "+1.23", "−0.40", "#3", "#−2". Units are hundredths. */
 export function fmtScore(s) {
-  if (!s) return '—';
+  if (!s) return '-';
   // Recorded mates (SPRT writes ±20000) carry no distance.
   if (s.mate != null && s.recorded) return s.mate > 0 ? '+#' : '−#';
   if (s.mate != null) return s.mate > 0 ? `#${s.mate}` : `#−${-s.mate}`;
-  if (s.cp == null) return '—';
+  if (s.cp == null) return '-';
   const v = s.cp / 100;
   const t = Math.abs(v).toFixed(Math.abs(v) >= 10 ? 1 : 2);
   return v > 0 ? `+${t}` : v < 0 ? `−${t}` : '0.00';

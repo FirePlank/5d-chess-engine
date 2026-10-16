@@ -214,7 +214,7 @@ export class Play {
     if (!g || !g.thinking) return;
     const engineBlack = g.humanColor === 'w';
     const score = info.cp != null ? { cp: engineBlack ? -info.cp : info.cp } : info.mate != null ? { mate: engineBlack ? -info.mate : info.mate } : null;
-    $('#play-thinking').textContent = `thinking · depth ${info.depth ?? '-'} · ${fmtScore(score)}${info.nps ? ' · ' + fmtNodes(info.nps) + 'n/s' : ''}`;
+    $('#play-thinking').textContent = `Depth ${info.depth ?? '-'} · ${fmtScore(score)}${info.nps ? ' · ' + fmtNodes(info.nps) + ' nodes/s' : ''}`;
   }
 
   showSetup(on) {
@@ -233,7 +233,7 @@ export class Play {
     $('#play-queue').classList.toggle('hidden', !!(s && s.queuePos != null));
     $('#play-unqueue').classList.toggle('hidden', !(s && s.queuePos != null));
     if (s && s.queuePos != null) {
-      $('#play-queue-text').textContent = s.canStart ? 'Kairos is free — start your game now!' : `You are number ${s.queuePos + 1} in the queue. You can watch the game meanwhile.`;
+      $('#play-queue-text').textContent = s.canStart ? 'Kairos is free: start your game now.' : `You are number ${s.queuePos + 1} in the queue. You can watch the game meanwhile.`;
     } else if (watching) {
       $('#play-queue-text').textContent = s.queue ? `${s.queue} waiting. You can watch the game live, or join the queue.` : 'You can watch the game live. Join the queue to play next.';
     }
@@ -252,10 +252,11 @@ export class Play {
       $('#clock-bottom-name').textContent = youName;
       this.clockSides = topBlack ? ['b', 'w'] : ['w', 'b'];
       let status;
-      if (g.over) status = `${g.over.result.replace('1/2-1/2', '½–½')} · ${g.over.reason}`;
+      if (g.over) status = `${g.over.result.replace('1/2-1/2', '½-½')} · ${g.over.reason}`;
       else if (g.toMove === human) status = mine ? 'Your move' : `${youName} to move`;
       else status = 'Kairos is thinking…';
       $('#play-status').textContent = status;
+      $('#play-status').classList.toggle('yours', !g.over && mine && g.toMove === human);
       if (!g.thinking) $('#play-thinking').textContent = g.over ? '' : (g.clock ? `${g.clock.base / 60000}+${g.clock.inc / 1000}` : `untimed · ${g.movetime / 1000} s per action`) + ` · ${g.variant}`;
       $('#play-resign').classList.toggle('hidden', !mine || !!g.over);
       $('#play-new').classList.toggle('hidden', !mine || !g.over);
@@ -275,10 +276,10 @@ export class Play {
 
   onView(v) {
     const chip = $('#status-chip');
-    chip.className = 'status-chip';
+    chip.className = 'status-line';
     const g = this.state && this.state.game;
-    if (v.status === 'checkmate') { chip.textContent = `Checkmate — ${v.player ? 'White' : 'Black'} wins`; chip.classList.add('over'); }
-    else if (v.status === 'stalemate') { chip.textContent = 'Stalemate — draw'; chip.classList.add('over'); }
+    if (v.status === 'checkmate') { chip.textContent = `Checkmate · ${v.player ? 'White' : 'Black'} wins`; chip.classList.add('over'); }
+    else if (v.status === 'stalemate') { chip.textContent = 'Stalemate · draw'; chip.classList.add('over'); }
     else if (g) {
       const side = v.player ? 'Black' : 'White';
       chip.textContent = `T${v.present} · ${side} to move${v.checks.length ? ' · in check' : ''}`;

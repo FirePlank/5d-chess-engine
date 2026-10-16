@@ -48,7 +48,7 @@ export class Games {
     const groups = new Map();
     for (const f of this.files) {
       if (q && !f.id.toLowerCase().includes(q)) continue;
-      const g = f.id.includes('/') ? f.id.slice(f.id.indexOf(':') + 1, f.id.lastIndexOf('/')) : '(top)';
+      const g = f.dir || 'games';
       if (!groups.has(g)) groups.set(g, []);
       groups.get(g).push(f);
     }
