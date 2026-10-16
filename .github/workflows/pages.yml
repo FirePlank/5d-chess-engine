@@ -1,0 +1,67 @@
+# The static site on GitHub Pages: analysis board, play against Kairos and the game browser,
+# all in the browser on the WASM engine (scripts/build_pages.sh). Rebuilt on every push to main
+# that touches the engine or the site.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'web/**'
+      - 'data/**'
+      - 'build.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'scripts/build_pages.sh'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust with the wasm32-wasip1-threads target
+        run: |
+          rustup toolchain install stable --profile minimal --target wasm32-wasip1-threads
+          rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: pages
+          workspaces: web/wasm -> target
+
+      - name: Build the browser engine
+        run: cargo wasm
+
+      - name: Assemble the site
+        run: bash scripts/build_pages.sh _site
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
