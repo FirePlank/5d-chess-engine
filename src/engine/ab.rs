@@ -16,7 +16,7 @@ use crate::core::check_position::{BoardOverlay, CheckBuf, CheckKind, CheckPositi
 use crate::core::hypercuboid::{has_physical_check, interrupt_on, interrupted, plays_wasted_move, BestFirstCursor, Entry, HcCursor, HcInfo, NeedBranch};
 use crate::core::multiverse::next_turn;
 use crate::core::piece::*;
-use crate::core::state::{Mark, MateType, State};
+use crate::core::state::{Mark, State};
 use crate::misc::geometry::SearchSpace;
 use crate::misc::integer_set::Index;
 use crate::misc::ordering::{AxisOrders, HcOrdering};
@@ -45,10 +45,6 @@ const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
 const ROOT_LMR_MIN_INDEX: usize = 6;
-/// Root actions with a move on an optional board tried for a checkmate in one.
-const ROOT_FUTURE_MATE_PROBE: usize = 16;
-/// Time for that probe without a time plan (with one: a 32nd of the optimum).
-const ROOT_FUTURE_MATE_MS: u64 = 50;
 
 /// Late move reduction for the `index`-th action at `depth`: 1 + ln(depth) ln(index) / 3.
 #[inline]
@@ -824,86 +820,6 @@ impl AlphaBeta {
             out.hcs.push(h);
         }
         out
-    }
-
-    /// A checkmate in one among the root actions `without_future` leaves out: a piece that
-    /// travels back from a board the side to move need not play (ahead of the present, or
-    /// on an inactive timeline) and gives check on arrival, with moves on the boards that must
-    /// be played. Only the first `ROOT_FUTURE_MATE_PROBE` actions (best first) of each such
-    /// travel are tried. Proving that a travel has no legal action at all can take seconds:
-    /// the caller bounds the time (see `interrupt_on`).
-    fn future_mate_in_one(&mut self, s: &State, info: &HcInfo, ss: &SearchSpace) -> Option<MoveSeq> {
-        let present = s.get_present();
-        let (amin, amax) = s.get_active_range();
-        let (lo, hi) = s.get_lines_range();
-        let optional: Vec<usize> = (lo..=hi)
-            .filter(|&l| !(l >= amin && l <= amax && s.get_timeline_end(l) == present))
-            .filter_map(|l| info.line_to_axis(l))
-            .collect();
-        if optional.is_empty() {
-            return None;
-        }
-        // Checking travels from optional boards: departure (axis, coordinate) and, unless the
-        // travel branches off a new timeline, arrival (axis, coordinate).
-        let fba = info.first_branch_axis();
-        let mut travels = Vec::new();
-        let mut scratch = OrderScratch::default();
-        let mut det = CheckDetector::new(info, s, &mut scratch);
-        let u = info.get_universe();
-        // Branch axes share their entries: the first one stands for all.
-        for n in 0..info.dimension().min(fba + 1) {
-            for i in u[n].iter() {
-                if let Entry::Arriving { idx, fa, .. } = info.entry(n, i) {
-                    let t = (*fa as usize, *idx, if n < fba { Some((n, i)) } else { None });
-                    if optional.contains(&t.0) && !travels.contains(&t) && det.gives_check(n, i) {
-                        travels.push(t);
-                    }
-                }
-            }
-        }
-        det.finish(&mut scratch);
-        let mut cursor = BestFirstCursor::default();
-        let mut work = s.clone();
-        work.enable_undo();
-        for (k, &(fa, idx, arrival)) in travels.iter().enumerate() {
-            let mut space = SearchSpace::default();
-            for hc in &ss.hcs {
-                if !hc[fa].contains(idx)
-                    || optional.iter().any(|&p| p != fa && !hc[p].contains(0))
-                    || arrival.is_some_and(|(n, i)| !hc[n].contains(i))
-                {
-                    continue;
-                }
-                let mut h = hc.clone();
-                for &p in &optional {
-                    h[p].assign_singleton(if p == fa { idx } else { 0 });
-                }
-                if let Some((n, i)) = arrival {
-                    h[n].assign_singleton(i);
-                }
-                space.hcs.push(h);
-            }
-            if k == 0 {
-                self.start_actions(s, info, &mut cursor, &mut scratch, space, false);
-            } else {
-                cursor.restart(info, space);
-            }
-            for _ in 0..ROOT_FUTURE_MATE_PROBE {
-                let act = cursor.next(info, s);
-                // An interrupted enumeration finds no action, mate or not.
-                if interrupted() {
-                    return None;
-                }
-                let Some(act) = act else { break };
-                let mark = Self::make(&mut work, &act);
-                let mate = self.in_check(&work) && work.get_mate_type() == MateType::Checkmate;
-                work.unmake(mark);
-                if mate && !interrupted() {
-                    return Some(act);
-                }
-            }
-        }
-        None
     }
 
     /// Order the node's coordinates into `cursor` and start it on `ss`.
@@ -1861,14 +1777,6 @@ impl AlphaBeta {
 
         // Root actions (all of them, up to the root cap), ordered heuristically.
         let (hc, ss) = HcInfo::build_hc(root);
-        // The root (like every node) leaves out moves on optional boards: a mate in one by a
-        // travel back from one of them is played unless the search finds a mate in one.
-        let future_mate = {
-            let budget = plan.as_ref().map_or(ROOT_FUTURE_MATE_MS, |p| (p.optimum / 32).max(1));
-            let end = Instant::now() + Duration::from_millis(budget);
-            let _probe = interrupt_on(stop, Some(deadline.map_or(end, |d| d.min(end))));
-            self.future_mate_in_one(root, &hc, &ss)
-        };
         let mut agen = BestFirstCursor::default();
         self.start_actions(root, &hc, &mut agen, &mut OrderScratch::default(), Self::without_future(root, &hc, &ss), false);
         let mut full = Some(ss);
@@ -1913,20 +1821,11 @@ impl AlphaBeta {
         // Every legal root action is searched (for proving that the root is mated).
         let roots_complete = complete && !full.as_ref().is_some_and(|f| Self::trims_future(root, &hc, f));
         // A forced action on the clock is played at once.
-        if complete && roots.len() == 1 && plan.as_ref().is_some_and(|p| p.clock) && future_mate.is_none() {
+        if complete && roots.len() == 1 && plan.as_ref().is_some_and(|p| p.clock) {
             return Some(Action::from_moveseq(&roots[0].1, root));
         }
         roots.sort_by(|a, b| b.0.cmp(&a.0));
-        let best = self.search_roots(root, roots, roots_complete, max_depth, start, plan.as_ref(), info, None);
-        match future_mate {
-            Some(m) if self.last_score < MATE - 1 => {
-                info(self.info_text(root, 1, MATE - 1, std::slice::from_ref(&m), self.nodes, start.elapsed().as_secs_f64(), 1));
-                self.last_score = MATE - 1;
-                self.resume = None;
-                Some(Action::from_moveseq(&m, root))
-            }
-            _ => best,
-        }
+        self.search_roots(root, roots, roots_complete, max_depth, start, plan.as_ref(), info, None)
     }
 
     /// Search the ordered root actions `roots` (Lazy SMP with helpers when `Threads` > 1),
@@ -2263,28 +2162,5 @@ mod tests {
         // Back to one thread: the helpers are dropped.
         e.set_option("Threads", &OptionValue::Int(1));
         assert!(e.helpers.is_empty());
-    }
-
-    /// Mate in one by (0T10)Bf1>>(0T4)f7: the bishop travels back from a board ahead of the
-    /// present, which the root's actions leave out (tactics suite, T0 1.e3 Ng4 line).
-    #[test]
-    fn mate_in_one_by_travel_from_a_future_board() {
-        let s = crate::core::perft::parse_g_line(
-            "G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:0:b] \
-             [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w] moves (0T1)e2e3 submit \
-             (0T1)g8f6 submit (0T2)g1f3 submit (0T2)f6g4 submit (0T3)f3g5 submit (0T3)f7f5 submit (0T4)d1g4 submit \
-             (0T4)f5g4 submit (0T5)g5f7 submit (0T5)e7e6 submit (0T6)f7d8 submit (0T6)e8d8 submit (0T7)a2a3 submit \
-             (0T7)b8a6 submit (0T8)f2f4 submit (0T8)a6c5 submit (0T9)g2g3 submit (0T9)f8(0T3)f2 submit \
-             (-1T4)e1(0T5)d1 submit (-1T4)e7e6 submit",
-        )
-        .unwrap();
-        let mut e = AlphaBeta::new();
-        let stop = AtomicBool::new(false);
-        let mut last = String::new();
-        let a = e.find_best_move(&s, &Limits { depth: Some(3), ..Default::default() }, &stop, &mut |m| last = m).unwrap();
-        let seq: MoveSeq = a.moves().iter().map(|m| m.fm).collect();
-        assert_eq!(AlphaBeta::child(&s, &seq).get_mate_type(), MateType::Checkmate, "played {:?}", seq);
-        assert_eq!(e.last_score(), MATE - 1);
-        assert!(last.contains("score mate 1 "), "{}", last);
     }
 }
