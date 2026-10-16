@@ -1424,7 +1424,12 @@ impl AlphaBeta {
         }
         let bound = if best > alpha0 { Bound::Exact } else { Bound::Upper };
         let proven = mate_proven(best, best_proven, all_proven);
-        self.tt_store(key, depth, bound, mate_to_tt(best, ply), proven, &best_action);
+        // A fail-low with actions the action cap left unsearched bounds nothing: one of those
+        // might score higher (e.g. the only mating move), and a stored "at most" would poison
+        // deeper searches of this node.
+        if bound != Bound::Upper || (exhausted && !skipped) {
+            self.tt_store(key, depth, bound, mate_to_tt(best, ply), proven, &best_action);
+        }
         self.proven = proven;
         best
     }
