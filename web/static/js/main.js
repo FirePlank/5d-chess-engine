@@ -142,6 +142,17 @@ async function main() {
   });
   bindKeys();
   showBuild();
+  // The Analysis tab, clicked while already on Analysis, starts over with a new board.
+  document.querySelector('.site-nav a[data-route="analysis"]').addEventListener('click', (e) => {
+    if (app.route !== 'analysis') return;
+    e.preventDefault();
+    const a = app.pages.analysis;
+    a.stopAutoplay();
+    a.loadedKey = null;
+    a.input.reset();
+    a.newGame('Standard');
+    history.replaceState(null, '', '#/analysis');
+  });
 
   app.server = await serverInfo();
   app.pages = { analysis: new Analysis(app), play: new Play(app), games: new Games(app), rules: rulesPage() };
