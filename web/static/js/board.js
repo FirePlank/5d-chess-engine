@@ -92,10 +92,10 @@ export class MultiverseView {
     this.colors = {
       bg: v('--mv-bg'), lane: v('--mv-lane'), text: v('--mv-text'), textStrong: v('--mv-text-strong'),
       frameW: v('--mv-frame-w'), frameB: v('--mv-frame-b'), outline: v('--mv-outline'), present: v('--mv-present'),
-      branch: v('--mv-branch'), inactive: parseFloat(v('--mv-inactive')) || 0.5,
+      branch: v('--mv-branch'), presentEdge: v('--mv-present-edge'), inactive: parseFloat(v('--mv-inactive')) || 0.5,
       light: v('--sq-light'), dark: v('--sq-dark'), last: v('--hl-last'), select: v('--hl-select'), target: v('--hl-target'),
       draft: v('--hl-draft'), check: v('--hl-check'), arMove: v('--ar-move'), arCheck: v('--ar-check'), arPv: v('--ar-pv'),
-      arDraft: v('--ar-draft'), accent: v('--accent'), font: getComputedStyle(document.body).fontFamily,
+      arDraft: v('--ar-draft'), peek: v('--hl-peek'), peekSelect: v('--hl-peek-select'), accent: v('--accent'), font: getComputedStyle(document.body).fontFamily,
     };
     this.redraw();
   }
@@ -329,7 +329,7 @@ export class MultiverseView {
       if (key !== this.hoverKey) {
         this.hoverKey = key;
         this.overlay.hover = sq;
-        cv.classList.toggle('pointing', !!sq && !this.overlay.readonly && this.isInteresting(sq));
+        cv.classList.toggle('pointing', !!sq && ((!this.overlay.readonly && this.isInteresting(sq)) || this.isPeekable(sq)));
         if (this.onHover) this.onHover(sq);
         this.redraw();
       }
@@ -366,6 +366,18 @@ export class MultiverseView {
       this.frame(x - 0.6, y - 0.6, x + this.bw + 0.6, y + this.bh + 0.6, true, 110);
     });
     cv.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+
+  /** The piece on a square, if any. */
+  pieceAt(sq) {
+    const b = this.boards.get(`${sq.l},${sq.v}`);
+    return b ? b.squares[sq.y * this.bw + sq.x] : null;
+  }
+
+  /** A piece on a board of its own colour (its side's turn there): its moves can be shown. */
+  isPeekable(sq) {
+    const pc = this.pieceAt(sq);
+    return !!pc && (pc.p === pc.p.toLowerCase() ? 1 : 0) === sq.c;
   }
 
   /** Squares worth a pointer cursor: own pieces on playable boards and move targets. */
@@ -432,8 +444,14 @@ export class MultiverseView {
     {
       const ya = this.boardY(aMin), yb = this.boardY(aMax);
       const lo = Math.min(ya, yb) - GAP_Y / 2, hi = Math.max(ya, yb) + this.bh + GAP_Y / 2;
+      const px0 = this.boardX(presentV) - GAP_X / 2;
       ctx.fillStyle = C.present;
-      ctx.fillRect(this.boardX(presentV) - GAP_X / 2, lo, this.px, hi - lo);
+      ctx.fillRect(px0, lo, this.px, hi - lo);
+      // Its edges, so the present reads as a line through the active timelines.
+      ctx.fillStyle = C.presentEdge;
+      const ew = Math.max(0.06, 2 * px1);
+      ctx.fillRect(px0, lo, ew, hi - lo);
+      ctx.fillRect(px0 + this.px - ew, lo, ew, hi - lo);
     }
     // Branch connectors and timeline continuity, behind the boards.
     ctx.strokeStyle = C.branch;
@@ -580,13 +598,14 @@ export class MultiverseView {
       ctx.fillRect(cx - 0.5, cy - 0.5, 1, 1);
     }
     if (o.hover && !o.readonly && this.isInteresting(o.hover)) fill(o.hover.l, o.hover.v, o.hover.x, o.hover.y, 'rgba(255,255,255,.18)');
-    if (o.selected) fill(o.selected.l, 2 * o.selected.t + o.selected.c, o.selected.x, o.selected.y, C.select);
+    if (o.selected) fill(o.selected.l, 2 * o.selected.t + o.selected.c, o.selected.x, o.selected.y, o.peek ? C.peekSelect : C.select);
+    const tc = o.targetColor ?? v.player;
     for (const t of o.targets) {
-      const vv = 2 * t[1] + v.player;
+      const vv = 2 * t[1] + tc;
       const b = this.boards.get(`${t[0]},${vv}`);
       if (!b) continue;
       const [cx, cy] = this.squareCenter(t[0], vv, t[2], t[3]);
-      ctx.fillStyle = C.target;
+      ctx.fillStyle = o.peek ? C.peek : C.target;
       if (b.squares[t[3] * this.bw + t[2]]) {
         // A capture: the square's corners, like lichess.
         const [x0, y0] = [cx - 0.5, cy - 0.5];
@@ -680,8 +699,8 @@ export class MultiverseView {
       if (t % step && t !== presentT) continue;
       const [sx] = this.toScreen(this.boardX(2 * t) + this.bw / 2, 0);
       if (sx < 34 || sx > this.w - 16) continue;
-      ctx.fillStyle = t === presentT ? C.textStrong : C.text;
-      ctx.fillText('T' + t, sx, 11);
+      ctx.fillStyle = t === presentT ? C.presentEdge : C.text;
+      ctx.fillText(t === presentT && s * this.px > 70 ? `T${t} · present` : 'T' + t, sx, 11);
     }
   }
 }

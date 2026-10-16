@@ -105,7 +105,8 @@ impl Api {
                     .ok_or("bad from")?
                     .fm
                     .from;
-                let t = self.game()?.targets(id, &draft, from)?;
+                let color = j.get("color").int().map(|c| c != 0);
+                let t = self.game()?.piece_targets(id, &draft, from, color)?;
                 Ok(ok(obj![("targets", Json::Arr(t.into_iter().map(v4).collect()))]))
             }
             "check_move" => {

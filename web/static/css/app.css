@@ -49,6 +49,7 @@ html[data-theme="dark"] {
   --mv-frame-b: #0b0a09;
   --mv-outline: rgba(255, 255, 255, .10);
   --mv-present: rgba(54, 146, 231, .06);
+  --mv-present-edge: rgba(80, 160, 235, .75);
   --mv-branch: rgba(186, 186, 186, .28);
   --mv-inactive: .45;
 }
@@ -84,6 +85,7 @@ html[data-theme="light"] {
   --mv-frame-b: #2e2b28;
   --mv-outline: rgba(0, 0, 0, .14);
   --mv-present: rgba(27, 120, 208, .08);
+  --mv-present-edge: rgba(27, 120, 208, .7);
   --mv-branch: rgba(60, 60, 60, .25);
   --mv-inactive: .5;
 }
@@ -97,6 +99,8 @@ html {
   --hl-select: rgba(20, 85, 30, .5);
   --hl-target: rgba(20, 85, 30, .45);
   --hl-draft: rgba(54, 146, 231, .45);
+  --hl-peek: rgba(200, 70, 40, .5);
+  --hl-peek-select: rgba(200, 70, 40, .38);
   --hl-check: #e22;
   --ar-move: rgba(21, 120, 27, .78);
   --ar-check: rgba(170, 30, 30, .82);
@@ -230,8 +234,16 @@ textarea { width: 100%; height: 180px; padding: var(--s2); font: 12.5px/1.5 var(
 .tool:hover { color: var(--strong); background: var(--hover); }
 .tool.on { color: var(--accent); }
 
+.mv-hud {
+  position: absolute; left: var(--s2); bottom: var(--s2); display: flex; flex-wrap: wrap; gap: var(--s1);
+  max-width: calc(100% - 200px); pointer-events: none;
+}
+.mv-hud:empty { display: none; }
+.hud-item { display: inline-flex; align-items: center; gap: 6px; padding: 3px var(--s2); border-radius: var(--r-sm); background: var(--panel); color: var(--text); font-size: 12.5px; box-shadow: 0 1px 2px rgba(0, 0, 0, .25); white-space: nowrap; }
+.hud-item b { color: var(--strong); font-weight: 600; }
+.hud-item .muted { color: var(--muted); }
 .coord-chip {
-  position: absolute; left: var(--s2); bottom: var(--s2); padding: 1px var(--s2); border-radius: var(--r-sm);
+  position: absolute; right: 52px; bottom: var(--s2); padding: 1px var(--s2); border-radius: var(--r-sm);
   font-size: 12px; background: var(--panel); color: var(--muted); pointer-events: none; font-variant-numeric: tabular-nums;
 }
 .coord-chip:empty { display: none; }
@@ -439,4 +451,5 @@ table.games { width: 100%; border-collapse: collapse; font-size: 13px; }
   .board-tools { flex-direction: row; top: auto; bottom: var(--s2); right: var(--s2); }
   .draft-bar { bottom: 52px; }
   .coord-chip { display: none; }
+  .mv-hud { max-width: calc(100% - 16px); bottom: 52px; }
 }
