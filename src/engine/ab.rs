@@ -76,13 +76,6 @@ const SAC_PREP_DIV: u64 = 100;
 /// it beats beta by RFP_MARGIN per ply.
 const RFP_DEPTH: i32 = 2;
 const RFP_MARGIN: i32 = 200;
-/// RFP margin cut (/1024 of RFP_MARGIN) when the side to move is improving and when the
-/// opponent's last action worsened its position: Apeiron's 2474 and 600, scaled from its RFP
-/// depth range (14) to ours (RFP_DEPTH).
-const RFP_IMPROVING_MULT: i32 = 2474 * RFP_DEPTH / 14;
-const RFP_WORSENING_MULT: i32 = 600 * RFP_DEPTH / 14;
-/// `eval_stack` entry of a node in check (no static evaluation).
-const NO_EVAL: i32 = i32::MIN;
 /// Null move (a pass, i.e. a phantom turn): at non-PV nodes from this depth, when the static
 /// eval is at least beta, search the pass with depth reduced by NMP_R + depth / NMP_DIV.
 const NMP_MIN_DEPTH: i32 = 3;
@@ -336,8 +329,6 @@ pub struct AlphaBeta {
     tt: Arc<TtTable>,
     history: Vec<i32>,
     killers: Vec<[Option<MoveSeq>; 2]>,
-    /// Per ply: the static evaluation of the node being searched there (`NO_EVAL` in check).
-    eval_stack: Vec<i32>,
     /// Per ply: the last evasion that failed high in quiescence (tried before building).
     qkillers: Vec<Option<MoveSeq>>,
     nodes: u64,
@@ -621,7 +612,6 @@ impl AlphaBeta {
             tt,
             history: vec![0; 1 << 16],
             killers: vec![[None, None]; MAX_PLY + 1],
-            eval_stack: vec![NO_EVAL; MAX_PLY + 2],
             qkillers: vec![None; MAX_PLY + 1],
             nodes: 0,
             deadline: None,
@@ -1318,24 +1308,11 @@ impl AlphaBeta {
             None => {}
         }
 
-        // Improving: the static evaluation beats the same side's two plies up (as in Apeiron;
-        // true near the root, false in check). Worsening: the opponent's last action left the
-        // side to move better off than the opponent's own evaluation said.
-        let in_check = known_check.unwrap_or_else(|| self.in_check(s));
-        let eval = if in_check { NO_EVAL } else { self.static_eval(s) };
-        self.eval_stack[ply] = eval;
-        let improving = eval != NO_EVAL
-            && match ply.checked_sub(2).map(|p| self.eval_stack[p]) {
-                None => true,
-                Some(NO_EVAL) => false,
-                Some(e2) => eval > e2,
-            };
-        let worsening = eval != NO_EVAL && ply >= 1 && self.eval_stack[ply - 1] != NO_EVAL && eval > -self.eval_stack[ply - 1];
-        if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !in_check {
+        if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| self.in_check(s)) {
             if depth <= RFP_DEPTH {
-                let cut = (improving as i32 * RFP_IMPROVING_MULT + worsening as i32 * RFP_WORSENING_MULT) * RFP_MARGIN / 1024;
-                if eval - (RFP_MARGIN * depth - cut) >= beta {
-                    return eval;
+                let e = self.static_eval(s);
+                if e - RFP_MARGIN * depth >= beta {
+                    return e;
                 }
             }
             if depth >= NMP_MIN_DEPTH && !self.seek_mate && Self::has_null_material(s) && self.static_eval(s) >= beta {
@@ -1359,10 +1336,8 @@ impl AlphaBeta {
         let mut searched = 0usize;
         // Mate proof: the best reply's, and every searched reply's (see `proven`).
         let (mut best_proven, mut all_proven) = (false, true);
-        // Apeiron's late-move count halves when not improving; here the table is the count
-        // when not improving and an improving node searches twice as many.
         let cap = {
-            let base = LMP[(depth as usize).min(LMP.len() - 1)] * (1 + improving as usize);
+            let base = LMP[(depth as usize).min(LMP.len() - 1)];
             if pv { base * PV_CAP_MULT } else { base }
         };
 
@@ -2078,8 +2053,6 @@ impl AlphaBeta {
         work.enable_undo();
         let mut best: MoveSeq = resume.map_or_else(|| roots[0].1.clone(), |r| r.best.clone());
         let mut best_score: i32 = resume.map_or(0, |r| r.score);
-        // The root's evaluation, for the improving and worsening tests of plies 1 and 2.
-        self.eval_stack[0] = if self.in_check(&work) { NO_EVAL } else { self.static_eval(&work) };
         // `best_score` is a proven mate (see `proven`): only then is it reported as a mate.
         let mut best_proven = resume.is_some_and(|r| r.proven);
         // The line of `best`, from the PV table of the depth that chose it.
