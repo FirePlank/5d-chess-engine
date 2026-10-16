@@ -107,3 +107,22 @@ fn castling_with_rooks_off_the_corners() {
     let k = targets(&s, 0, 1, 4, 0);
     assert!(!k.contains(&(0, 1, 2, 0)) && !k.contains(&(0, 1, 6, 0)), "illegal castling: {:?}", k);
 }
+
+#[test]
+fn a_brawn_on_its_own_back_rank_does_not_promote_moving_through_time() {
+    // Black's brawn on a5 (its own back rank) can step to another timeline and stay on rank 5;
+    // only the far rank promotes (a game a user reported: the brawn came out a queen).
+    let s = parse_g_line("G 1 size 5x5 even fen [w3k/5/5/5/K4:-0:1:b][4k/5/5/5/K4:+0:1:b]").unwrap();
+    let mut jumps = Vec::new();
+    for (l, t, black, _) in s.get_boards() {
+        if t == 1 && black && s.board(l, 1, true).get_piece(kairos::core::piece::ppos(0, 4)) == kairos::core::piece::BRAWN_B {
+            jumps.extend(targets(&s, l, 1, 0, 4).into_iter().filter(|q| q.0 != l && q.3 == 4).map(|q| (l, q)));
+        }
+    }
+    assert!(!jumps.is_empty(), "no back-rank jump for the brawn");
+    for (l, (tl, tt, tx, ty)) in jumps {
+        let fm = kairos::core::action::FullMove::new(Vec4::new(0, 4, 1, l), Vec4::new(tx, ty, tt, tl));
+        let e = s.normalize_promotion(kairos::core::action::ExtMove::new(fm, kairos::core::piece::NO_PIECE)).unwrap();
+        assert_eq!(e.promote_to, kairos::core::piece::NO_PIECE, "promoted on its own back rank: {:?}", fm);
+    }
+}

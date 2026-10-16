@@ -16,6 +16,7 @@ use crate::core::check_position::{BoardOverlay, CheckBuf, CheckKind, CheckPositi
 use crate::core::hypercuboid::{has_physical_check, interrupt_on, interrupted, plays_wasted_move, BestFirstCursor, Entry, HcCursor, HcInfo, NeedBranch};
 use crate::core::multiverse::next_turn;
 use crate::core::piece::*;
+use crate::core::state::promotion_rank;
 use crate::core::state::{Mark, MateType, State};
 use crate::misc::geometry::SearchSpace;
 use crate::misc::integer_set::Index;
@@ -720,7 +721,7 @@ impl AlphaBeta {
                 } else {
                     sc += history.unwrap_or_else(|| self.history[history_index_of(mover, m)]).clamp(-5000, 5000);
                 }
-                if (mover == PAWN_W || mover == BRAWN_W) && (m.to.y() == 0 || m.to.y() == s.get_board_size().1 - 1) {
+                if (mover == PAWN_W || mover == BRAWN_W) && m.to.y() == promotion_rank(s.get_board_size().1, s.get_present().1) {
                     sc += 9000;
                 }
                 if m.from.tl() != m.to.tl() && victim == NO_PIECE {
@@ -993,7 +994,7 @@ impl AlphaBeta {
         act.iter().any(|m| {
             let (pc, victim) = mover_victim(s, m);
             victim != NO_PIECE
-                || ((pc == PAWN_W || pc == BRAWN_W) && (m.to.y() == 0 || m.to.y() == h - 1) && m.from.tl() == m.to.tl())
+                || ((pc == PAWN_W || pc == BRAWN_W) && m.to.y() == promotion_rank(h, s.get_present().1) && m.from.tl() == m.to.tl())
         })
     }
 
