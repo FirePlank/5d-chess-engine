@@ -78,9 +78,8 @@ impl MoveSeq {
         if self.len == 0 {
             return None;
         }
-        let m = self.as_slice()[self.len as usize - 1];
         self.len -= 1;
-        Some(m)
+        Some(self.as_slice()[self.len as usize])
     }
 
     pub fn clear(&mut self) {

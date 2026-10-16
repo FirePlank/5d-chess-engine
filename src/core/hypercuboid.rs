@@ -85,9 +85,6 @@ pub struct HcInfo {
     branch_entries: Vec<Entry>,
     /// The branch axes' arrivals: (move, departure coordinate, departure axis, moving piece).
     branch_moves: Vec<(FullMove, Index, u32, Piece)>,
-    /// Per existing axis: the branch coordinates landing on its timeline's last board (built
-    /// with the branch entries).
-    branch_onto: Vec<IntegerSet>,
     branch_ready: bool,
     dim: usize,
     universe: Hc,
@@ -430,18 +427,6 @@ impl AxisGroups {
     }
 }
 
-/// The present after a point (see `HcInfo::present_after`): the number of new timelines,
-/// the active range, and the timeline holding the present (the first active one ending
-/// earliest) with its end (a half-turn).
-#[derive(Clone, Copy)]
-struct PresentAfter {
-    k: usize,
-    amin: i32,
-    amax: i32,
-    w_line: i32,
-    w_v: i32,
-}
-
 /// Reusable buffers for `HcInfo::take_point`; the point taken is left in `point`.
 #[derive(Default)]
 pub struct PointScratch {
@@ -470,36 +455,6 @@ fn arrival_board(s: &State, m: FullMove) -> Board {
     }
     nb.place_from(q.xy(), src, p.xy());
     nb
-}
-
-/// The wasted moves (indices) of an action whose moves `mvs` were just played on `after`
-/// (move `i` created a timeline when `branching(i)`). With a timeline created by the
-/// action, a move that creates none is wasted when every board it creates (on its timeline,
-/// and on its departure timeline for a jump) stays out of the present: on a timeline
-/// inactive now, or ending after the present. A move played on a board that a
-/// timeline-creating move of the action then lands on is not wasted (it is what makes that
-/// move create a timeline). The legal-action search never yields an action with a wasted
-/// move (see `HcInfo::wasted_problem`): without its wasted moves it is legal as well.
-pub fn wasted_moves(after: &State, mvs: &[FullMove], branching: impl Fn(usize) -> bool) -> Vec<usize> {
-    if !(0..mvs.len()).any(&branching) {
-        return Vec::new();
-    }
-    let (t, c) = after.apparent_present();
-    let present = 2 * t + c as i32;
-    let (amin, amax) = after.get_active_range();
-    let out = |l: i32| l < amin || l > amax || after.multiverse().timeline_end_v(l) > present;
-    let landed = |b: Vec4| mvs.iter().enumerate().any(|(j, m)| branching(j) && m.to.tl() == b);
-    (0..mvs.len())
-        .filter(|&i| {
-            let m = mvs[i];
-            !branching(i) && out(m.to.l()) && out(m.from.l()) && !landed(m.to.tl()) && !landed(m.from.tl())
-        })
-        .collect()
-}
-
-/// Whether `wasted_moves` finds a wasted move.
-pub fn plays_wasted_move(after: &State, mvs: &[FullMove], branching: impl Fn(usize) -> bool) -> bool {
-    !wasted_moves(after, mvs, branching).is_empty()
 }
 
 /// True if a royal piece of `defender`'s color is attacked on this board.
@@ -687,7 +642,6 @@ impl HcInfo {
             axis_coords,
             branch_entries,
             branch_moves,
-            branch_onto: _,
             branch_ready,
             dim,
             universe,
@@ -967,20 +921,11 @@ impl HcInfo {
         if self.branch_ready {
             return;
         }
-        let np = self.new_axis;
-        if self.branch_onto.len() < np {
-            self.branch_onto.resize_with(np, IntegerSet::new);
-        }
-        self.branch_onto[..np].iter_mut().for_each(|o| o.clear());
-        for (i, &(m, dep, fa, mover)) in self.branch_moves.iter().enumerate() {
+        for &(m, dep, fa, mover) in &self.branch_moves {
             let victim = s.board(m.to.l(), m.to.t(), self.player).kind(m.to.xy());
             self.branch_entries.push(Entry::Arriving { m, b: arrival_board(s, m), idx: dep, fa, mover, victim });
-            if let Some(a) = self.line_to_axis(m.to.l()).filter(|&a| a < np) {
-                if s.get_timeline_end(m.to.l()) == (m.to.t(), self.player) {
-                    self.branch_onto[a].insert(i as Index + 1);
-                }
-            }
         }
+        let np = self.new_axis;
         self.groups[np].rebuild(&self.branch_entries, 1, np, &mut self.scratch.group_slots);
         self.branch_ready = true;
     }
@@ -1107,10 +1052,7 @@ impl HcInfo {
 
     pub fn find_problem(&self, s: &State, p: &Point, hc: &Hc, buf: &mut CheckBuf) -> Option<Slice> {
         let jp = crate::misc::prof::scope(3);
-        let r = self.jump_order_consistent(s, p, hc).or_else(|| {
-            let pa = self.present_after(s, p)?;
-            self.present_problem(s, p, &pa).or_else(|| self.wasted_problem(s, p, &pa))
-        });
+        let r = self.jump_order_consistent(s, p, hc).or_else(|| self.test_present(s, p, hc));
         drop(jp);
         if r.is_some() {
             return r;
@@ -1179,73 +1121,44 @@ impl HcInfo {
         None
     }
 
-    /// The active range once `k` new timelines exist. Every bound only widens as `k` grows,
-    /// so a timeline active with `k` new ones is active with more, and one inactive with `k`
-    /// is inactive with fewer.
-    fn active_after(&self, st: &State, k: usize) -> (i32, i32) {
+    /// Whether the point moves the present; if not, a slice of points that fail for the same
+    /// reason. The new present is computed exactly: moved timelines advance one half-turn, new
+    /// timelines start after their arrival, and the active range is recomputed from the final
+    /// timeline span (which can reactivate old timelines).
+    pub fn test_present(&self, st: &State, p: &Point, _hc: &Hc) -> Option<Slice> {
+        let (_, c) = st.get_present();
         let (l_min, l_max) = st.get_lines_range();
-        let (a, b) = if self.player { (l_min - k as i32, l_max) } else { (l_min, l_max + k as i32) };
-        super::multiverse::active_range_for(st.multiverse().layout(), a, b)
-    }
-
-    /// The end (half-turn) of the timeline the `j`-th branch axis of `p` creates.
-    #[inline]
-    fn new_end(&self, p: &Point, j: usize) -> i32 {
-        match self.entry(self.new_axis + j, p[self.new_axis + j]) {
-            Entry::Arriving { m, .. } => 2 * m.to.t() + self.player as i32 + 1,
-            _ => unreachable!("null branch coordinate inside the branch prefix"),
+        // New timelines in creation order (the branch axes form a prefix).
+        let mut new_ends: Vec<i32> = Vec::new();
+        let mut k = 0;
+        for n in self.new_axis..self.dim {
+            match self.entry(n, p[n]) {
+                Entry::Arriving { m, .. } => new_ends.push(2 * m.to.t() + c as i32 + 1),
+                _ => break,
+            }
+            k += 1;
         }
-    }
-
-    /// What the point does to the present, computed exactly: moved timelines advance one
-    /// half-turn, new timelines start after their arrival, and the active range is recomputed
-    /// from the final timeline span (which can reactivate old timelines). `None` when no
-    /// timeline is active.
-    fn present_after(&self, st: &State, p: &Point) -> Option<PresentAfter> {
-        let (l_min, l_max) = st.get_lines_range();
-        let c = self.player;
-        // (The branch axes form a prefix.)
-        let k = (self.new_axis..self.dim).take_while(|&n| !self.entry(n, p[n]).is_null()).count();
-        let (amin, amax) = self.active_after(st, k);
+        let (l1_min, l1_max) = if c { (l_min - k as i32, l_max) } else { (l_min, l_max + k as i32) };
+        let (amin, amax) = super::multiverse::active_range_for(st.multiverse().layout(), l1_min, l1_max);
+        let end_after = |l: i32| -> i32 {
+            if l < l_min || l > l_max {
+                let j = if c { l_min - 1 - l } else { l - l_max - 1 };
+                return new_ends[j as usize];
+            }
+            let v = st.multiverse().timeline_end_v(l);
+            match self.line_to_axis(l) {
+                Some(n) if !self.entry(n, p[n]).is_null() => v + 1,
+                _ => v,
+            }
+        };
         let mut wit: Option<(i32, i32)> = None;
         for l in amin..=amax {
-            let v = if l < l_min || l > l_max {
-                self.new_end(p, (if c { l_min - 1 - l } else { l - l_max - 1 }) as usize)
-            } else {
-                let v = st.multiverse().timeline_end_v(l);
-                match self.line_to_axis(l) {
-                    Some(n) if !self.entry(n, p[n]).is_null() => v + 1,
-                    _ => v,
-                }
-            };
+            let v = end_after(l);
             if wit.map(|w| v < w.1).unwrap_or(true) {
                 wit = Some((l, v));
             }
         }
         let (w_line, w_v) = wit?;
-        Some(PresentAfter { k, amin, amax, w_line, w_v })
-    }
-
-    /// Whether the point moves the present; if not, a slice of points that fail for the same
-    /// reason (see `present_after`).
-    pub fn test_present(&self, st: &State, p: &Point, _hc: &Hc) -> Option<Slice> {
-        self.present_problem(st, p, &self.present_after(st, p)?)
-    }
-
-    /// Whether the point (which moves the present) plays a wasted move; if so, a slice of
-    /// points wasting one for the same reason (see `wasted_problem`).
-    pub fn test_wasted(&self, st: &State, p: &Point, _hc: &Hc) -> Option<Slice> {
-        let pa = self.present_after(st, p)?;
-        if self.present_problem(st, p, &pa).is_some() {
-            return None;
-        }
-        self.wasted_problem(st, p, &pa)
-    }
-
-    fn present_problem(&self, st: &State, p: &Point, pa: &PresentAfter) -> Option<Slice> {
-        let c = self.player;
-        let (l_min, l_max) = st.get_lines_range();
-        let PresentAfter { k, amin, amax, w_line, w_v } = *pa;
         if (w_v & 1 != 0) != c {
             return None;
         }
@@ -1279,169 +1192,6 @@ impl HcInfo {
                 s.insert(0);
             }
             problem.fix_axis(n, s);
-        }
-        debug_assert!(problem.contains(p));
-        Some(problem)
-    }
-
-    /// Whether the point (which moves the present to `pa`) plays a wasted move: it creates a
-    /// timeline, and another of its moves creates none and leaves every board it creates out
-    /// of the present that the point leaves, on a timeline inactive after it or later than
-    /// that present. Such a board waits unchanged until the present reaches it, so playing the
-    /// move now only gives up flexibility; the action without it is legal as well (it moves
-    /// the present to the same place, and leaves the opponent a subset of the boards to move
-    /// on), so these actions are not generated. A typical case: a jump that branches into the
-    /// past moves the present back, and the point also moves a board of the old present. A
-    /// semimove on a board one of the point's branches lands on is never wasted: it is what
-    /// makes that jump branch (`plays_wasted_move` is the same rule on a played action).
-    ///
-    /// The slice keeps the wasted semimove's axis on its non-null semimoves that waste a move
-    /// for the same reason (its physical moves, and the arrivals whose departure board is out
-    /// of the present too) and keeps the point's reason on the other axes: a timeline at
-    /// least one branch axis creates, the present after the point below the wasted boards
-    /// (held by a timeline that ends before them whatever the slice's points do), no more new
-    /// timelines than the point (the active range only widens with them) when a board is
-    /// wasted for being inactive, and no branch landing on a board of those semimoves. The
-    /// null semimove stays outside, so the action without the wasted move survives.
-    fn wasted_problem(&self, st: &State, p: &Point, pa: &PresentAfter) -> Option<Slice> {
-        if pa.k == 0 {
-            return None;
-        }
-        let mv = st.multiverse();
-        let v_p = pa.w_v;
-        let active_p = |l: i32| l >= pa.amin && l <= pa.amax;
-        // Why the next board of a playable timeline is out of the present: `Some(true)` it
-        // comes after it, `Some(false)` it only is inactive.
-        let out = |l: i32| -> Option<bool> {
-            if mv.timeline_end_v(l) >= v_p {
-                Some(true)
-            } else if !active_p(l) {
-                Some(false)
-            } else {
-                None
-            }
-        };
-        let BuildScratch { playable, first_jump, .. } = &self.scratch;
-        let na = self.new_axis;
-        // A semimove on a board the point's branches land on is what makes them branch.
-        let landed = |a: usize| (na..na + pa.k).any(|j| self.branch_onto[a].contains(p[j]));
-        let (n, reasons) = (0..na).find_map(|n| {
-            let l = playable[n];
-            let (lf, fa) = match self.entry(n, p[n]) {
-                Entry::Physical { .. } => (l, n),
-                Entry::Arriving { m, fa, .. } => (m.from.l(), *fa as usize),
-                _ => return None,
-            };
-            let rn = out(l)?;
-            let rf = if lf == l { rn } else { out(lf)? };
-            if landed(n) || landed(fa) {
-                return None;
-            }
-            Some((n, [(l, rn), (lf, rf)]))
-        })?;
-        // The slice's points move the present before `bound` (when a board is wasted for
-        // coming after it) and create at most `pa.k` timelines (when one is inactive).
-        let mut bound = i32::MAX;
-        let mut at_most_k = false;
-        for (l, later) in reasons {
-            if later {
-                bound = bound.min(mv.timeline_end_v(l) + 1);
-            } else {
-                at_most_k = true;
-            }
-        }
-        let wasted_from = |l: i32| mv.timeline_end_v(l) + 1 >= bound || (at_most_k && !active_p(l));
-        let mut on_n = IntegerSet::range(first_jump[n] as Index);
-        on_n.erase(0);
-        // The branch coordinates the slice's points never use: those landing on a board a
-        // wasted semimove of the slice is played on.
-        let mut landing = self.branch_onto[n].clone();
-        let grp = &self.groups[n];
-        for (fa, set) in &grp.by_from[..grp.from_len] {
-            let fa = *fa as usize;
-            if wasted_from(playable[fa]) && !landed(fa) {
-                on_n.or_assign(set);
-                landing.or_assign(&self.branch_onto[fa]);
-            }
-        }
-        let mut problem = Slice::new();
-        problem.fix_axis(n, on_n);
-        if !landing.is_empty() {
-            let mut keep = IntegerSet::from_bits(&self.universe[na]);
-            keep.minus(&landing);
-            for j in na..self.dim {
-                problem.fix_axis(j, keep.clone());
-            }
-        }
-        let non_null = || {
-            let mut s = IntegerSet::from_bits(&self.universe[na]);
-            s.erase(0);
-            s
-        };
-        if bound != i32::MAX {
-            // A timeline that ends before `bound` in every point of the slice: the cheapest
-            // of the point's active ones (one active from the first new timeline on that
-            // keeps its end whatever its axis does, else one fixing its axis; one only
-            // active with as many new timelines as the point also needs that many).
-            let (l_min, l_max) = st.get_lines_range();
-            let (a1, b1) = self.active_after(st, 1);
-            #[derive(Clone, Copy)]
-            enum Witness {
-                Free,
-                Unmoved(usize),
-                New(usize),
-            }
-            let mut best: Option<(u8, Witness, bool)> = None;
-            for l in pa.amin..=pa.amax {
-                let cand = if l < l_min || l > l_max {
-                    let j = (if self.player { l_min - 1 - l } else { l - l_max - 1 }) as usize;
-                    if self.new_end(p, j) >= bound {
-                        continue;
-                    }
-                    let (aj, bj) = self.active_after(st, j + 1);
-                    let wide = !(aj <= l && l <= bj);
-                    (3 * wide as u8 + if j == 0 { 1 } else { 2 }, Witness::New(j), wide)
-                } else {
-                    let v = mv.timeline_end_v(l);
-                    let axis = self.line_to_axis(l);
-                    let moved = axis.is_some_and(|a| p[a] != 0);
-                    if v + moved as i32 >= bound {
-                        continue;
-                    }
-                    let wide = !(a1 <= l && l <= b1);
-                    match axis {
-                        Some(a) if v + 1 >= bound => (3 * wide as u8 + 2, Witness::Unmoved(a), wide),
-                        _ => (3 * wide as u8, Witness::Free, wide),
-                    }
-                };
-                if best.is_none_or(|b| cand.0 < b.0) {
-                    best = Some(cand);
-                }
-            }
-            let (_, witness, wide) = best.expect("the present is held by an active timeline");
-            match witness {
-                Witness::Free => {}
-                Witness::Unmoved(a) => problem.restrict_axis(a, IntegerSet::singleton(0)),
-                Witness::New(j) => {
-                    let c = self.player as i32;
-                    let mut s = IntegerSet::new();
-                    for i in self.universe[na + j].iter() {
-                        if let Entry::Arriving { m, .. } = self.entry(na + j, i) {
-                            if 2 * m.to.t() + c + 1 < bound {
-                                s.insert(i);
-                            }
-                        }
-                    }
-                    problem.restrict_axis(na + j, s);
-                }
-            }
-            if wide {
-                problem.restrict_axis(na + pa.k - 1, non_null());
-            }
-        }
-        problem.restrict_axis(na, non_null());
-        if at_most_k && na + pa.k < self.dim {
-            problem.restrict_axis(na + pa.k, IntegerSet::singleton(0));
         }
         debug_assert!(problem.contains(p));
         Some(problem)
