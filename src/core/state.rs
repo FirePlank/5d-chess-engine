@@ -563,6 +563,27 @@ impl State {
         }
     }
 
+    /// The side that loses a stalemate under the exiled-kings rule (the community tournament
+    /// rule since 2026): a side with no royal piece on the latest board of any active timeline
+    /// (all its royals exiled to inactive timelines) loses. `Some(black)` for the loser; `None`
+    /// when both sides or neither are exiled (a plain stalemate: a draw). Only a side that has
+    /// royal pieces somewhere is judged.
+    pub fn exiled_kings_loser(&self) -> Option<bool> {
+        let (amin, amax) = self.m.get_active_range();
+        let (lo, hi) = self.m.get_lines_range();
+        let royals = |l: i32, black: bool| {
+            let (t, c) = self.m.get_timeline_end(l);
+            let b = self.m.board(l, t, c);
+            b.royal() & b.hostile(!black) != 0
+        };
+        let exiled = |black: bool| (lo..=hi).any(|l| royals(l, black)) && !(amin..=amax).any(|l| royals(l, black));
+        match (exiled(false), exiled(true)) {
+            (true, false) => Some(false),
+            (false, true) => Some(true),
+            _ => None,
+        }
+    }
+
     pub fn show_fen(&self) -> String {
         let mut s = String::new();
         for (l, t, c, fen) in self.m.get_boards(true) {

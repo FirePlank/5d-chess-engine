@@ -46,7 +46,9 @@ fn sprt_records_replay() {
         let status = l.game.status(last);
         match j.get("reason").str().unwrap() {
             "checkmate" => assert_eq!(status, Status::Checkmate, "{}", line),
-            "stalemate" => assert_eq!(status, Status::Stalemate, "{}", line),
+            // Records from before the exiled-kings rule call every stalemate a draw.
+            "stalemate" => assert!(matches!(status, Status::Stalemate | Status::WhiteExiled | Status::BlackExiled), "{}", line),
+            "exiled kings" => assert!(matches!(status, Status::WhiteExiled | Status::BlackExiled), "{}", line),
             _ => {}
         }
         // The start position names its variant.

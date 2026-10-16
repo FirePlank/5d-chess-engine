@@ -321,6 +321,7 @@ export class Play {
     const g = this.state && this.state.game;
     if (v.status === 'checkmate') { chip.textContent = `Checkmate · ${v.player ? 'White' : 'Black'} wins`; chip.classList.add('over'); }
     else if (v.status === 'stalemate') { chip.textContent = 'Stalemate · draw'; chip.classList.add('over'); }
+    else if (v.status === 'exiled-white' || v.status === 'exiled-black') { chip.textContent = `Stalemate · exiled kings · ${v.status === 'exiled-white' ? 'Black' : 'White'} wins`; chip.classList.add('over'); }
     else if (g) {
       const side = v.player ? 'Black' : 'White';
       chip.textContent = `T${v.present} · ${side} to move${v.checks.length ? ' · in check' : ''}`;

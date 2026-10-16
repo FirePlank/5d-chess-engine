@@ -41,6 +41,10 @@ pub enum Status {
     Playing,
     Checkmate,
     Stalemate,
+    /// Stalemate lost under the exiled-kings rule by White / by Black (no royal piece on the
+    /// latest board of every active timeline).
+    WhiteExiled,
+    BlackExiled,
     /// Not decided: the position is too large for an exhaustive legal-action search.
     Unknown,
 }
@@ -66,6 +70,8 @@ impl Status {
             Status::Playing => "playing",
             Status::Checkmate => "checkmate",
             Status::Stalemate => "stalemate",
+            Status::WhiteExiled => "exiled-white",
+            Status::BlackExiled => "exiled-black",
             Status::Unknown => "unknown",
         }
     }
@@ -121,7 +127,11 @@ pub fn status_of(s: &State) -> Status {
     } else if s.get_mate_type() == MateType::Checkmate {
         Status::Checkmate
     } else {
-        Status::Stalemate
+        match s.exiled_kings_loser() {
+            Some(false) => Status::WhiteExiled,
+            Some(true) => Status::BlackExiled,
+            None => Status::Stalemate,
+        }
     }
 }
 
