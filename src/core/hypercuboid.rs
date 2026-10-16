@@ -104,9 +104,10 @@ pub struct HcInfo {
 struct BuildScratch {
     playable: Vec<i32>,
     departures: Vec<Vec<Vec4>>,
-    /// (destination line, move) of every jump, stably sorted by line.
-    arrivals: Vec<(i32, FullMove)>,
-    sorted: Vec<(i32, FullMove)>,
+    /// (destination line, move, moving piece, whether it is royal) of every jump, stably
+    /// sorted by line.
+    arrivals: Vec<(i32, FullMove, Piece, bool)>,
+    sorted: Vec<(i32, FullMove, Piece, bool)>,
     line_counts: Vec<u32>,
     ml: MoveList,
     /// Departure coordinate of each source square, per axis.
@@ -481,6 +482,8 @@ impl HcInfo {
                 let from = Vec4::from_xy(pos, p0);
                 let z = pmask(pos);
                 let mut has_depart = false;
+                let mover = source.kind(pos);
+                let royal = source.royal() & z != 0;
                 ml.clear();
                 s.multiverse().gen_moves(from, player, ml);
                 for &(r, bb) in ml.iter() {
@@ -490,11 +493,10 @@ impl HcInfo {
                             has_depart = true;
                         }
                         for sq in marked_pos(bb) {
-                            arrivals.push((r.l(), FullMove::new(from, Vec4::from_xy(sq, r))));
+                            arrivals.push((r.l(), FullMove::new(from, Vec4::from_xy(sq, r)), mover, royal));
                         }
                         continue;
                     }
-                    let mover = source.kind(pos);
                     let pawn = source.lpawn() & z != 0;
                     let king = source.king() & z != 0;
                     let tested = rs.in_check || (source.royal() | rs.pinned) & z != 0;
@@ -558,7 +560,7 @@ impl HcInfo {
             line_counts[k] += line_counts[k - 1];
         }
         sorted.clear();
-        sorted.resize(arrivals.len(), (0, FullMove::default()));
+        sorted.resize(arrivals.len(), (0, FullMove::default(), NO_PIECE, false));
         for &a in arrivals.iter() {
             let k = &mut line_counts[(a.0 - lines_lo) as usize];
             sorted[*k as usize] = a;
@@ -601,7 +603,8 @@ impl HcInfo {
             let lo = arrivals.partition_point(|a| a.0 < l);
             let hi = arrivals.partition_point(|a| a.0 <= l);
             let locs = &mut axis_coords[axis];
-            let rs = memo.get(l, s.get_timeline_end(l).0);
+            let (end_t, end_c) = s.get_timeline_end(l);
+            let rs = memo.get(l, end_t);
             for &p in &departures[axis] {
                 let idx = locs.len() as Index;
                 let source = s.board(p.l(), p.t(), player);
@@ -614,18 +617,14 @@ impl HcInfo {
                     jump_tab[axis][p.xy() as usize] = idx;
                 }
             }
+            // Arrivals onto this line's last board (when it is the mover's).
+            let target = s.board(l, end_t, player);
             for k in lo..hi {
-                let m = arrivals[k].1;
-                let (last_t, last_c) = s.get_timeline_end(m.to.l());
-                if m.to.t() == last_t && player == last_c {
-                    let (p, q) = (m.from, m.to);
-                    let src = s.board(p.l(), p.t(), player);
-                    let royal = src.royal() & pmask(p.xy()) != 0;
-                    if arrival_safe(k, m, royal, arrival_ok, &mut memo) {
-                        let victim = s.board(q.l(), q.t(), player).kind(q.xy());
-                        let fa = axis_of_line(axis_of, m.from.l()) as u32;
-                        locs.push(Entry::Arriving { m, b: arrival_board(s, m), idx: INVALID, fa, mover: src.kind(p.xy()), victim });
-                    }
+                let (_, m, mover, royal) = arrivals[k];
+                if m.to.t() == end_t && player == end_c && arrival_safe(k, m, royal, arrival_ok, &mut memo) {
+                    let victim = target.kind(m.to.xy());
+                    let fa = axis_of_line(axis_of, m.from.l()) as u32;
+                    locs.push(Entry::Arriving { m, b: arrival_board(s, m), idx: INVALID, fa, mover, victim });
                 }
             }
         }
@@ -635,14 +634,11 @@ impl HcInfo {
         // The branch arrivals: only the ones whose result needs a check test get their board
         // here; the entries are built by `materialize_branch`.
         branch_moves.clear();
-        for (k, &(_, m)) in arrivals.iter().enumerate() {
-            let p = m.from;
+        for (k, &(_, m, mover, royal)) in arrivals.iter().enumerate() {
             if let Some(dep) = find_jump(jump_tab, axis_of, m.from) {
-                let src = s.board(p.l(), p.t(), player);
-                let royal = src.royal() & pmask(p.xy()) != 0;
                 if arrival_safe(k, m, royal, arrival_ok, &mut memo) {
                     let fa = axis_of_line(axis_of, m.from.l()) as u32;
-                    branch_moves.push((m, dep, fa, src.kind(p.xy())));
+                    branch_moves.push((m, dep, fa, mover));
                 }
             }
         }
