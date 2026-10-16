@@ -168,8 +168,6 @@ pub struct AlphaBeta {
     tt: TtTable,
     history: Vec<i32>,
     killers: Vec<[Option<MoveSeq>; 2]>,
-    /// Per ply: the last evasion that failed high in quiescence (tried before building).
-    qkillers: Vec<Option<MoveSeq>>,
     nodes: u64,
     deadline: Option<Instant>,
     node_limit: Option<u64>,
@@ -398,7 +396,6 @@ impl AlphaBeta {
             tt: TtTable::new(DEFAULT_HASH_MB),
             history: vec![0; 1 << 16],
             killers: vec![[None, None]; MAX_PLY + 1],
-            qkillers: vec![None; MAX_PLY + 1],
             nodes: 0,
             deadline: None,
             node_limit: None,
@@ -804,32 +801,7 @@ impl AlphaBeta {
             }
             return stand + gain;
         }
-        // In check: the evasion that failed high here last first, before building the rest.
-        let mut best = -INF;
-        let mut any = false;
-        let mut tried = 0;
-        let mut qkiller = if ply <= MAX_PLY { self.qkillers[ply].clone() } else { None };
-        if let Some(k) = qkiller.take() {
-            if let Some(mark) = Self::make_checked(s, &k) {
-                let v = -self.qsearch(s, ply + 1, -beta, -alpha, qd - 1, None);
-                s.unmake(mark);
-                if self.aborted {
-                    return 0;
-                }
-                // Searched: skipped when the evasions come round to it.
-                qkiller = Some(k);
-                any = true;
-                tried = 1;
-                best = v;
-                if v > alpha {
-                    alpha = v;
-                    if v >= beta {
-                        return v;
-                    }
-                }
-            }
-        }
-        // Search the evasions.
+        // In check: search the evasions.
         let mut nb = self.bufs.pop().unwrap_or_default();
         {
             let NodeBufs { info, evasions, order, evasion_scores, .. } = &mut *nb;
@@ -839,6 +811,9 @@ impl AlphaBeta {
             self.node_ordering(s, info, false, order, evasions.order.axes_mut(), evasion_scores, 0..fba, BranchOrder::Now);
             evasions.branch_pending = fba < info.dimension();
         }
+        let mut best = -INF;
+        let mut any = false;
+        let mut tried = 0;
         let aborted = 'search: {
             while tried < QCAP {
                 if self.check_abort() {
@@ -857,10 +832,6 @@ impl AlphaBeta {
                 }) else {
                     break;
                 };
-                if qkiller.as_ref() == Some(&act) {
-                    qkiller = None;
-                    continue;
-                }
                 any = true;
                 tried += 1;
                 let mark = Self::make(s, &act);
@@ -874,9 +845,6 @@ impl AlphaBeta {
                     if v > alpha {
                         alpha = v;
                         if v >= beta {
-                            if ply <= MAX_PLY {
-                                self.qkillers[ply] = Some(act.clone());
-                            }
                             break;
                         }
                     }
@@ -1199,7 +1167,6 @@ impl AlphaBeta {
         for k in self.killers.iter_mut() {
             *k = [None, None];
         }
-        self.qkillers.iter_mut().for_each(|k| *k = None);
         let max_depth = limits.depth.unwrap_or(64) as i32;
         let mut work = root.clone();
         work.enable_undo();
