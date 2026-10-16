@@ -198,6 +198,8 @@ struct SearchResume {
     best: MoveSeq,
     score: i32,
     proven: bool,
+    /// The line of `best` (the triangular PV, see `iterate`).
+    pv: Vec<MoveSeq>,
 }
 
 /// One thread's search result, for the vote between threads.
@@ -209,6 +211,8 @@ struct ThreadResult {
     proven: bool,
     /// Deepest iteration the thread finished (0: none, and then it does not vote).
     completed_depth: i32,
+    /// Principal variation of `best` (the search's own, from the triangular PV table).
+    pv: Vec<MoveSeq>,
     pv_len: usize,
     nodes: u64,
     thread_id: usize,
@@ -346,6 +350,12 @@ pub struct AlphaBeta {
     thread_id: usize,
     /// A helper publishes its node count here (null for the main thread).
     nodes_out: *const AtomicU64,
+    /// Triangular PV table: `pv_rows[ply][..pv_lens[ply]]` is the best line found so far from
+    /// the node being searched at `ply`. Each node clears its row on entry and only PV nodes
+    /// fill theirs (from the child's row when an action raises alpha), so a row is never a
+    /// stale line. Rows keep their actions' storage between nodes.
+    pv_rows: Vec<Vec<MoveSeq>>,
+    pv_lens: Vec<usize>,
 }
 
 // The raw stop and node-count pointers are only dereferenced during a search, while what
@@ -600,6 +610,8 @@ impl AlphaBeta {
             helper_results: 0,
             thread_id: 0,
             nodes_out: std::ptr::null(),
+            pv_rows: vec![Vec::new(); MAX_PLY + 2],
+            pv_lens: vec![0; MAX_PLY + 2],
         }
     }
 
@@ -981,8 +993,11 @@ impl AlphaBeta {
     }
 
     /// `known_check`: whether `s` is in check, when the caller already knows.
+    /// Evasions that raise alpha inside the window extend the PV table (mates end in them);
+    /// in a null window none can, so only PV windows pay for it.
     fn qsearch(&mut self, s: &mut State, ply: usize, mut alpha: i32, beta: i32, qd: i32, known_check: Option<bool>) -> i32 {
         self.nodes += 1;
+        self.pv_clear(ply);
         // Only the in-check evasion search below can return a mate score.
         self.proven = false;
         if self.check_abort() {
@@ -1043,6 +1058,9 @@ impl AlphaBeta {
                     alpha = v;
                     if v >= beta {
                         return v;
+                    }
+                    if let Some(k) = &qkiller {
+                        self.pv_update(ply, k);
                     }
                 }
             }
@@ -1105,6 +1123,7 @@ impl AlphaBeta {
                             }
                             break;
                         }
+                        self.pv_update(ply, &act);
                     }
                 }
             }
@@ -1142,6 +1161,7 @@ impl AlphaBeta {
 
     fn negamax(&mut self, s: &mut State, depth: i32, ply: usize, mut alpha: i32, beta: i32, pv: bool) -> i32 {
         let known_check = self.known_check.take();
+        self.pv_clear(ply);
         if depth <= 0 {
             return self.qsearch(s, ply, alpha, beta, QDEPTH, known_check);
         }
@@ -1244,6 +1264,9 @@ impl AlphaBeta {
                 best_action = act.clone();
                 if v > alpha {
                     alpha = v;
+                    if pv {
+                        self.pv_update(ply, &act);
+                    }
                 }
             }
             if alpha >= beta {
@@ -1361,6 +1384,9 @@ impl AlphaBeta {
                         best_action = act.clone();
                         if v > alpha {
                             alpha = v;
+                            if pv {
+                                self.pv_update(ply, &act);
+                            }
                         }
                     }
                     if alpha >= beta {
@@ -1422,20 +1448,90 @@ impl AlphaBeta {
         }
     }
 
-    fn pv_line(&self, root: &State, first: &MoveSeq, max: usize) -> Vec<MoveSeq> {
-        let mut line = vec![first.clone()];
-        let mut s = Self::child(root, first);
-        while line.len() < max {
+    #[inline]
+    fn pv_clear(&mut self, ply: usize) {
+        if let Some(n) = self.pv_lens.get_mut(ply) {
+            *n = 0;
+        }
+    }
+
+    /// At a PV node at `ply` whose action `act` raised alpha: its line is `act` followed by
+    /// the child's.
+    fn pv_update(&mut self, ply: usize, act: &MoveSeq) {
+        if ply + 1 >= self.pv_rows.len() {
+            return;
+        }
+        let n = self.pv_lens[ply + 1];
+        let (head, tail) = self.pv_rows.split_at_mut(ply + 1);
+        let row = &mut head[ply];
+        for (i, a) in std::iter::once(act).chain(&tail[0][..n]).enumerate() {
+            match row.get_mut(i) {
+                Some(r) => r.clone_from(a),
+                None => row.push(a.clone()),
+            }
+        }
+        self.pv_lens[ply] = n + 1;
+    }
+
+    /// The line the root's child left in the PV table, after the root action `act`.
+    fn root_pv(&self, act: &MoveSeq) -> Vec<MoveSeq> {
+        let mut pv = Vec::with_capacity(self.pv_lens[1] + 1);
+        pv.push(act.clone());
+        pv.extend_from_slice(&self.pv_rows[1][..self.pv_lens[1]]);
+        pv
+    }
+
+    /// The line to report for `pv` (a search's PV from `root`, scored `score` at `depth`):
+    /// when it stops short of the mate (for a mate score) or of `depth`, it is extended along
+    /// the transposition table's actions, each checked legal, up to that length, never past
+    /// a position already on the line.
+    fn report_pv(&self, root: &State, pv: &[MoveSeq], score: i32, depth: i32) -> Vec<MoveSeq> {
+        let len = if score.abs() > MATE - 1000 { (MATE - score.abs()) as usize } else { depth.max(0) as usize };
+        let mut line: Vec<MoveSeq> = Vec::with_capacity(len.max(pv.len()));
+        let mut s = root.clone();
+        s.enable_undo();
+        let mut seen = vec![s.hash()];
+        for act in pv {
+            if Self::make_checked(&mut s, act).is_none() {
+                return line;
+            }
+            seen.push(s.hash());
+            line.push(act.clone());
+        }
+        while line.len() < len {
             let Some(act) = self.tt.probe(s.hash(), |e| e.action.clone()) else { break };
-            if act.is_empty() {
+            if act.is_empty() || Self::make_checked(&mut s, &act).is_none() {
                 break;
             }
-            if Self::make_checked(&mut s, &act).is_none() {
+            if seen.contains(&s.hash()) {
                 break;
             }
+            seen.push(s.hash());
             line.push(act);
         }
         line
+    }
+
+    /// The `info` line of a finished depth.
+    #[allow(clippy::too_many_arguments)]
+    fn info_text(&self, root: &State, depth: i32, score: i32, pv: &[MoveSeq], nodes: u64, elapsed: f64, roots: usize) -> String {
+        let pv = self.report_pv(root, pv, score, depth);
+        let mut st = root.clone();
+        let mut pv_txt = Vec::new();
+        for a in &pv {
+            pv_txt.push(format!("{} submit", action_text(&st, a)));
+            st = Self::child(&st, a);
+        }
+        format!(
+            "depth {} score {} nodes {} nps {:.0} time {} roots {} pv {}",
+            depth,
+            score_text(score),
+            nodes,
+            nodes as f64 / elapsed.max(1e-6),
+            (elapsed * 1000.0) as u64,
+            roots,
+            pv_txt.join(" ")
+        )
     }
 }
 
@@ -1757,6 +1853,7 @@ impl AlphaBeta {
             }
         }
         drop(done);
+        let root_count = roots.len();
         let main = self.iterate(root, roots, roots_complete, max_depth, start, plan, info, &counters, resumed_depth, resume);
         helper_stop.store(true, Ordering::Relaxed);
         let mut results = vec![main];
@@ -1770,10 +1867,13 @@ impl AlphaBeta {
         // Counted as published, including helpers whose results came too late.
         self.helper_nodes = counters.iter().map(|c| c.0.load(Ordering::Relaxed)).sum();
         self.helper_results = results.len() - 1;
-        for r in &mut results {
-            r.pv_len = self.pv_line(root, &r.best, 3).len();
-        }
         let chosen = &results[select_best_thread(&results)];
+        if chosen.thread_id != 0 && chosen.completed_depth > 0 {
+            // The vote went to a helper: its depth and line are the ones reported last.
+            let nodes = self.nodes + self.helper_nodes;
+            let line = self.info_text(root, chosen.completed_depth, chosen.score, &chosen.pv, nodes, start.elapsed().as_secs_f64(), root_count);
+            info(line);
+        }
         self.last_score = chosen.score;
         Some(Action::from_moveseq(&chosen.best, root))
     }
@@ -1803,6 +1903,8 @@ impl AlphaBeta {
         let mut best_score: i32 = resume.map_or(0, |r| r.score);
         // `best_score` is a proven mate (see `proven`): only then is it reported as a mate.
         let mut best_proven = resume.is_some_and(|r| r.proven);
+        // The line of `best`, from the PV table of the depth that chose it.
+        let mut best_pv: Vec<MoveSeq> = resume.map_or_else(|| vec![best.clone()], |r| r.pv.clone());
         let mut completed_depth = resumed_depth;
         self.seek_mate = false;
         // Clock stability: decaying count of best-action changes and running average score.
@@ -1820,6 +1922,7 @@ impl AlphaBeta {
             let mut alpha = -INF;
             let beta = INF;
             let mut iter_best: Option<(i32, MoveSeq, bool)> = None;
+            let mut iter_pv: Vec<MoveSeq> = Vec::new();
             let mut all_proven = roots_complete;
             let mut scores: Vec<i32> = Vec::with_capacity(roots.len());
             for (k, (_, act)) in roots.iter().enumerate() {
@@ -1851,6 +1954,7 @@ impl AlphaBeta {
                 if v > alpha {
                     alpha = v;
                     iter_best = Some((v, act.clone(), self.proven));
+                    iter_pv = self.root_pv(act);
                 }
             }
             // A partially searched iteration still improves on the previous best, except that a
@@ -1864,6 +1968,11 @@ impl AlphaBeta {
             if let Some((v, act, proven)) = iter_best {
                 kept = depth > 1 && ((best_score > MATE - 1000 && v < best_score) || (self.aborted && v < -(MATE - 1000)));
                 if !kept {
+                    // An interrupted depth's line for the same action stops where the search
+                    // did: the last depth's longer one stands.
+                    if !(self.aborted && iter_pv.len() < best_pv.len() && best_pv.first() == Some(&act)) {
+                        best_pv = std::mem::take(&mut iter_pv);
+                    }
                     best = act;
                     best_score = v;
                     best_proven = mate_proven(v, proven, all_proven && !self.aborted);
@@ -1884,25 +1993,8 @@ impl AlphaBeta {
                 }
             }
             if !self.aborted && main {
-                let pv = self.pv_line(root, &best, depth as usize);
-                let score_txt = score_text(best_score);
-                let mut st = root.clone();
-                let mut pv_txt = Vec::new();
-                for a in &pv {
-                    pv_txt.push(format!("{} submit", action_text(&st, a)));
-                    st = Self::child(&st, a);
-                }
                 let nodes = self.nodes + helper_nodes.iter().map(|c| c.0.load(Ordering::Relaxed)).sum::<u64>();
-                info(format!(
-                    "depth {} score {} nodes {} nps {:.0} time {} roots {} pv {}",
-                    depth,
-                    score_txt,
-                    nodes,
-                    nodes as f64 / elapsed.max(1e-6),
-                    (elapsed * 1000.0) as u64,
-                    roots.len(),
-                    pv_txt.join(" ")
-                ));
+                info(self.info_text(root, depth, best_score, &best_pv, nodes, elapsed, roots.len()));
             }
             if self.aborted {
                 break;
@@ -1941,9 +2033,11 @@ impl AlphaBeta {
                 best: best.clone(),
                 score: best_score,
                 proven: best_proven,
+                pv: best_pv.clone(),
             });
         }
-        ThreadResult { best, score: best_score, proven: best_proven, completed_depth, pv_len: 0, nodes: self.nodes, thread_id: self.thread_id }
+        let pv_len = best_pv.len();
+        ThreadResult { best, score: best_score, proven: best_proven, completed_depth, pv: best_pv, pv_len, nodes: self.nodes, thread_id: self.thread_id }
     }
 
     /// The score of the action the last `find_best_move` returned (internal units, from the
@@ -1960,7 +2054,7 @@ mod tests {
     /// A thread's result; mate scores proven.
     fn result(from: u32, score: i32, depth: i32, thread_id: usize) -> ThreadResult {
         let m = FullMove { from: crate::core::vec4::Vec4(from), to: crate::core::vec4::Vec4(from + 1) };
-        ThreadResult { best: MoveSeq::from(&[m][..]), score, proven: true, completed_depth: depth, pv_len: 5, nodes: 0, thread_id }
+        ThreadResult { best: MoveSeq::from(&[m][..]), score, proven: true, completed_depth: depth, pv: Vec::new(), pv_len: 5, nodes: 0, thread_id }
     }
 
     fn unproven(mut r: ThreadResult) -> ThreadResult {
