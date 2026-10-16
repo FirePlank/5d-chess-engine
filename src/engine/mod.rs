@@ -76,6 +76,11 @@ pub struct Limits {
     /// Remaining clock (ms) and increment for the side to move.
     pub time_left: Option<u64>,
     pub increment: Option<u64>,
+    /// Simple delay (ms) before the clock runs each turn: a fixed part, and a part per active
+    /// timeline of the position (the 5D tournament format: 3 s per active timeline). Unused
+    /// delay is lost.
+    pub delay: Option<u64>,
+    pub delay_per_timeline: Option<u64>,
     /// Analysis: if the last search was of this same position, continue its iterative
     /// deepening (at the depth it completed + 1, with its root order and best action) instead
     /// of starting again from depth 1.

@@ -121,6 +121,11 @@ impl State {
     pub fn get_active_range(&self) -> (i32, i32) {
         self.m.get_active_range()
     }
+    /// Active timelines (the active range), as counted by delay-per-timeline clocks.
+    pub fn active_timelines(&self) -> usize {
+        let (amin, amax) = self.m.get_active_range();
+        (amax - amin + 1).max(1) as usize
+    }
     #[inline(always)]
     pub fn get_timeline_start(&self, l: i32) -> Turn {
         self.m.get_timeline_start(l)

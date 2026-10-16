@@ -174,14 +174,14 @@
             </div>
             <div class="field">
               <span>Time control</span>
-              <div class="tc-grid" id="play-tc">
-                <button type="button" data-base="60" data-inc="1">1+1</button>
-                <button type="button" data-base="180" data-inc="2">3+2</button>
-                <button type="button" data-base="300" data-inc="3" class="on">5+3</button>
-                <button type="button" data-base="600" data-inc="5">10+5</button>
-                <button type="button" data-base="900" data-inc="10">15+10</button>
-                <button type="button" data-base="0" data-inc="0" data-movetime="3000">Untimed</button>
+              <div class="tc-grid" id="play-tc"></div>
+              <div class="tc-custom hidden" id="tc-custom">
+                <label><span>Base (min)</span><input class="input" type="number" id="tc-base" min="0" max="180" step="0.5"></label>
+                <label><span>Increment (s)</span><input class="input" type="number" id="tc-inc" min="0" max="600" step="1"></label>
+                <label><span>Delay (s)</span><input class="input" type="number" id="tc-delay" min="0" max="600" step="1"></label>
+                <label><span>Delay per active timeline (s)</span><input class="input" type="number" id="tc-tl" min="0" max="600" step="0.5"></label>
               </div>
+              <p class="tc-desc" id="tc-desc"></p>
             </div>
             <div class="field book-row" title="In positions of the opening theory Kairos knows (the T0 Openings Guide and the f7-sac guide), play a theory move at once instead of searching">
               <label class="switch"><input type="checkbox" id="play-book" checked aria-label="Opening book"><span></span></label>
@@ -193,7 +193,7 @@
         </div>
 
         <div class="panel play-live hidden" id="play-live">
-          <div class="player-bar" id="clock-top"><span class="pname" id="clock-top-name">Kairos</span><span class="clock" id="clock-top-time">-:--</span></div>
+          <div class="player-bar" id="clock-top"><span class="pname" id="clock-top-name">Kairos</span><span class="clock-delay" id="clock-top-delay"></span><span class="clock" id="clock-top-time">-:--</span></div>
           <div class="play-status" id="play-status"></div>
           <div class="tl-line play-tl"></div>
           <div class="moves play-moves" id="play-moves"></div>
@@ -203,7 +203,7 @@
             <button class="ctrl-text" id="play-new" title="New game"><svg><use href="#i-plus"/></svg>New game</button>
             <button class="ctrl-text" id="play-analyze" title="Open in the analysis board"><svg><use href="#i-search"/></svg>Analyse</button>
           </div>
-          <div class="player-bar" id="clock-bottom"><span class="pname" id="clock-bottom-name">You</span><span class="clock" id="clock-bottom-time">-:--</span></div>
+          <div class="player-bar" id="clock-bottom"><span class="pname" id="clock-bottom-name">You</span><span class="clock-delay" id="clock-bottom-delay"></span><span class="clock" id="clock-bottom-time">-:--</span></div>
           <div class="spectators" id="play-spectators"></div>
         </div>
       </div>

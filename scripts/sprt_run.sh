@@ -4,7 +4,8 @@
 # bound, and saves games + Final Summary under games/sprt. Record the verdict afterwards with
 # scripts/sprt_done.sh.
 #   scripts/sprt_run.sh <name> <base-sha> <patch-file|-> <games> [tc] [elo0] [elo1]
-#   tc: "tc 10+0.1" (default) | "movetime 100" | "nodes 20000" | "depth 4"
+#   tc: "tc 10+0.1" (default) | "tc 300+0/t3" (delay clocks: /tT s per active timeline,
+#       /dD s per action; see src/bin/sprt.rs) | "movetime 100" | "nodes 20000" | "depth 4"
 #   Env: SHARDS (default 40), NEW_ARGS / OLD_ARGS (extra engine args, default none),
 #        BASE (self | cpp:<engine>, e.g. cpp:zero-capture-check-pw), MIN_GAMES, RUN_ID,
 #        OLD_SHA (build the old engine from this commit instead of <base-sha>, e.g. to

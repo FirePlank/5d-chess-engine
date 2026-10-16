@@ -1815,7 +1815,7 @@ fn overrunpos(args: &[String], out: &mut impl Write) {
                     let (amin, amax) = s.get_active_range();
                     (amin..=amax).filter(|&l| s.get_timeline_end(l) == present).count()
                 };
-                let hard = TimePlan::new(lim, boards).map(|p| p.maximum).unwrap_or(0) as f64;
+                let hard = TimePlan::new(lim, boards, s.active_timelines()).map(|p| p.maximum).unwrap_or(0) as f64;
                 let stop = Arc::new(AtomicBool::new(false));
                 let (tx, rx) = std::sync::mpsc::channel();
                 let (s2, lim2, stop2) = (s.clone(), lim.clone(), stop.clone());

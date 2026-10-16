@@ -383,6 +383,17 @@ textarea { width: 100%; height: 180px; padding: var(--s2); font: 12.5px/1.5 var(
 .tc-grid button { height: 40px; border: 1px solid var(--border); border-radius: var(--r); background: var(--inset); color: var(--text); font-size: 15px; font-weight: 600; }
 .tc-grid button:hover { border-color: var(--border-strong); color: var(--strong); }
 .tc-grid button.on { border-color: var(--accent); background: var(--accent-soft); color: var(--strong); }
+.tc-grid button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; height: 48px; line-height: 1.15; }
+.tc-grid button small { font-size: 11px; font-weight: 500; color: var(--muted); }
+.tc-grid button.on small { color: var(--text); }
+.tc-custom { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); margin-top: var(--s2); }
+.tc-custom label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); font-weight: 600; }
+.tc-custom .input { width: 100%; }
+.tc-desc { margin: var(--s2) 0 0; font-size: 12.5px; color: var(--muted); }
+.tc-desc:empty { display: none; }
+.clock-delay { margin-left: auto; font-size: 13px; font-weight: 600; color: var(--good); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.clock-delay:empty { display: none; }
+.player-bar.delaying .clock { background: color-mix(in srgb, var(--accent) 35%, var(--inset)); color: var(--strong); }
 
 .play-live { display: flex; flex-direction: column; overflow: hidden; flex: 1 1 0; min-height: 320px; }
 .player-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); padding: 0 0 0 var(--s3); min-height: 48px; background: var(--inset); }
@@ -395,7 +406,7 @@ textarea { width: 100%; height: 180px; padding: var(--s2); font: 12.5px/1.5 var(
 .play-status { padding: var(--s2) var(--s3) 0; font-weight: 600; color: var(--strong); }
 .play-status.yours { color: var(--good); }
 .play-moves { flex: 1; min-height: 120px; }
-.thinking { padding: var(--s1) var(--s3); font-size: 12px; color: var(--muted); min-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-top: 1px solid var(--border); }
+.thinking { padding: var(--s1) var(--s3); font-size: 12px; line-height: 1.4; color: var(--muted); min-height: 24px; overflow-wrap: anywhere; border-top: 1px solid var(--border); }
 .play-actions { display: flex; border-top: 1px solid var(--border); }
 .ctrl-text { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 38px; border: 0; background: none; color: var(--text); font-size: 13px; font-weight: 600; }
 .ctrl-text svg { width: 16px; height: 16px; }

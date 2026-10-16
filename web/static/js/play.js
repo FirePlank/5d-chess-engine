@@ -7,6 +7,43 @@ import { LocalPlay } from './local-play.js';
 import { lanText } from './input.js';
 import { $, $$, el, toast, fmtClock, store, confirmDialog } from './util.js';
 
+/**
+ * Time controls (seconds; base in minutes). `tl` is a simple delay per active timeline: each
+ * turn the clock waits delay + tl x (active timelines at the start of the turn) before it runs, and
+ * unused delay is lost (the 5D tournament format: 5 minutes, 3 s per active timeline).
+ * `movetime` is a fixed think time per action with no clock.
+ */
+const TC_PRESETS = [
+  { id: 'tournament', label: '5 + 3s/TL', sub: 'Tournament', base: 5, inc: 0, delay: 0, tl: 3 },
+  { id: '1+1', label: '1+1', sub: 'Bullet', base: 1, inc: 1, delay: 0, tl: 0 },
+  { id: '3+2', label: '3+2', sub: 'Blitz', base: 3, inc: 2, delay: 0, tl: 0 },
+  { id: '5+3', label: '5+3', sub: 'Blitz', base: 5, inc: 3, delay: 0, tl: 0 },
+  { id: '10+0', label: '10+0', sub: 'Rapid', base: 10, inc: 0, delay: 0, tl: 0 },
+  { id: '10+5', label: '10+5', sub: 'Rapid', base: 10, inc: 5, delay: 0, tl: 0 },
+  { id: '15+10', label: '15+10', sub: 'Classical', base: 15, inc: 10, delay: 0, tl: 0 },
+  { id: 'move3', label: '3 s / move', sub: 'Fixed', movetime: 3 },
+  { id: 'custom', label: 'Custom', sub: 'Your own' },
+];
+const TC_DEFAULT = { id: 'tournament', custom: { base: 5, inc: 0, delay: 0, tl: 3 } };
+
+/** "5+0 · 3s/TL": a clock (ms) in short, for the line under the moves. */
+function clockShort(c) {
+  const num = (ms) => +(ms / 1000).toFixed(1);
+  const parts = [`${+(c.base / 60000).toFixed(2)}+${num(c.inc || 0)}`];
+  if (c.delay) parts.push(`${num(c.delay)}s delay`);
+  if (c.delayPerTimeline) parts.push(`${num(c.delayPerTimeline)}s/TL`);
+  return parts.join(' · ');
+}
+
+/** "5+0 · 3 s delay per active timeline" for a clock (ms, as the game reports it). */
+function clockText(c) {
+  const num = (ms) => +(ms / 1000).toFixed(1);
+  const parts = [`${+(c.base / 60000).toFixed(2)}+${num(c.inc || 0)}`];
+  if (c.delay) parts.push(`${num(c.delay)} s delay`);
+  if (c.delayPerTimeline) parts.push(`${num(c.delayPerTimeline)} s delay per active timeline`);
+  return parts.join(' · ');
+}
+
 export class Play {
   constructor(app) {
     this.app = app;
@@ -50,11 +87,7 @@ export class Play {
         this.preview();
       };
     });
-    const tcSaved = store('play.tc');
-    $$('#play-tc button').forEach((b) => {
-      if (tcSaved) b.classList.toggle('on', b.textContent === tcSaved);
-      b.onclick = () => { $$('#play-tc button').forEach((x) => x.classList.toggle('on', x === b)); store('play.tc', b.textContent); };
-    });
+    this.bindTimeControl();
     // The opening book (book positions answered from theory at once): on unless turned off.
     $('#play-book').checked = store('play.book') !== false;
     $('#play-book').onchange = () => store('play.book', $('#play-book').checked);
@@ -163,16 +196,55 @@ export class Play {
     }
   }
 
+  /** The time-control picker: presets, or Custom (base, increment and both delays). */
+  bindTimeControl() {
+    const saved = { ...TC_DEFAULT, ...(store('play.tc2') || {}) };
+    this.tc = { id: TC_PRESETS.some((p) => p.id === saved.id) ? saved.id : TC_DEFAULT.id, custom: { ...TC_DEFAULT.custom, ...saved.custom } };
+    const grid = $('#play-tc');
+    grid.replaceChildren(...TC_PRESETS.map((p) => el('button', {
+      type: 'button', dataset: { id: p.id }, title: p.id === 'tournament' ? 'The 5D tournament format: 5 minutes, and each turn a delay of 3 s per active timeline before the clock runs' : '',
+      onclick: () => { this.tc.id = p.id; this.saveTimeControl(); },
+    }, p.label, el('small', { text: p.sub }))));
+    const fields = { base: '#tc-base', inc: '#tc-inc', delay: '#tc-delay', tl: '#tc-tl' };
+    for (const [k, sel] of Object.entries(fields)) {
+      $(sel).value = this.tc.custom[k];
+      $(sel).oninput = () => {
+        const v = parseFloat($(sel).value);
+        this.tc.custom[k] = Number.isFinite(v) && v >= 0 ? v : 0;
+        this.saveTimeControl();
+      };
+    }
+    this.saveTimeControl();
+  }
+
+  saveTimeControl() {
+    store('play.tc2', this.tc);
+    $$('#play-tc button').forEach((b) => b.classList.toggle('on', b.dataset.id === this.tc.id));
+    $('#tc-custom').classList.toggle('hidden', this.tc.id !== 'custom');
+    const t = this.timeControl();
+    $('#tc-desc').textContent = t.clock
+      ? clockText(t.clock) + (t.clock.delay || t.clock.delayPerTimeline ? '. Each turn the clock waits out the delay (per timeline: times the timelines active at the start of the turn) before it runs; unused delay is lost.' : '')
+      : `No clock: Kairos thinks ${t.movetime / 1000} s per action.`;
+  }
+
+  /** The chosen time control as the start request takes it: {clock (ms) | null, movetime}. */
+  timeControl() {
+    const p = TC_PRESETS.find((x) => x.id === this.tc.id) || TC_PRESETS[0];
+    if (p.movetime) return { clock: null, movetime: p.movetime * 1000 };
+    const c = p.id === 'custom' ? this.tc.custom : p;
+    const clock = { base: Math.round(c.base * 60000), inc: Math.round(c.inc * 1000), delay: Math.round(c.delay * 1000), delayPerTimeline: Math.round(c.tl * 1000) };
+    // A clock that never gains time needs some to start with.
+    if (!clock.inc && !clock.delay && !clock.delayPerTimeline) clock.base = Math.max(clock.base, 10000);
+    return { clock, movetime: 2000 };
+  }
+
   start() {
-    const tc = $('#play-tc button.on') || $('#play-tc button');
-    const base = +tc.dataset.base, inc = +tc.dataset.inc;
     const variant = $('#play-variant').value;
     store('play.variant.t0', variant);
     const body = {
       variant,
       color: this.color === 'r' ? 'random' : this.color,
-      clock: base ? { base: base * 1000, inc: inc * 1000 } : null,
-      movetime: +(tc.dataset.movetime || 2000),
+      ...this.timeControl(),
       book: $('#play-book').checked,
     };
     this.wantSetup = false;
@@ -314,7 +386,14 @@ export class Play {
       else status = 'Kairos is thinking…';
       $('#play-status').textContent = status;
       $('#play-status').classList.toggle('yours', !g.over && mine && g.toMove === human);
-      if (!g.thinking) $('#play-thinking').textContent = g.over ? '' : (g.clock ? `${g.clock.base / 60000}+${g.clock.inc / 1000}` : `untimed · ${g.movetime / 1000} s per action`) + ` · ${g.variant}` + (g.book === false ? ' · no book' : '');
+      if (!g.thinking) {
+        // Short: the time control, the variant without its group, and no book if off. The
+        // full time control is the tooltip; the turn's delay shows on the running clock.
+        const variant = g.variant.includes(' - ') ? g.variant.split(' - ').slice(1).join(' - ') : g.variant;
+        const line = $('#play-thinking');
+        line.textContent = g.over ? '' : [g.clock ? clockShort(g.clock) : `${g.movetime / 1000}s/move`, variant, g.book === false ? 'no book' : ''].filter(Boolean).join(' · ');
+        line.title = g.clock ? `${clockText(g.clock)} · ${g.variant}` : g.variant;
+      }
       $('#play-resign').classList.toggle('hidden', !mine || !!g.over);
       $('#play-new').classList.toggle('hidden', !mine || !g.over);
       this.tickClocks();
@@ -408,14 +487,28 @@ export class Play {
     if (!this.active || !g || !this.clockSides) return;
     const left = g.left ? [...g.left] : null;
     const running = !g.over ? (g.toMove === 'w' ? 0 : 1) : -1;
-    if (left && running >= 0) left[running] = Math.max(0, left[running] - (performance.now() - this.stateAt));
+    // Simple delay: the running clock waits out this turn's delay before it runs down. `left`
+    // is as of the state's time, when `turnElapsed` of the turn had passed.
+    const since = performance.now() - this.stateAt;
+    const delay = g.turnDelay || 0;
+    const before = g.turnElapsed == null ? null : g.turnElapsed;
+    const elapsed = (before || 0) + since;
+    const delayLeft = running >= 0 && delay ? Math.max(0, delay - elapsed) : 0;
+    if (left && running >= 0) {
+      const used = before == null ? since : Math.max(0, elapsed - delay) - Math.max(0, before - delay);
+      left[running] = Math.max(0, left[running] - used);
+    }
     const [top, bottom] = this.clockSides;
     const idx = (c) => (c === 'w' ? 0 : 1);
     const set = (pos, side) => {
       const box = $(`#clock-${pos}`);
       const ms = left ? left[idx(side)] : null;
+      const mine = running === idx(side);
       $(`#clock-${pos}-time`).textContent = left ? fmtClock(ms) : '∞';
-      box.classList.toggle('running', running === idx(side));
+      $(`#clock-${pos}-delay`).textContent = mine && delayLeft > 0 ? `${g.activeTimelines} TL · ${(delayLeft / 1000).toFixed(1)}s` : '';
+      $(`#clock-${pos}-delay`).title = mine && delay ? `This turn's delay: ${+(delay / 1000).toFixed(1)} s (${g.activeTimelines} active timeline${g.activeTimelines === 1 ? '' : 's'})` : '';
+      box.classList.toggle('running', mine && delayLeft <= 0);
+      box.classList.toggle('delaying', mine && delayLeft > 0);
       box.classList.toggle('low', left != null && ms < 20000);
     };
     set('top', top);

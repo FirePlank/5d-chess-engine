@@ -1854,7 +1854,7 @@ impl AlphaBeta {
             }
         }
         let start = Instant::now();
-        let plan = TimePlan::new(limits, Self::mandatory_boards(root));
+        let plan = TimePlan::new(limits, Self::mandatory_boards(root), root.active_timelines());
         let deadline = plan.as_ref().map(|p| start + Duration::from_millis(p.maximum.saturating_sub(5).max(1)));
         self.begin_search(stop, limits.nodes, deadline);
         // Enumerating actions stops at the deadline or when told to stop (see `interrupted`).
@@ -2200,6 +2200,9 @@ impl AlphaBeta {
             if self.aborted {
                 break;
             }
+            // Delay clocks: a depth is started on the free time alone (see `TimePlan::free`).
+            let free = plan.map_or(0, |p| p.free);
+            let mut on_free = false;
             if let Some(p) = plan.filter(|p| p.clock) {
                 changes = changes / 2.0 + if depth > 1 && best != prev_best { 1.0 } else { 0.0 };
                 let falling = avg_score.map_or(1.0, |a| (1.0 + (a - best_score) as f64 / 150.0).clamp(0.75, 1.6));
@@ -2208,7 +2211,10 @@ impl AlphaBeta {
                 // The next depth costs about as much as all before it together: none is
                 // started past half the target.
                 if elapsed * 1000.0 > p.target(falling, instability) * 0.5 {
-                    break;
+                    if elapsed * 1000.0 >= p.free as f64 {
+                        break;
+                    }
+                    on_free = true;
                 }
             }
             // Keep searching after a mate (pruning can report false or long mates) until the
@@ -2221,8 +2227,16 @@ impl AlphaBeta {
                 let spent = start.elapsed();
                 let left = d.saturating_duration_since(Instant::now());
                 if left < spent {
-                    break;
+                    if spent.as_millis() as u64 >= free {
+                        break;
+                    }
+                    on_free = true;
                 }
+            }
+            if on_free {
+                // A delay clock's free time is left: search on, but only until it runs out.
+                let soft = start + Duration::from_millis(free);
+                self.deadline = Some(self.deadline.map_or(soft, |d| d.min(soft)));
             }
         }
         if main && completed_depth > 0 {
