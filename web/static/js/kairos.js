@@ -1,0 +1,145 @@
+// The Kairos core in the browser: a synchronous rules/game-tree instance on the main thread
+// and an engine controller around a worker.
+import { instantiate } from './wasi.js';
+
+let modulePromise = null;
+
+/** Compile kairos.wasm once; the module is shared with the worker. */
+export function loadModule() {
+  if (!modulePromise) {
+    modulePromise = (async () => {
+      const resp = await fetch('kairos.wasm');
+      if (!resp.ok) throw new Error(`kairos.wasm: HTTP ${resp.status} (build it with the kairos-web server or scripts/web.sh)`);
+      if (WebAssembly.compileStreaming && (resp.headers.get('content-type') || '').includes('wasm')) {
+        return WebAssembly.compileStreaming(resp);
+      }
+      return WebAssembly.compile(await resp.arrayBuffer());
+    })();
+  }
+  return modulePromise;
+}
+
+/** Rules and game tree (one game at a time). Calls throw on `ok: false`. */
+export class Rules {
+  static async create() {
+    const r = new Rules();
+    r.module = await loadModule();
+    r.inst = await instantiate(r.module);
+    return r;
+  }
+  raw(req) {
+    try {
+      return this.inst.call(req);
+    } catch (e) {
+      // A trap leaves the instance unusable: start a fresh one (the caller reloads its game).
+      console.error('kairos trapped on', req, e);
+      this.broken = true;
+      throw new Error('The rules engine crashed on this request: ' + (e.message || e));
+    }
+  }
+  call(req) {
+    const r = this.raw(req);
+    if (!r.ok) throw new Error(r.error);
+    return r;
+  }
+  async reset() {
+    this.inst = await instantiate(this.module);
+    this.broken = false;
+  }
+}
+
+/** Score from a 5DUCI info line, converted to White's point of view. */
+export function parseInfo(line, blackToMove) {
+  const t = line.trim().split(/\s+/);
+  const info = {};
+  for (let i = 0; i < t.length; i++) {
+    const k = t[i];
+    if (['depth', 'nodes', 'nps', 'time', 'roots', 'seldepth'].includes(k)) { info[k] = Number(t[++i]); }
+    else if (k === 'score') {
+      const kind = t[++i], v = Number(t[++i]);
+      if (kind === 'mate') info.mate = blackToMove ? -v : v;
+      else info.cp = blackToMove ? -v : v;
+    } else if (k === 'pv') { info.pv = t.slice(i + 1).join(' '); break; }
+  }
+  return info;
+}
+
+/**
+ * Engine controller: one persistent worker, a request id on every search, a shared stop flag
+ * when the page is cross-origin isolated (otherwise the worker is replaced to stop it).
+ */
+export class Engine {
+  constructor({ hashMb = 64 } = {}) {
+    this.hashMb = hashMb;
+    this.reqId = 0;
+    this.listeners = new Set();
+    this.ready = null;
+    this.busy = false;
+    this.shared = typeof SharedArrayBuffer !== 'undefined' && self.crossOriginIsolated;
+  }
+  on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
+  emit(ev) { for (const fn of this.listeners) fn(ev); }
+
+  async start() {
+    if (this.ready) return this.ready;
+    this.ready = (async () => {
+      const module = await loadModule();
+      this.worker = new Worker(new URL('./engine-worker.js', import.meta.url), { type: 'module' });
+      this.stopBuffer = this.shared ? new SharedArrayBuffer(4) : null;
+      this.stopFlag = this.stopBuffer ? new Int32Array(this.stopBuffer) : null;
+      await new Promise((resolve, reject) => {
+        this.worker.onmessage = (e) => {
+          if (e.data.type === 'ready') resolve();
+          else if (e.data.type === 'error') reject(new Error(e.data.message));
+        };
+        this.worker.onerror = (e) => reject(new Error(e.message || 'engine worker failed to start'));
+        this.worker.postMessage({ type: 'init', module, stopBuffer: this.stopBuffer, hashMb: this.hashMb });
+      });
+      this.worker.onmessage = (e) => this.onMessage(e.data);
+      this.worker.onerror = (e) => this.emit({ type: 'error', message: e.message || 'engine worker error', fatal: true });
+    })();
+    try {
+      await this.ready;
+    } catch (e) {
+      this.ready = null;
+      throw e;
+    }
+    return this.ready;
+  }
+
+  onMessage(m) {
+    if (m.id !== undefined && m.id !== this.reqId) return; // a stale search
+    if (m.type === 'done' || m.type === 'error') this.busy = false;
+    if (m.type === 'error' && m.fatal) this.restart();
+    this.emit(m);
+  }
+
+  /** Start a search; a running one is stopped first. Returns the request id. */
+  async search({ position, movetime = 86_400_000, depth, newGame = false }) {
+    await this.start();
+    this.stop();
+    const id = ++this.reqId;
+    this.busy = true;
+    this.worker.postMessage({ type: 'search', id, position, movetime, depth, newGame });
+    return id;
+  }
+
+  stop() {
+    if (!this.busy) return;
+    if (this.stopFlag) {
+      Atomics.store(this.stopFlag, 0, 1);
+    } else {
+      // No shared memory: a search cannot be interrupted, so replace the worker.
+      this.restart();
+    }
+    this.busy = false;
+    this.reqId++;
+  }
+
+  restart() {
+    if (this.worker) this.worker.terminate();
+    this.worker = null;
+    this.ready = null;
+    this.busy = false;
+  }
+}
