@@ -220,6 +220,25 @@ struct SearchResume {
     proven: bool,
     /// The line of `best` (the triangular PV, see `iterate`).
     pv: Vec<MoveSeq>,
+    /// `MultiPV` of that search, and its lines (empty at 1).
+    multipv: usize,
+    lines: Vec<PvLine>,
+}
+
+/// One MultiPV line: an exact root score and its line (the root action first).
+type PvLine = (i32, Vec<MoveSeq>);
+
+/// One depth of the MultiPV root search (`AlphaBeta::multipv_pass`).
+struct MultiPass {
+    /// The best exact score, its action and whether a mate score is proven.
+    best: Option<(i32, MoveSeq, bool)>,
+    best_pv: Vec<MoveSeq>,
+    /// Every root score is proven (and the roots are complete).
+    all_proven: bool,
+    /// Each searched action's score, in root order.
+    scores: Vec<i32>,
+    /// The best `MultiPV` exact lines, best first.
+    lines: Vec<PvLine>,
 }
 
 /// One thread's search result, for the vote between threads.
@@ -236,6 +255,8 @@ struct ThreadResult {
     pv_len: usize,
     nodes: u64,
     thread_id: usize,
+    /// With `MultiPV` above 1: the lines of the last completed depth, best first (else empty).
+    lines: Vec<PvLine>,
 }
 
 /// The result to play, by Stockfish's thread voting (as in Apeiron): each action accrues
@@ -360,6 +381,8 @@ pub struct AlphaBeta {
     resume: Option<SearchResume>,
     /// Search threads (`Threads`), this one included.
     threads: usize,
+    /// `MultiPV`: root lines searched exactly and reported (1: the plain search).
+    multipv: usize,
     /// `OwnBook`: play a book action (`book::Book::theory`) without searching when the root
     /// is a book position with one.
     own_book: bool,
@@ -628,6 +651,7 @@ impl AlphaBeta {
             last_score: 0,
             resume: None,
             threads: 1,
+            multipv: 1,
             own_book: false,
             helpers: Vec::new(),
             helper_nodes: 0,
@@ -1623,9 +1647,10 @@ impl AlphaBeta {
         line
     }
 
-    /// The `info` line of a finished depth.
+    /// The `info` line of a finished depth; with `MultiPV` above 1, of its line `multipv`
+    /// (1-based; 0 leaves the tag out, as a plain search does).
     #[allow(clippy::too_many_arguments)]
-    fn info_text(&self, root: &State, depth: i32, score: i32, pv: &[MoveSeq], nodes: u64, elapsed: f64, roots: usize) -> String {
+    fn info_text(&self, root: &State, depth: i32, multipv: usize, score: i32, pv: &[MoveSeq], nodes: u64, elapsed: f64, roots: usize) -> String {
         let pv = self.report_pv(root, pv, score, depth);
         let mut st = root.clone();
         let mut pv_txt = Vec::new();
@@ -1633,9 +1658,11 @@ impl AlphaBeta {
             pv_txt.push(format!("{} submit", action_text(&st, a)));
             st = Self::child(&st, a);
         }
+        let tag = if multipv > 0 { format!(" multipv {}", multipv) } else { String::new() };
         format!(
-            "depth {} score {} nodes {} nps {:.0} time {} roots {} pv {}",
+            "depth {}{} score {} nodes {} nps {:.0} time {} roots {} pv {}",
             depth,
+            tag,
             score_text(score),
             nodes,
             nodes as f64 / elapsed.max(1e-6),
@@ -1676,6 +1703,8 @@ fn action_text(s: &State, act: &MoveSeq) -> String {
 
 /// Most search threads `Threads` accepts.
 pub const MAX_THREADS: usize = 256;
+/// Most lines `MultiPV` accepts.
+pub const MAX_MULTIPV: usize = 256;
 /// Stack of each helper search thread (the recursion runs deep in many-timeline positions).
 const SEARCH_STACK: usize = 64 << 20;
 /// How long the main thread waits for the helpers' results once it is done (ms). Helpers stop
@@ -1692,6 +1721,8 @@ struct HelperJob {
     max_depth: i32,
     /// Depth already completed by the search this one resumes (0: none).
     resumed_depth: i32,
+    /// The main thread's `MultiPV` (helpers search the same lines, as in Apeiron).
+    multipv: usize,
     start: Instant,
     tt: Arc<TtTable>,
     stop: Arc<AtomicBool>,
@@ -1745,11 +1776,12 @@ impl Helper {
                     match msg {
                         HelperMsg::NewGame => e.history.iter_mut().for_each(|h| *h = 0),
                         HelperMsg::Search(job) => {
-                            let HelperJob { root, roots, roots_complete, max_depth, resumed_depth, start, tt, stop, counters, done } = *job;
+                            let HelperJob { root, roots, roots_complete, max_depth, resumed_depth, multipv, start, tt, stop, counters, done } = *job;
                             if stop.load(Ordering::Relaxed) {
                                 continue; // That search is over already.
                             }
                             e.tt = tt;
+                            e.multipv = multipv;
                             e.begin_search(&stop, None, None);
                             e.nodes_out = &counters[thread_id - 1].0;
                             let interrupt = interrupt_on(&stop, None);
@@ -1788,8 +1820,8 @@ impl AlphaBeta {
         self.tt = Arc::new(make());
     }
 
-    /// Returns true when the option was recognized: `Hash` (MB), `Threads` or `OwnBook`
-    /// (true/false, or a number: non-zero is on).
+    /// Returns true when the option was recognized: `Hash` (MB), `Threads`, `MultiPV` or
+    /// `OwnBook` (true/false, or a number: non-zero is on).
     pub fn set_option(&mut self, key: &str, value: &OptionValue) -> bool {
         if key == "OwnBook" {
             self.own_book = match value {
@@ -1809,8 +1841,17 @@ impl AlphaBeta {
                 self.helpers.truncate(self.threads - 1);
                 true
             }
+            ("MultiPV", Some(n)) => {
+                self.multipv = (n.max(1.0) as usize).min(MAX_MULTIPV);
+                true
+            }
             _ => false,
         }
+    }
+
+    /// The `multipv` tag of reported line `k` (1-based): none for a plain search.
+    fn line_tag(&self, k: usize) -> usize {
+        if self.multipv > 1 { k } else { 0 }
     }
 
     /// Search threads in use (`Threads`).
@@ -1874,7 +1915,11 @@ impl AlphaBeta {
         let max_depth = limits.depth.unwrap_or(64) as i32;
 
         // Resuming the last search of this position: its root actions, order and depth.
-        let resume = if limits.resume { self.resume.clone().filter(|r| r.hash == root.hash() && r.completed_depth > 0) } else { None };
+        let resume = if limits.resume {
+            self.resume.clone().filter(|r| r.hash == root.hash() && r.completed_depth > 0 && r.multipv == self.multipv)
+        } else {
+            None
+        };
         if let Some(r) = &resume {
             if r.completed_depth >= max_depth {
                 self.last_score = r.score;
@@ -1944,7 +1989,7 @@ impl AlphaBeta {
         let best = self.search_roots(root, roots, roots_complete, max_depth, start, plan.as_ref(), info, None);
         match future_mate {
             Some(m) if self.last_score < MATE - 1 => {
-                info(self.info_text(root, 1, MATE - 1, std::slice::from_ref(&m), self.nodes, start.elapsed().as_secs_f64(), 1));
+                info(self.info_text(root, 1, self.line_tag(1), MATE - 1, std::slice::from_ref(&m), self.nodes, start.elapsed().as_secs_f64(), 1));
                 self.last_score = MATE - 1;
                 self.resume = None;
                 Some(Action::from_moveseq(&m, root))
@@ -1993,6 +2038,7 @@ impl AlphaBeta {
                 roots_complete,
                 max_depth,
                 resumed_depth,
+                multipv: self.multipv,
                 start,
                 tt: self.tt.clone(),
                 stop: helper_stop.clone(),
@@ -2020,10 +2066,20 @@ impl AlphaBeta {
         self.helper_results = results.len() - 1;
         let chosen = &results[select_best_thread(&results)];
         if chosen.thread_id != 0 && chosen.completed_depth > 0 {
-            // The vote went to a helper: its depth and line are the ones reported last.
+            // The vote went to a helper: its depth and line (lines) are the ones reported last.
             let nodes = self.nodes + self.helper_nodes;
-            let line = self.info_text(root, chosen.completed_depth, chosen.score, &chosen.pv, nodes, start.elapsed().as_secs_f64(), root_count);
-            info(line);
+            let elapsed = start.elapsed().as_secs_f64();
+            if self.multipv > 1 {
+                // Its best line first, then its other lines of the last depth it completed.
+                let rest = chosen.lines.iter().filter(|l| l.1.first() != Some(&chosen.best));
+                let lines = std::iter::once((chosen.score, chosen.pv.clone())).chain(rest.cloned()).take(self.multipv);
+                for (k, (score, pv)) in lines.enumerate() {
+                    info(self.info_text(root, chosen.completed_depth, k + 1, score, &pv, nodes, elapsed, root_count));
+                }
+            } else {
+                let line = self.info_text(root, chosen.completed_depth, 0, chosen.score, &chosen.pv, nodes, elapsed, root_count);
+                info(line);
+            }
         }
         self.last_score = chosen.score;
         Some(Action::from_moveseq(&chosen.best, root))
@@ -2062,6 +2118,10 @@ impl AlphaBeta {
         // search starts past the resumed depth too, but has finished (and votes with) only
         // the depths it searches itself.
         let mut completed_depth = if resume.is_some() { resumed_depth } else { 0 };
+        // MultiPV (`multipv_pass`): the lines of the last completed depth, best first. A plain
+        // search (`MultiPV` 1) never touches them.
+        let multi = self.multipv > 1;
+        let mut lines: Vec<PvLine> = resume.map_or_else(Vec::new, |r| r.lines.clone());
         self.seek_mate = false;
         // Clock stability: decaying count of best-action changes and running average score.
         let mut changes = 0.0f64;
@@ -2088,73 +2148,85 @@ impl AlphaBeta {
             let mut iter_pv: Vec<MoveSeq>;
             let mut all_proven;
             let mut scores: Vec<i32>;
-            loop {
-                let mut alpha = lo;
-                let beta = hi;
-                iter_best = None;
-                iter_pv = Vec::new();
-                all_proven = roots_complete;
-                scores = Vec::with_capacity(roots.len());
-                let mut top = -INF;
-                for (k, (_, act)) in roots.iter().enumerate() {
-                    let mark = Self::make(&mut work, act);
-                    let v = if k == 0 {
-                        -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true)
-                    } else {
-                        // Late root actions are reduced, never pruned.
-                        let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(self.in_check(&work)) } else { None };
-                        let r = if child_check == Some(false) { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
-                        self.known_check = child_check;
-                        let mut v = -self.negamax(&mut work, depth - 1 - r, 1, -alpha - 1, -alpha, false);
-                        if !self.aborted && v > alpha && r > 0 {
+            let mut depth_lines: Vec<PvLine> = Vec::new();
+            if multi {
+                let pass = self.multipv_pass(&mut work, &roots, depth, lo, hi, roots_complete);
+                // Its scores are exact: no fail high is a bound to keep.
+                hi = INF;
+                iter_best = pass.best;
+                iter_pv = pass.best_pv;
+                all_proven = pass.all_proven;
+                scores = pass.scores;
+                depth_lines = pass.lines;
+            } else {
+                loop {
+                    let mut alpha = lo;
+                    let beta = hi;
+                    iter_best = None;
+                    iter_pv = Vec::new();
+                    all_proven = roots_complete;
+                    scores = Vec::with_capacity(roots.len());
+                    let mut top = -INF;
+                    for (k, (_, act)) in roots.iter().enumerate() {
+                        let mark = Self::make(&mut work, act);
+                        let v = if k == 0 {
+                            -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true)
+                        } else {
+                            // Late root actions are reduced, never pruned.
+                            let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(self.in_check(&work)) } else { None };
+                            let r = if child_check == Some(false) { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
                             self.known_check = child_check;
-                            v = -self.negamax(&mut work, depth - 1, 1, -alpha - 1, -alpha, false);
+                            let mut v = -self.negamax(&mut work, depth - 1 - r, 1, -alpha - 1, -alpha, false);
+                            if !self.aborted && v > alpha && r > 0 {
+                                self.known_check = child_check;
+                                v = -self.negamax(&mut work, depth - 1, 1, -alpha - 1, -alpha, false);
+                            }
+                            if !self.aborted && v > alpha {
+                                self.known_check = child_check;
+                                v = -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true);
+                            }
+                            v
+                        };
+                        work.unmake(mark);
+                        if self.aborted {
+                            break;
                         }
-                        if !self.aborted && v > alpha {
-                            self.known_check = child_check;
-                            v = -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true);
+                        scores.push(v);
+                        all_proven &= self.proven;
+                        top = top.max(v);
+                        if v > alpha {
+                            alpha = v;
+                            iter_best = Some((v, act.clone(), self.proven));
+                            iter_pv = self.root_pv(act);
+                            if v >= beta {
+                                break; // Fail high.
+                            }
                         }
-                        v
-                    };
-                    work.unmake(mark);
-                    if self.aborted {
+                    }
+                    tries += 1;
+                    if self.aborted || (lo == -INF && hi == INF) {
                         break;
                     }
-                    scores.push(v);
-                    all_proven &= self.proven;
-                    top = top.max(v);
-                    if v > alpha {
-                        alpha = v;
-                        iter_best = Some((v, act.clone(), self.proven));
-                        iter_pv = self.root_pv(act);
-                        if v >= beta {
-                            break; // Fail high.
+                    if top <= lo {
+                        window *= ASP_FAIL_MULT;
+                        lo = (prev_score - window).max(-INF);
+                        // Nothing reached the last depth's score: an earlier fail high is stale.
+                        fail_high = None;
+                    } else if top >= hi {
+                        window *= ASP_FAIL_MULT;
+                        hi = (prev_score + window).min(INF);
+                        // The action that failed high is searched first again.
+                        let (_, act, _) = iter_best.take().expect("a fail high has a best action");
+                        if let Some(i) = roots.iter().position(|r| r.1 == act) {
+                            roots[..=i].rotate_right(1);
                         }
+                        fail_high = Some((act, std::mem::take(&mut iter_pv)));
+                    } else {
+                        break;
                     }
-                }
-                tries += 1;
-                if self.aborted || (lo == -INF && hi == INF) {
-                    break;
-                }
-                if top <= lo {
-                    window *= ASP_FAIL_MULT;
-                    lo = (prev_score - window).max(-INF);
-                    // Nothing reached the last depth's score: an earlier fail high is stale.
-                    fail_high = None;
-                } else if top >= hi {
-                    window *= ASP_FAIL_MULT;
-                    hi = (prev_score + window).min(INF);
-                    // The action that failed high is searched first again.
-                    let (_, act, _) = iter_best.take().expect("a fail high has a best action");
-                    if let Some(i) = roots.iter().position(|r| r.1 == act) {
-                        roots[..=i].rotate_right(1);
+                    if window > ASP_MAX_WINDOW || tries >= ASP_MAX_TRIES {
+                        (lo, hi) = (-INF, INF);
                     }
-                    fail_high = Some((act, std::mem::take(&mut iter_pv)));
-                } else {
-                    break;
-                }
-                if window > ASP_MAX_WINDOW || tries >= ASP_MAX_TRIES {
-                    (lo, hi) = (-INF, INF);
                 }
             }
             if self.aborted {
@@ -2206,10 +2278,20 @@ impl AlphaBeta {
                         roots[..=i].rotate_right(1);
                     }
                 }
+                // A kept mate keeps the lines it was found with (as in Apeiron).
+                if multi && !kept {
+                    lines = depth_lines;
+                }
             }
             if !self.aborted && main {
                 let nodes = self.nodes + helper_nodes.iter().map(|c| c.0.load(Ordering::Relaxed)).sum::<u64>();
-                info(self.info_text(root, depth, best_score, &best_pv, nodes, elapsed, roots.len()));
+                if multi {
+                    for (k, (score, pv)) in lines.iter().enumerate() {
+                        info(self.info_text(root, depth, k + 1, *score, pv, nodes, elapsed, roots.len()));
+                    }
+                } else {
+                    info(self.info_text(root, depth, 0, best_score, &best_pv, nodes, elapsed, roots.len()));
+                }
             }
             if self.aborted {
                 break;
@@ -2232,8 +2314,14 @@ impl AlphaBeta {
                 }
             }
             // Keep searching after a mate (pruning can report false or long mates) until the
-            // mate is well inside the searched depth. (Helpers search on until stopped.)
-            if main && best_score.abs() > MATE - 1000 && depth >= 2 * (MATE - best_score.abs()) + 2 {
+            // mate is well inside the searched depth (with MultiPV: every line's). (Helpers
+            // search on until stopped.)
+            let mate_done = if multi {
+                !lines.is_empty() && lines.iter().all(|l| l.0.abs() > MATE - 1000 && depth >= 2 * (MATE - l.0.abs()) + 2)
+            } else {
+                best_score.abs() > MATE - 1000 && depth >= 2 * (MATE - best_score.abs()) + 2
+            };
+            if main && mate_done {
                 break;
             }
             if let Some(d) = self.deadline {
@@ -2263,10 +2351,76 @@ impl AlphaBeta {
                 score: best_score,
                 proven: best_proven,
                 pv: best_pv.clone(),
+                multipv: self.multipv,
+                lines: lines.clone(),
             });
         }
         let pv_len = best_pv.len();
-        ThreadResult { best, score: best_score, proven: best_proven, completed_depth, pv: best_pv, pv_len, nodes: self.nodes, thread_id: self.thread_id }
+        ThreadResult { best, score: best_score, proven: best_proven, completed_depth, pv: best_pv, pv_len, nodes: self.nodes, thread_id: self.thread_id, lines }
+    }
+
+    /// One depth of the MultiPV root search over `roots` (in order), as Apeiron's: the first
+    /// action is searched in the aspiration window `lo..hi` and again with a full window when
+    /// it falls outside; until `MultiPV` actions have exact scores, every action is searched
+    /// with a full window; after that (Stockfish-style) the bar is the `MultiPV`-th best exact
+    /// score, and an action is scouted at it (reduced late, as the plain search does) and only
+    /// re-searched for an exact score (and its line) when it beats it. An action that does not
+    /// is scored below the bar (its score is only an upper bound).
+    fn multipv_pass(&mut self, work: &mut State, roots: &[(i32, MoveSeq)], depth: i32, lo: i32, hi: i32, roots_complete: bool) -> MultiPass {
+        let want = self.multipv;
+        let mut pass = MultiPass { best: None, best_pv: Vec::new(), all_proven: roots_complete, scores: Vec::with_capacity(roots.len()), lines: Vec::new() };
+        // The best exact scores so far, best first, at most `want` of them.
+        let mut top: Vec<i32> = Vec::with_capacity(want + 1);
+        for (k, (_, act)) in roots.iter().enumerate() {
+            let bar = if top.len() >= want { top[want - 1] } else { -INF };
+            let mark = Self::make(work, act);
+            let mut exact = true;
+            let v = if k == 0 {
+                let mut v = -self.negamax(work, depth - 1, 1, -hi, -lo, true);
+                if !self.aborted && (v <= lo || v >= hi) && (lo > -INF || hi < INF) {
+                    v = -self.negamax(work, depth - 1, 1, -INF, INF, true);
+                }
+                v
+            } else if bar == -INF {
+                -self.negamax(work, depth - 1, 1, -INF, INF, true)
+            } else {
+                let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(self.in_check(work)) } else { None };
+                let r = if child_check == Some(false) { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
+                self.known_check = child_check;
+                let mut v = -self.negamax(work, depth - 1 - r, 1, -bar - 1, -bar, false);
+                if !self.aborted && v > bar && r > 0 {
+                    self.known_check = child_check;
+                    v = -self.negamax(work, depth - 1, 1, -bar - 1, -bar, false);
+                }
+                if !self.aborted && v > bar {
+                    self.known_check = child_check;
+                    v = -self.negamax(work, depth - 1, 1, -INF, -bar, true);
+                }
+                exact = v > bar;
+                if exact { v } else { v.min(bar - 1) }
+            };
+            work.unmake(mark);
+            if self.aborted {
+                break;
+            }
+            pass.scores.push(v);
+            pass.all_proven &= self.proven;
+            if exact {
+                let pv = self.root_pv(act);
+                if pass.best.as_ref().is_none_or(|b| v > b.0) {
+                    pass.best = Some((v, act.clone(), self.proven));
+                    pass.best_pv.clone_from(&pv);
+                }
+                let i = top.partition_point(|&t| t >= v);
+                top.insert(i, v);
+                top.truncate(want);
+                pass.lines.push((v, pv));
+            }
+        }
+        // Best first (a stable sort: on equal scores, the earlier action, as `best`).
+        pass.lines.sort_by(|a, b| b.0.cmp(&a.0));
+        pass.lines.truncate(want);
+        pass
     }
 
     /// The score of the action the last `find_best_move` returned (internal units, from the
@@ -2283,7 +2437,7 @@ mod tests {
     /// A thread's result; mate scores proven.
     fn result(from: u32, score: i32, depth: i32, thread_id: usize) -> ThreadResult {
         let m = FullMove { from: crate::core::vec4::Vec4(from), to: crate::core::vec4::Vec4(from + 1) };
-        ThreadResult { best: MoveSeq::from(&[m][..]), score, proven: true, completed_depth: depth, pv: Vec::new(), pv_len: 5, nodes: 0, thread_id }
+        ThreadResult { best: MoveSeq::from(&[m][..]), score, proven: true, completed_depth: depth, pv: Vec::new(), pv_len: 5, nodes: 0, thread_id, lines: Vec::new() }
     }
 
     fn unproven(mut r: ThreadResult) -> ThreadResult {
@@ -2362,6 +2516,54 @@ mod tests {
         // Back to one thread: the helpers are dropped.
         e.set_option("Threads", &OptionValue::Int(1));
         assert!(e.helpers.is_empty());
+    }
+
+    /// The field after `key` in an info line, and the first action of its line.
+    fn info_field<'a>(line: &'a str, key: &str) -> &'a str {
+        let at = line.find(&format!(" {} ", key)).map(|i| i + key.len() + 2).unwrap_or_else(|| panic!("no {} in {}", key, line));
+        let rest = &line[at..];
+        let end = match key {
+            "score" => rest.find(" nodes").unwrap(),
+            "pv" => rest.find(" submit").unwrap(),
+            _ => rest.find(' ').unwrap_or(rest.len()),
+        };
+        &rest[..end]
+    }
+
+    /// MultiPV 3 reports three lines a depth (`multipv 1..3`), of distinct root actions,
+    /// best first; the line of the plain search's action has the plain search's score at
+    /// the same depth (one thread, fresh tables), and a plain search tags no line.
+    #[test]
+    fn multipv_reports_distinct_sorted_lines() {
+        let s = start_with_moves("(0T1)e2e4 submit (0T1)e7e5 submit");
+        let stop = AtomicBool::new(false);
+        let depth = 4;
+        let limits = Limits { depth: Some(depth), ..Default::default() };
+        let mut plain = Vec::new();
+        let mut e = AlphaBeta::new();
+        e.set_option("Hash", &OptionValue::Int(16));
+        e.find_best_move(&s, &limits, &stop, &mut |m| plain.push(m)).expect("an action");
+        assert!(plain.iter().all(|l| !l.contains("multipv")));
+        let plain_last = plain.last().unwrap().clone();
+
+        let mut out = Vec::new();
+        let mut e = AlphaBeta::new();
+        e.set_option("Hash", &OptionValue::Int(16));
+        assert!(e.set_option("MultiPV", &OptionValue::Int(3)));
+        e.find_best_move(&s, &limits, &stop, &mut |m| out.push(m)).expect("an action");
+        for d in 1..=depth {
+            let lines: Vec<&String> = out.iter().filter(|l| l.starts_with(&format!("depth {} ", d))).collect();
+            assert_eq!(lines.len(), 3, "depth {}: {:?}", d, lines);
+            let tags: Vec<&str> = lines.iter().map(|l| info_field(l, "multipv")).collect();
+            assert_eq!(tags, ["1", "2", "3"]);
+            let acts: Vec<&str> = lines.iter().map(|l| info_field(l, "pv")).collect();
+            assert!(acts[0] != acts[1] && acts[1] != acts[2] && acts[0] != acts[2], "{:?}", acts);
+            let cps: Vec<i64> = lines.iter().map(|l| info_field(l, "cp").parse().unwrap()).collect();
+            assert!(cps[0] >= cps[1] && cps[1] >= cps[2], "{:?}", cps);
+        }
+        let last: Vec<&String> = out.iter().filter(|l| l.starts_with(&format!("depth {} ", depth))).collect();
+        let same = last.iter().find(|l| info_field(l, "pv") == info_field(&plain_last, "pv")).expect("the plain search's action is a line");
+        assert_eq!(info_field(same, "score"), info_field(&plain_last, "score"), "{}\n{}", same, plain_last);
     }
 
     /// Mate in one by (0T10)Bf1>>(0T4)f7: the bishop travels back from a board ahead of the

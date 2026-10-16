@@ -609,7 +609,7 @@ fn parse_info(line: &str) -> Json {
     let mut i = 0;
     while i < toks.len() {
         match toks[i] {
-            "depth" | "nodes" | "nps" | "time" | "roots" => {
+            "depth" | "multipv" | "nodes" | "nps" | "time" | "roots" => {
                 if let Some(v) = toks.get(i + 1).and_then(|v| v.parse::<i64>().ok()) {
                     kv.push((toks[i].into(), v.into()));
                 }

@@ -78,6 +78,7 @@ pub fn run(engine: AlphaBeta) {
                 out("id author kairos");
                 out("option name Hash type spin default 64 min 1 max 65536");
                 out(&format!("option name Threads type spin default 1 min 1 max {}", super::ab::MAX_THREADS));
+                out(&format!("option name MultiPV type spin default 1 min 1 max {}", super::ab::MAX_MULTIPV));
                 out("option name OwnBook type check default false");
                 out("5duciok");
             }
