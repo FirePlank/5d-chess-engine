@@ -220,11 +220,9 @@ pub fn tuned_weights() -> Weights {
         // with a verified f7 travel on hand is a pawn and a half up (its opponent should have
         // stopped it), open routes to such a target cost the defender a little (prophylaxis
         // such as ...Nf6 or ...d5 is cheap), and a created timeline the local search shows
-        // lost for the defender counts against it a little more. A closer proven mate there
-        // adds a little per ply saved (moderate: the proofs can be false, e.g. Trojan's Trap),
-        // so the f7 line does not hang on the net's correction alone.
+        // lost for the defender counts against it a little more.
         ("sac_line", 600.0),
-        ("sac_close", 100.0),
+        ("sac_close", 0.0),
         ("sac_now", 0.0),
         ("sac_now_stm", 700.0),
         ("sac_open", 150.0),
