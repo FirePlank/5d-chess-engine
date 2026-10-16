@@ -8,7 +8,7 @@ use super::check_position::{CheckBuf, CheckPosition};
 use super::multiverse::{next_turn, MoveList};
 use super::piece::*;
 use super::promotion::PromotionOptions;
-use super::state::State;
+use super::state::{promotion_rank, State};
 use super::vec4::Vec4;
 use crate::misc::geometry::{Hc, Point, SearchSpace, Slice};
 use crate::misc::graph::Graph;
@@ -460,7 +460,7 @@ fn arrival_board(s: &State, m: FullMove) -> Board {
     let src = s.board(p.l(), p.t(), player);
     let mut nb = *s.board(q.l(), q.t(), player);
     let (_, size_y) = s.get_board_size();
-    if src.lrawn() & pmask(p.xy()) != 0 && (q.y() == 0 || q.y() == size_y - 1) {
+    if src.lrawn() & pmask(p.xy()) != 0 && q.y() == promotion_rank(size_y, player) {
         let promotion =
             s.normalize_promotion(super::action::ExtMove::new(m, NO_PIECE)).map(|e| e.promote_to).unwrap_or(NO_PIECE);
         if promotion != NO_PIECE {
@@ -548,7 +548,7 @@ fn gen_physical_entries(s: &State, source: &Board, p0: Vec4, player: bool, rs: R
             } else {
                 nb.transfer(pos, sq);
             }
-            if pawn && (q.y() == 0 || q.y() == size_y - 1) {
+            if pawn && q.y() == promotion_rank(size_y, player) {
                 let promotion = s
                     .normalize_promotion(super::action::ExtMove::new(m, NO_PIECE))
                     .map(|e| e.promote_to)

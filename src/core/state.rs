@@ -31,6 +31,13 @@ pub enum MatchStatus {
     Stalemate,
 }
 
+/// The rank a pawn or brawn of `black` (the mover) promotes on: the far side of the board
+/// from its own (rank 1 for Black, the last rank for White). A brawn moving through time or
+/// across timelines on its own back rank does not promote.
+pub fn promotion_rank(size_y: i32, black: bool) -> i32 {
+    if black { 0 } else { size_y - 1 }
+}
+
 #[derive(Clone)]
 pub struct State {
     pub(crate) m: Multiverse,
@@ -282,7 +289,7 @@ impl State {
             let z = pmask(p.xy());
             let nb = if b.lpawn() & z != 0 && d.x() != 0 && b.occupied() & pmask(q.xy()) == 0 {
                 b.replace_piece(ppos(q.x(), p.y()), NO_PIECE).move_piece(p.xy(), q.xy())
-            } else if b.lpawn() & z != 0 && (q.y() == 0 || q.y() == size_y - 1) {
+            } else if b.lpawn() & z != 0 && q.y() == promotion_rank(size_y, player) {
                 if self.promotions == PromotionOptions::NONE {
                     b.move_piece(p.xy(), q.xy())
                 } else {
@@ -326,7 +333,7 @@ impl State {
         let (p, q) = (fm.from, fm.to);
         let (_, size_y) = self.m.get_board_size();
         let mut nb = *self.m.board(q.l(), q.t(), self.player);
-        if src.lrawn() & pmask(p.xy()) != 0 && (q.y() == 0 || q.y() == size_y - 1) && self.promotions != PromotionOptions::NONE {
+        if src.lrawn() & pmask(p.xy()) != 0 && q.y() == promotion_rank(size_y, self.player) && self.promotions != PromotionOptions::NONE {
             nb.set_piece(q.xy(), if self.player { to_black(promote_to) } else { promote_to });
         } else {
             nb.place_from(q.xy(), src, p.xy());
@@ -339,7 +346,7 @@ impl State {
         let q = mv.fm.to;
         let d = q - p;
         let (_, size_y) = self.get_board_size();
-        let last_rank = q.y() == 0 || q.y() == size_y - 1;
+        let last_rank = q.y() == promotion_rank(size_y, self.player);
         if !last_rank {
             mv.promote_to = NO_PIECE;
             return Some(mv);
@@ -652,10 +659,10 @@ impl FullMove {
         if physical && source.lpawn() & origin != 0 {
             if self.from.x() != self.to.x() && source.get_piece(self.to.xy()) == NO_PIECE {
                 result |= special::EN_PASSANT;
-            } else if self.to.y() == 0 || self.to.y() == height - 1 {
+            } else if self.to.y() == promotion_rank(height, player) {
                 result |= special::PROMOTION;
             }
-        } else if !physical && source.lrawn() & origin != 0 && (self.to.y() == 0 || self.to.y() == height - 1) {
+        } else if !physical && source.lrawn() & origin != 0 && self.to.y() == promotion_rank(height, player) {
             result |= special::PROMOTION;
         } else if physical && source.king() & origin != 0 && (self.from.x() - self.to.x()).abs() > 1 {
             result |= if self.to.x() > self.from.x() { special::CASTLE_KINGSIDE } else { special::CASTLE_QUEENSIDE };
