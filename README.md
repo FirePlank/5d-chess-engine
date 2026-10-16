@@ -53,6 +53,24 @@ Strength is measured with the SPRT harness in `src/bin/sprt.rs` (pentanomial GSP
 
 Larger tests run sharded on GitHub Actions with `scripts/sprt_run.sh`, which pushes a `test:` commit to the `sprt` branch and stops the run once the LLR crosses a bound.
 
+## Website: viewer, analysis board and play
+
+```bash
+cargo run --release --bin kairos-web
+```
+
+Then open <http://127.0.0.1:8080/>. On its first start the server builds the browser engine (`web/wasm` for `wasm32-wasip1`, into `web/static/kairos.wasm`; it rebuilds when the crate sources change). Install the target once with `rustup target add wasm32-wasip1`.
+
+- **Analysis**: paste or drop a game (SPRT `--games-out` JSON lines, 5dpgn, or a 5DUCI `position … moves …` line) and step through it: every timeline and turn on one zoomable board, arrows for the last action and for checks, the present, book actions marked, the recorded evaluations as a graph. Kairos analyses the position in the browser (a WASM build in a Web Worker): live depth, score and principal variation, click a PV action to play it. Moves can be made on the board (select on every board you want to play, then submit), building variations.
+- **Play**: play Kairos on any built-in variant, as either side, with a clock or a fixed think time. The server runs the engine; one person plays at a time, everyone else watches the live game and can queue for the next one. Finished games are appended to `games/web/played.jsonl`.
+- **Games**: browse the record files under `games/` (JSONL and 5dpgn) with filters for variant, result, ending and length, and open any game in the viewer.
+
+Options: `--port 8080`, `--host 0.0.0.0` (listen on every interface), `--games <dir>` (repeatable; default `games/`), `--hash <MB>` (engine hash for play), `--archive <file>`, `--no-wasm-build`.
+
+The site is plain HTML/CSS/ES modules in `web/static`, with no build step. Without the server (any static file host that sends `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`), the viewer and analysis work; play and the game browser need `kairos-web`.
+
+Tests: `cargo test` covers the record loader and 5dpgn; `node tests/web/records.mjs games/sprt/*.jsonl` replays SPRT records through the WASM build and cross-checks actions, book/eval tags and results.
+
 ## License
 
 This project is licensed under the GNU General Public License v3.0 - see [LICENSE](LICENSE) for details.

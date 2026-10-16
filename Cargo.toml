@@ -25,6 +25,10 @@ path = "src/bin/sprt.rs"
 name = "tune"
 path = "src/bin/tune.rs"
 
+[[bin]]
+name = "kairos-web"
+path = "src/bin/kairos-web.rs"
+
 [features]
 prof = []
 
