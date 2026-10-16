@@ -14,3 +14,5 @@
 /web/wasm/target
 /web/static/kairos.wasm
 !/tests/data/**
+# Game records bundled with the static site (web/games)
+!/web/games/**

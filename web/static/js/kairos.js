@@ -149,13 +149,16 @@ export class Engine {
     this.emit(m);
   }
 
-  /** Start a search; a running one is stopped first. Returns the request id. */
-  async search({ position, movetime = 86_400_000, depth, newGame = false, resume = false }) {
+  /**
+   * Start a search; a running one is stopped first. Returns the request id. On a clock, pass
+   * `timeLeft`/`increment` (ms) and `movetime: null`.
+   */
+  async search({ position, movetime = 86_400_000, depth, newGame = false, resume = false, timeLeft, increment }) {
     await this.start();
     this.stop();
     const id = ++this.reqId;
     this.busy = true;
-    this.worker.postMessage({ type: 'search', id, position, movetime, depth, newGame, resume });
+    this.worker.postMessage({ type: 'search', id, position, movetime, depth, newGame, resume, timeLeft, increment });
     return id;
   }
 

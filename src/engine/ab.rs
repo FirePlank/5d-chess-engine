@@ -1905,7 +1905,10 @@ impl AlphaBeta {
         let mut best_proven = resume.is_some_and(|r| r.proven);
         // The line of `best`, from the PV table of the depth that chose it.
         let mut best_pv: Vec<MoveSeq> = resume.map_or_else(|| vec![best.clone()], |r| r.pv.clone());
-        let mut completed_depth = resumed_depth;
+        // Only the main thread carries the resumed search's result; a helper of a resumed
+        // search starts past the resumed depth too, but has finished (and votes with) only
+        // the depths it searches itself.
+        let mut completed_depth = if resume.is_some() { resumed_depth } else { 0 };
         self.seek_mate = false;
         // Clock stability: decaying count of best-action changes and running average score.
         let mut changes = 0.0f64;
