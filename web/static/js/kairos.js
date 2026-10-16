@@ -48,7 +48,7 @@ export class Rules {
   }
 }
 
-/** Score from a 5DUCI info line, converted to White's point of view. */
+/** Score (cp/mate on the reported scale, and wdl when sent) from a 5DUCI info line, for White. */
 export function parseInfo(line, blackToMove) {
   const t = line.trim().split(/\s+/);
   const info = {};
@@ -59,6 +59,10 @@ export function parseInfo(line, blackToMove) {
       const kind = t[++i], v = Number(t[++i]);
       if (kind === 'mate') info.mate = blackToMove ? -v : v;
       else info.cp = blackToMove ? -v : v;
+    } else if (k === 'wdl') {
+      const w = [Number(t[i + 1]), Number(t[i + 2]), Number(t[i + 3])];
+      i += 3;
+      if (w.every(Number.isFinite)) info.wdl = blackToMove ? [w[2], w[1], w[0]] : w;
     } else if (k === 'pv') { info.pv = t.slice(i + 1).join(' '); break; }
   }
   return info;

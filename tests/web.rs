@@ -35,7 +35,10 @@ fn sprt_records_replay() {
             assert_eq!(a, b, "action {}", i + 1);
             assert_eq!(node.book, i < book);
             if i >= book {
-                assert_eq!(node.eval.map(|e| e as i64), evals.get(i - book).and_then(|e| e.int()));
+                // Old records (no "eval_scale") hold internal units, shown on the reported scale.
+                let rec = evals.get(i - book).and_then(|e| e.int()).map(|e| e as i32);
+                let want = rec.map(|e| if j.get("eval_scale").is_null() && e.abs() < 20000 { kairos::engine::report_cp(e) } else { e });
+                assert_eq!(node.eval, want);
             }
             assert!(!node.san.is_empty());
         }
@@ -51,6 +54,18 @@ fn sprt_records_replay() {
         n += 1;
     }
     assert!(n >= 8);
+}
+
+#[test]
+fn record_eval_scales() {
+    // New records are on the reported scale; old ones hold internal units; mates stay.
+    let new = r#"{"position":"startpos","book":0,"moves":"(0T1)e2e4 submit (0T1)e7e5 submit (0T2)g1f3 submit","evals":[100,-20000,null],"eval_scale":275}"#;
+    let old = r#"{"position":"startpos","book":0,"moves":"(0T1)e2e4 submit (0T1)e7e5 submit (0T2)g1f3 submit","evals":[275,-20000,null]}"#;
+    for text in [new, old] {
+        let l = record::load(text, None).unwrap();
+        let evals: Vec<Option<i32>> = l.game.mainline()[1..].iter().map(|&id| l.game.nodes[id].eval).collect();
+        assert_eq!(evals, vec![Some(100), Some(-20000), None]);
+    }
 }
 
 #[test]

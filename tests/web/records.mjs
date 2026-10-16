@@ -27,7 +27,10 @@ for (const file of args) {
     const nodes = r.mainline.slice(1).map((id) => r.tree.nodes[id]);
     const book = j.book ?? (j.evals ? Math.max(0, acts - j.evals.length) : 0);
     if (nodes.some((nd, i) => nd.book !== i < book)) { fail('book flags'); continue; }
-    if (j.evals && nodes.slice(book).some((nd, i) => (nd.eval ?? null) !== (j.evals[i] ?? null))) { fail('evals'); continue; }
+    // Records without eval_scale hold internal units; the viewer shows them on the reported
+    // scale (x 100 / 275, kairos::engine::REPORT_SCALE). Mates (+-20000) are kept.
+    const rep = (e) => (e == null ? null : j.eval_scale || Math.abs(e) >= 20000 ? e : Math.sign(e) * Math.round(Math.abs(e * 100) / 275));
+    if (j.evals && nodes.slice(book).some((nd, i) => (nd.eval ?? null) !== rep(j.evals[i]))) { fail('evals'); continue; }
     // LAN round trip: the tree's LAN must be the record's tokens.
     const recActs = j.moves.split('submit').map((s) => s.trim()).filter(Boolean);
     const sameLan = (a, b) => a.split(/\s+/).sort().join(' ') === b.split(/\s+/).sort().join(' ');
