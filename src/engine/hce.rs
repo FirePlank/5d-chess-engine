@@ -6,7 +6,7 @@ use crate::core::board::Board;
 use crate::core::check_position::CheckPosition;
 use crate::core::state::State;
 
-pub const NF: usize = 68;
+pub const NF: usize = 55;
 
 /// Feature indices.
 pub mod fi {
@@ -63,11 +63,6 @@ pub mod fi {
     pub const KING_PROX_5D: usize = 53;
     /// Own queens within two squares of an enemy royal on its board.
     pub const QUEEN_PROX: usize = 54;
-    /// 5D king danger (`si::TRAVEL_PAST` ..= `si::INACTIVE_ROYAL_ATT`), white's minus black's.
-    pub const DANGER_5D: usize = 55;
-    /// Travel landings (past and now) next to the opponent's royals that the side to move
-    /// has (+ for white to move, - for black).
-    pub const TRAVEL_STM: usize = 67;
 }
 
 pub const FEATURE_NAMES: [&str; NF] = [
@@ -78,9 +73,7 @@ pub const FEATURE_NAMES: [&str; NF] = [
     "tl_slots_heavy", "k_holes", "k_knights", "k_open_orth", "k_open_diag", "k_shield", "k_zone_att", "mob_knight",
     "mob_bishop", "mob_rook", "mob_queen", "mob_king", "hanging", "royal_att", "tempo", "active_lines",
     "checks_5d", "sp_checks", "mandatory", "passed", "doubled", "isolated", "king_prox", "undeveloped",
-    "king_prox_5d", "queen_prox", "travel_past", "travel_now", "travel_backed", "weak_sq", "open_orth5",
-    "open_diag5", "open_multi5", "king_off", "king_off_new", "low_flight", "exiled", "inactive_royal_att",
-    "travel_stm",
+    "king_prox_5d", "queen_prox",
 ];
 
 pub type Features = [i32; NF];
@@ -109,74 +102,61 @@ pub fn default_weights() -> Weights {
 /// Weights used by the alpha-beta search with `use_hce` (Texel-tuned, see bin/tune.rs).
 pub fn tuned_weights() -> Weights {
     weights_by_name(&[
-        ("mat_a_pawn", 384.9),
+        ("mat_a_pawn", 142.2),
         ("mat_a_brawn", 150.0),
-        ("mat_a_knight", 551.9),
-        ("mat_a_bishop", 1330.6),
-        ("mat_a_rook", 988.8),
-        ("mat_a_queen", 1608.4),
-        ("mat_a_princess", 899.9),
+        ("mat_a_knight", 243.5),
+        ("mat_a_bishop", 1037.3),
+        ("mat_a_rook", 718.1),
+        ("mat_a_queen", 1250.0),
+        ("mat_a_princess", 900.0),
         ("mat_a_unicorn", 250.0),
         ("mat_a_dragon", 150.0),
-        ("mat_a_cking", 303.1),
-        ("mat_i_pawn", 33.5),
-        ("mat_i_brawn", 74.9),
-        ("mat_i_knight", 273.2),
-        ("mat_i_bishop", 741.6),
-        ("mat_i_rook", 345.4),
-        ("mat_i_queen", 1124.6),
+        ("mat_a_cking", 300.0),
+        ("mat_i_pawn", 84.1),
+        ("mat_i_brawn", 75.0),
+        ("mat_i_knight", 291.6),
+        ("mat_i_bishop", 781.4),
+        ("mat_i_rook", 350.4),
+        ("mat_i_queen", 1112.2),
         ("mat_i_princess", 450.0),
-        ("mat_i_unicorn", 125.1),
-        ("mat_i_dragon", 74.9),
+        ("mat_i_unicorn", 125.0),
+        ("mat_i_dragon", 75.0),
         ("mat_i_cking", 150.0),
-        ("cent_knight", 120.0),
-        ("cent_bishop", 45.1),
-        ("cent_rook", -39.1),
-        ("cent_queen", 18.5),
-        ("cent_other", 82.2),
-        ("pawn_adv", -37.5),
-        ("pawn_near", 209.4),
-        ("king_cent", -49.4),
-        ("tl_slots", 2870.1),
-        ("tl_slots_heavy", -15.8),
-        ("k_holes", -288.9),
-        ("k_knights", 2588.7),
-        ("k_open_orth", -498.5),
-        ("k_open_diag", 85.3),
-        ("k_shield", 759.0),
-        ("k_zone_att", -303.1),
-        ("mob_knight", 139.4),
-        ("mob_bishop", 136.9),
-        ("mob_rook", 143.6),
-        ("mob_queen", 102.2),
-        ("mob_king", 157.4),
-        ("hanging", -15.8),
-        ("royal_att", -1894.9),
-        ("tempo", 67.3),
-        ("active_lines", 5.6),
+        ("cent_knight", 98.9),
+        ("cent_bishop", 47.7),
+        ("cent_rook", -80.1),
+        ("cent_queen", -46.5),
+        ("cent_other", 2.0),
+        ("pawn_adv", 40.9),
+        ("pawn_near", 3.6),
+        ("king_cent", -212.3),
+        ("tl_slots", 2717.9),
+        ("tl_slots_heavy", -23.2),
+        ("k_holes", -38.0),
+        ("k_knights", 2606.9),
+        ("k_open_orth", -328.4),
+        ("k_open_diag", 6.8),
+        ("k_shield", 790.2),
+        ("k_zone_att", -439.4),
+        ("mob_knight", 19.2),
+        ("mob_bishop", 56.9),
+        ("mob_rook", -6.0),
+        ("mob_queen", 205.9),
+        ("mob_king", -153.4),
+        ("hanging", -26.4),
+        ("royal_att", -1801.5),
+        ("tempo", 359.3),
+        ("active_lines", -48.9),
         ("checks_5d", 0.0),
         ("sp_checks", 0.0),
-        ("mandatory", 561.2),
-        ("passed", 121.3),
-        ("doubled", 20.0),
-        ("isolated", -60.7),
-        ("king_prox", 1112.1),
-        ("undeveloped", -54.2),
-        ("king_prox_5d", -4.0),
-        ("queen_prox", -772.1),
-        ("travel_past", -357.8),
-        ("travel_now", 118.0),
-        ("travel_backed", -224.5),
-        ("weak_sq", -213.6),
-        ("open_orth5", 0.0),
-        ("open_diag5", 1.3),
-        ("open_multi5", -2.2),
-        ("king_off", -559.4),
-        ("king_off_new", -499.8),
-        ("low_flight", 108.4),
-        ("exiled", 2.7),
-        ("inactive_royal_att", 0.0),
-        ("travel_stm", 478.3),
+        ("mandatory", 549.1),
+        ("passed", -108.9),
+        ("doubled", -4.8),
+        ("isolated", -81.7),
+        ("king_prox", 1236.4),
+        ("undeveloped", -353.3),
+        ("king_prox_5d", 101.7),
+        ("queen_prox", -1000.1),
     ])
 }
 
@@ -240,8 +220,6 @@ pub(crate) fn kind_value10(b: &Board, sq: i32) -> i32 {
 /// Attack map of one color's pieces on a board, with per-kind mobility counts.
 pub(crate) struct Side {
     pub(crate) attacks: Bitboard,
-    /// Squares attacked by pieces other than royals.
-    pub(crate) attacks_nr: Bitboard,
     pub(crate) mob: [i32; 5],
 }
 
@@ -249,19 +227,19 @@ pub(crate) fn side_attacks(b: &Board, c: bool) -> Side {
     let own = b.friendly(c);
     let mine = b.hostile(!c);
     let occ = b.occupied();
-    let mut s = Side { attacks: 0, attacks_nr: 0, mob: [0; 5] };
+    let mut s = Side { attacks: 0, mob: [0; 5] };
     for sq in marked_pos(mine) {
         let z = pmask(sq);
-        let a = if b.lpawn() & z != 0 {
-            if c { black_pawn_attack(sq) } else { white_pawn_attack(sq) }
+        if b.lpawn() & z != 0 {
+            s.attacks |= if c { black_pawn_attack(sq) } else { white_pawn_attack(sq) };
         } else if b.lknight() & z != 0 {
             let a = knight_attack(sq);
+            s.attacks |= a;
             s.mob[0] += (a & !own).count_ones() as i32;
-            a
         } else if b.lking() & z != 0 {
             let a = king_attack(sq);
+            s.attacks |= a;
             s.mob[4] += (a & !own).count_ones() as i32;
-            a
         } else {
             let r = b.lrook() & z != 0;
             let bi = b.lbishop() & z != 0;
@@ -272,6 +250,7 @@ pub(crate) fn side_attacks(b: &Board, c: bool) -> Side {
             if bi {
                 a |= bishop_attack(sq, occ);
             }
+            s.attacks |= a;
             let m = (a & !own).count_ones() as i32;
             match (r, bi) {
                 (true, true) => s.mob[3] += m,
@@ -279,11 +258,6 @@ pub(crate) fn side_attacks(b: &Board, c: bool) -> Side {
                 (false, true) => s.mob[1] += m,
                 _ => {}
             }
-            a
-        };
-        s.attacks |= a;
-        if b.royal() & z == 0 {
-            s.attacks_nr |= a;
         }
     }
     s
@@ -316,34 +290,7 @@ pub mod si {
     pub const HANGING: usize = 40;
     /// Boards where an own royal is attacked.
     pub const ROYAL_ATT: usize = 41;
-    // 5D king danger (see `royal_5d`).
-    /// Enemy time-travel landings onto past boards next to an own royal, on squares no other
-    /// own piece defends (the f7 weakness of the f-sac).
-    pub const TRAVEL_PAST: usize = 42;
-    /// The same onto other timelines' latest boards (jumps without branching).
-    pub const TRAVEL_NOW: usize = 43;
-    /// Those landings (past or now) also covered by another enemy piece on the landing board
-    /// ("defended travel": the royal cannot take the traveller).
-    pub const TRAVEL_BACKED: usize = 44;
-    /// Squares next to own royals on active boards that only the royal defends and the enemy
-    /// attacks, physically or across time and timelines.
-    pub const WEAK_SQ: usize = 45;
-    /// Enemy sliders lined up on own royals through timelines or time, blocked by no own
-    /// piece: orthogonals, diagonals, triagonals and quadragonals.
-    pub const OPEN_ORTH5: usize = 46;
-    pub const OPEN_DIAG5: usize = 47;
-    pub const OPEN_MULTI5: usize = 48;
-    /// Own royals on active boards off their home rank, and those on created timelines.
-    pub const KING_OFF: usize = 49;
-    pub const KING_OFF_NEW: usize = 50;
-    /// Own royals on active boards with at most one safe square, under attack or with an
-    /// attacked neighbour.
-    pub const LOW_FLIGHT: usize = 51;
-    /// Every own royal on an inactive timeline (loses a stalemate).
-    pub const EXILED: usize = 52;
-    /// Own royals on inactive timelines' latest boards under attack.
-    pub const INACTIVE_ROYAL_ATT: usize = 53;
-    pub const COUNT: usize = 54;
+    pub const COUNT: usize = 42;
 }
 
 /// Per-side terms of a position from one pass over the timelines' latest boards; the
@@ -422,7 +369,7 @@ fn board_extra(b: &Board, extra: &mut [[i32; ex::COUNT]; 2], h: i32) {
 }
 
 /// Per-side terms of one active board.
-fn board_sides(b: &Board, side: &mut [[i32; si::COUNT]; 2], w: i32, h: i32) -> [Side; 2] {
+fn board_sides(b: &Board, side: &mut [[i32; si::COUNT]; 2], w: i32, h: i32) {
     let colors = [b.white() & !b.black(), b.black() & !b.white()];
     let kinds = [
         b.pawn(),
@@ -480,7 +427,6 @@ fn board_sides(b: &Board, side: &mut [[i32; si::COUNT]; 2], w: i32, h: i32) -> [
             f[si::HANGING] += kind_value10(b, sq);
         }
     }
-    att
 }
 
 /// One board's contribution to `Sides` while its timeline is active (its material counts are
@@ -490,21 +436,15 @@ pub struct BoardTerms {
     side: [[i32; si::COUNT]; 2],
     extra: [[i32; ex::COUNT]; 2],
     heavy: i32,
-    /// Squares each color attacks: all pieces, and pieces other than royals.
-    att: [Bitboard; 2],
-    att_nr: [Bitboard; 2],
 }
 
 impl BoardTerms {
-    const ZERO: BoardTerms =
-        BoardTerms { side: [[0; si::COUNT]; 2], extra: [[0; ex::COUNT]; 2], heavy: 0, att: [0; 2], att_nr: [0; 2] };
+    const ZERO: BoardTerms = BoardTerms { side: [[0; si::COUNT]; 2], extra: [[0; ex::COUNT]; 2], heavy: 0 };
 }
 
 pub fn board_terms(b: &Board, w: i32, h: i32) -> BoardTerms {
     let mut t = BoardTerms::ZERO;
-    let att = board_sides(b, &mut t.side, w, h);
-    t.att = [att[0].attacks, att[1].attacks];
-    t.att_nr = [att[0].attacks_nr, att[1].attacks_nr];
+    board_sides(b, &mut t.side, w, h);
     board_extra(b, &mut t.extra, h);
     t.heavy = (b.queen() | b.bishop() | b.princess()).count_ones() as i32;
     t
@@ -513,11 +453,6 @@ pub fn board_terms(b: &Board, w: i32, h: i32) -> BoardTerms {
 /// Where `sides` gets each board's terms.
 pub trait TermSource {
     fn terms(&mut self, b: &Board, w: i32, h: i32) -> &BoardTerms;
-    /// Memoized `past_line` results by `past_key`.
-    fn past_get(&mut self, _key: u64) -> Option<[i32; 2]> {
-        None
-    }
-    fn past_put(&mut self, _key: u64, _v: [i32; 2]) {}
 }
 
 /// Terms computed on every request.
@@ -533,29 +468,15 @@ impl TermSource for Direct {
 pub struct TermCache {
     size: (i32, i32),
     slots: Vec<(Board, bool, BoardTerms)>,
-    past: Vec<(u64, [i32; 2])>,
 }
 
 impl Default for TermCache {
     fn default() -> Self {
-        TermCache {
-            size: (0, 0),
-            slots: vec![(Board::default(), false, BoardTerms::ZERO); 1 << 12],
-            past: vec![(0, [0; 2]); 1 << 14],
-        }
+        TermCache { size: (0, 0), slots: vec![(Board::default(), false, BoardTerms::ZERO); 1 << 12] }
     }
 }
 
 impl TermSource for TermCache {
-    #[inline]
-    fn past_get(&mut self, key: u64) -> Option<[i32; 2]> {
-        let e = &self.past[(key >> 50) as usize];
-        if e.0 == key && key != 0 { Some(e.1) } else { None }
-    }
-    #[inline]
-    fn past_put(&mut self, key: u64, v: [i32; 2]) {
-        self.past[(key >> 50) as usize] = (key, v);
-    }
     #[inline]
     fn terms(&mut self, b: &Board, w: i32, h: i32) -> &BoardTerms {
         if self.size != (w, h) {
@@ -586,15 +507,11 @@ pub fn sides_with(s: &State, src: &mut impl TermSource) -> Sides {
     let (amin, amax) = s.get_active_range();
     let (w, h) = s.get_board_size();
     let present = s.get_present();
-    let mut atts = [[0u64; 4]; ATT_LINES];
     for l in l_min..=l_max {
         let (t, c) = s.get_timeline_end(l);
         let b = s.board(l, t, c);
         let active = l >= amin && l <= amax;
         let bt = src.terms(b, w, h);
-        if let Some(a) = atts.get_mut((l - l_min) as usize) {
-            *a = [bt.att[0], bt.att[1], bt.att_nr[0], bt.att_nr[1]];
-        }
         if active {
             for c in 0..2 {
                 for i in 0..si::COUNT {
@@ -636,380 +553,12 @@ pub fn sides_with(s: &State, src: &mut impl TermSource) -> Sides {
             }
         }
     }
-    royal_5d(s, &mut sd, src, &atts);
     let (l0_min, l0_max) = s.get_initial_lines_range();
     let white_created = l_max - l0_max;
     let black_created = l0_min - l_min;
     sd.side[0][si::SLOTS] = (1 + black_created - white_created).clamp(0, 4);
     sd.side[1][si::SLOTS] = (1 + white_created - black_created).clamp(0, 4);
     sd
-}
-
-// ------------------------------------------------------------------ 5D royal danger
-
-/// Half-turn from which color `c`'s pieces on a line ending at `end` move next: the latest
-/// board's when it is `c`'s turn there, else the one after (`Geo::at` stands in for it with
-/// the latest board, as if the opponent passed).
-#[inline(always)]
-fn src_v(end: i32, c: bool) -> i32 {
-    if (end & 1 != 0) == c { end } else { end + 1 }
-}
-
-struct Geo<'a> {
-    m: &'a crate::core::multiverse::Multiverse,
-    lo: i32,
-    hi: i32,
-}
-
-impl<'a> Geo<'a> {
-    #[inline(always)]
-    fn end(&self, l: i32) -> i32 {
-        self.m.timeline_end_v(l)
-    }
-    /// Board of line `l` at half-turn `v`; one past the end is the latest board.
-    #[inline(always)]
-    fn at(&self, l: i32, v: i32) -> Option<&'a Board> {
-        if l < self.lo || l > self.hi {
-            return None;
-        }
-        let tl = self.m.timeline(l);
-        let k = v - tl.start;
-        let n = tl.boards.len() as i32;
-        if k < 0 || k > n {
-            None
-        } else if k == n {
-            tl.boards.last()
-        } else {
-            Some(&tl.boards[k as usize])
-        }
-    }
-}
-
-#[inline(always)]
-fn shift_xy(b: Bitboard, dx: i32, dy: i32) -> Bitboard {
-    let b = match dx {
-        1 => shift_east(b),
-        -1 => shift_west(b),
-        2 => shift_east(shift_east(b)),
-        -2 => shift_west(shift_west(b)),
-        _ => b,
-    };
-    match dy {
-        1 => b << 8,
-        -1 => b >> 8,
-        2 => b << 16,
-        -2 => b >> 16,
-        _ => b,
-    }
-}
-
-const XY9: [(i32, i32); 9] = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)];
-
-/// One square step as (mask, shift): the squares that may move, then the bit shift.
-type Step = (Bitboard, i32);
-
-const fn step_of(dx: i32, dy: i32) -> Step {
-    let m = if dx > 0 { !H_FILE } else if dx < 0 { !A_FILE } else { !0 };
-    (m, dx + 8 * dy)
-}
-
-/// `XY9` as steps, and their reverses.
-const STEP9: [Step; 9] = {
-    let mut a = [(0, 0); 9];
-    let mut i = 0;
-    while i < 9 {
-        a[i] = step_of(XY9[i].0, XY9[i].1);
-        i += 1;
-    }
-    a
-};
-const BACK9: [Step; 9] = {
-    let mut a = [(0, 0); 9];
-    let mut i = 0;
-    while i < 9 {
-        a[i] = step_of(-XY9[i].0, -XY9[i].1);
-        i += 1;
-    }
-    a
-};
-
-#[inline(always)]
-fn step(b: Bitboard, (m, s): Step) -> Bitboard {
-    if s >= 0 { (b & m) << s } else { (b & m) >> -s }
-}
-
-
-/// Knight leaps (dx, dy, dt) into the past of the same timeline (dt < 0, turns).
-const KN_PAST: [(i32, i32, i32); 8] =
-    [(2, 0, -1), (-2, 0, -1), (0, 2, -1), (0, -2, -1), (1, 0, -2), (-1, 0, -2), (0, 1, -2), (0, -1, -2)];
-
-/// Knight leaps that can land on another timeline's latest board: (dl, dt) and the square
-/// steps that go with it.
-const KN_NOW: [(i32, i32, &[(i32, i32)]); 8] = [
-    (1, 0, &[(2, 0), (-2, 0), (0, 2), (0, -2)]),
-    (-1, 0, &[(2, 0), (-2, 0), (0, 2), (0, -2)]),
-    (2, 0, &[(1, 0), (-1, 0), (0, 1), (0, -1)]),
-    (-2, 0, &[(1, 0), (-1, 0), (0, 1), (0, -1)]),
-    (1, -2, &[(0, 0)]),
-    (-1, -2, &[(0, 0)]),
-    (2, -1, &[(0, 0)]),
-    (-2, -1, &[(0, 0)]),
-];
-
-/// Squares at king distance at most one from `r`.
-#[inline(always)]
-fn spread1(r: Bitboard) -> Bitboard {
-    let h = r | shift_east(r) | shift_west(r);
-    h | shift_north(h) | shift_south(h)
-}
-
-/// Squares next to enemy royals on the past boards of line `l` where attacker `c`'s pieces
-/// there can land: [those no other enemy piece defends, and those among them `c` also covers]. (Landings
-/// on other timelines' past boards are left out: rarer, and they would tie the result to every
-/// neighbouring line.)
-fn past_line(g: &Geo, l: i32, c: bool) -> [i32; 2] {
-    let mut past = [0i32; 2];
-    let vs = src_v(g.end(l), c);
-    let Some(b0) = g.at(l, vs) else { return past };
-    let mine = b0.hostile(!c);
-    // The line's past boards and the landing squares next to an enemy royal on them.
-    let mut boards: [&Board; 8] = [b0; 8];
-    let mut zone = [0u64; 8];
-    let mut hits = [0u64; 8];
-    let mut n = 0;
-    while n < 8 {
-        let Some(b) = g.at(l, vs - 2 * (n as i32 + 1)) else { break };
-        boards[n] = b;
-        let r = b.royal() & b.hostile(c);
-        zone[n] = spread1(r) & !r & !b.friendly(c);
-        n += 1;
-    }
-    let comp = [b0.lrook() & mine, b0.lbishop() & mine, b0.lunicorn() & mine];
-    if comp.iter().any(|&x| x != 0) {
-        for (j, &(sx, sy)) in XY9.iter().enumerate() {
-            let mut pos = comp[(sx != 0) as usize + (sy != 0) as usize];
-            let st = STEP9[j];
-            for k in 0..n {
-                pos = step(pos, st);
-                if pos == 0 {
-                    break;
-                }
-                hits[k] |= pos & zone[k];
-                pos &= !boards[k].occupied();
-            }
-        }
-    }
-    let kn = b0.lknight() & mine;
-    if kn != 0 {
-        for &(dx, dy, dt) in &KN_PAST {
-            let k = (-dt - 1) as usize;
-            if k < n {
-                hits[k] |= shift_xy(kn, dx, dy) & zone[k];
-            }
-        }
-    }
-    // Squares no other enemy piece defends, and those `c` also covers there.
-    for k in 0..n {
-        if hits[k] != 0 {
-            let weak = hits[k] & !side_attacks(boards[k], !c).attacks_nr;
-            if weak != 0 {
-                past[0] += weak.count_ones() as i32;
-                past[1] += (weak & side_attacks(boards[k], c).attacks).count_ones() as i32;
-            }
-        }
-    }
-    past
-}
-
-/// Identity of everything `past_line(g, l, c)` reads: the line's boards it can reach.
-fn past_key(g: &Geo, l: i32, c: bool) -> u64 {
-    let tl = g.m.timeline(l);
-    let end = g.end(l);
-    let vs = src_v(end, c);
-    // Board keys already depend on the line and half-turn, so XOR combines them safely.
-    let mut k = 0;
-    for &x in &tl.keys()[((vs - 16 - tl.start).max(0)) as usize..] {
-        k ^= x;
-    }
-    k ^= ((vs as u64) << 1 | c as u64).wrapping_mul(0xd6e8feb86659fd93);
-    k ^ k >> 29
-}
-
-/// Lines whose latest boards' attack maps `sides_with` keeps for `royal_5d` (the terms of
-/// further lines are looked up again).
-const ATT_LINES: usize = 32;
-
-/// 5D danger terms of each side's royals (`si::TRAVEL_PAST` ..= `si::INACTIVE_ROYAL_ATT`).
-fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitboard; 4]; ATT_LINES]) {
-    let (lo, hi) = s.get_lines_range();
-    let (amin, amax) = s.get_active_range();
-    let (l0_min, l0_max) = s.get_initial_lines_range();
-    let (w, h) = s.get_board_size();
-    let g = Geo { m: s.multiverse(), lo, hi };
-    for ci in 0..2 {
-        let c = ci == 1;
-        let d = 1 - ci;
-        // Time travel into the past: walk every source line's pieces backwards.
-        let mut past = [0i32; 2];
-        for l in lo..=hi {
-            let key = past_key(&g, l, c);
-            let p = match src.past_get(key) {
-                Some(p) => p,
-                None => {
-                    let p = past_line(&g, l, c);
-                    src.past_put(key, p);
-                    p
-                }
-            };
-            past[0] += p[0];
-            past[1] += p[1];
-        }
-        let f = &mut sd.side[d];
-        f[si::TRAVEL_PAST] += past[0];
-        f[si::TRAVEL_BACKED] += past[1];
-        // Latest boards: lines to the enemy royals and landings next to them.
-        let mut royals_active = false;
-        let mut royals_any = false;
-        for l2 in lo..=hi {
-            let v2 = src_v(g.end(l2), c);
-            let b2 = g.at(l2, v2).unwrap();
-            let r = b2.royal() & b2.hostile(c);
-            if r == 0 {
-                continue;
-            }
-            royals_any = true;
-            let (att_c, def_nr) = match atts.get((l2 - lo) as usize) {
-                Some(a) => (a[ci], a[2 + d]),
-                None => {
-                    let t = src.terms(b2, w, h);
-                    (t.att[ci], t.att_nr[d])
-                }
-            };
-            if l2 < amin || l2 > amax {
-                sd.side[d][si::INACTIVE_ROYAL_ATT] += (r & att_c).count_ones() as i32;
-                continue;
-            }
-            royals_active = true;
-            let zone = spread1(r) & !r & !b2.wall();
-            let land = zone & !b2.friendly(c);
-            let mut sp = 0u64;
-            let mut now = [0i32; 2];
-            let mut open = [0i32; 3];
-            let mut count_landing = |t: Bitboard, sp: &mut Bitboard| {
-                *sp |= t;
-                let weak = t & !def_nr;
-                now[0] += weak.count_ones() as i32;
-                now[1] += (weak & att_c).count_ones() as i32;
-            };
-            for &(sl, st) in &[(-1i32, 0i32), (1, 0), (-1, -1), (1, -1)] {
-                // The boards outward from the target along this (timeline, time) direction:
-                // what blocks there and the attacker's movable pieces by axis count.
-                // (Up to three timelines away; `near` collects attacker sliders within reach
-                // of the target squares at all.)
-                let mut occ = [0u64; 3];
-                let mut block = [0u64; 3];
-                let mut att = [[0u64; 4]; 3];
-                let mut n = 0;
-                let mut reg = land | r;
-                let mut near = 0;
-                while n < 3 {
-                    let i = n as i32 + 1;
-                    let (l1, v1) = (l2 - i * sl, v2 - 2 * i * st);
-                    let Some(b1) = g.at(l1, v1) else { break };
-                    occ[n] = b1.occupied();
-                    block[n] = b1.friendly(!c);
-                    reg = spread1(reg);
-                    if v1 == src_v(g.end(l1), c) {
-                        let mine = b1.hostile(!c);
-                        att[n] = [b1.lrook() & mine, b1.lbishop() & mine, b1.lunicorn() & mine, b1.ldragon() & mine];
-                        near |= (att[n][0] | att[n][1] | att[n][2] | att[n][3]) & reg;
-                    }
-                    n += 1;
-                }
-                if near == 0 {
-                    continue;
-                }
-                let mut any = [0u64; 4];
-                for a in &att[..n] {
-                    for j in 0..4 {
-                        any[j] |= a[j];
-                    }
-                }
-                for (j, &(sx, sy)) in XY9.iter().enumerate() {
-                    let axes = (sl != 0) as usize + (st != 0) as usize + (sx != 0) as usize + (sy != 0) as usize;
-                    if any[axes - 1] == 0 {
-                        continue;
-                    }
-                    let (fwd, back) = (STEP9[j], BACK9[j]);
-                    // Walk outward from the target towards where an attacker would stand.
-                    let mut cand = land;
-                    let mut xr = r;
-                    for k in 0..n {
-                        cand = step(cand, back);
-                        xr = step(xr, back);
-                        if cand | xr == 0 {
-                            break;
-                        }
-                        let a = att[k][axes - 1];
-                        if a != 0 {
-                            let hc = cand & a;
-                            if hc != 0 {
-                                let mut t = hc;
-                                for _ in 0..=k {
-                                    t = step(t, fwd);
-                                }
-                                count_landing(t, &mut sp);
-                            }
-                            let hx = xr & a;
-                            if hx != 0 {
-                                open[axes.min(3) - 1] += hx.count_ones() as i32;
-                                xr &= !hx;
-                            }
-                        }
-                        cand &= !occ[k];
-                        xr &= !block[k];
-                    }
-                }
-            }
-            for &(dl, dt, leaps) in &KN_NOW {
-                let (l1, v1) = (l2 - dl, v2 - 2 * dt);
-                let Some(b1) = g.at(l1, v1) else { continue };
-                if v1 != src_v(g.end(l1), c) {
-                    continue;
-                }
-                let kn = b1.lknight() & b1.hostile(!c);
-                if kn == 0 {
-                    continue;
-                }
-                for &(dx, dy) in leaps {
-                    let t = shift_xy(kn, dx, dy) & land;
-                    if t != 0 {
-                        count_landing(t, &mut sp);
-                    }
-                }
-            }
-            let f = &mut sd.side[d];
-            f[si::TRAVEL_NOW] += now[0];
-            f[si::TRAVEL_BACKED] += now[1];
-            f[si::OPEN_ORTH5] += open[0];
-            f[si::OPEN_DIAG5] += open[1];
-            f[si::OPEN_MULTI5] += open[2];
-            let hit = att_c | sp;
-            f[si::WEAK_SQ] += (zone & !def_nr & hit).count_ones() as i32;
-            let home = if d == 0 { 0 } else { h - 1 };
-            let created = l2 < l0_min || l2 > l0_max;
-            for k in marked_pos(r) {
-                if k >> 3 != home {
-                    f[si::KING_OFF] += 1;
-                    f[si::KING_OFF_NEW] += created as i32;
-                }
-                let near = king_attack(k);
-                let flight = near & !b2.friendly(d == 1) & !hit;
-                f[si::LOW_FLIGHT] += (flight.count_ones() <= 1 && (near | pmask(k)) & hit != 0) as i32;
-            }
-        }
-        sd.side[d][si::EXILED] = (royals_any && !royals_active) as i32;
-    }
 }
 
 pub fn features(s: &State) -> Features {
@@ -1065,11 +614,6 @@ pub fn features_from(sd: &Sides, s: &State, checks: bool) -> Features {
     f[fi::UNDEVELOPED] = e(ex::UNDEVELOPED);
     f[fi::KING_PROX_5D] = e(ex::KING_PROX_5D);
     f[fi::QUEEN_PROX] = e(ex::QUEEN_PROX);
-    for k in 0..=si::INACTIVE_ROYAL_ATT - si::TRAVEL_PAST {
-        f[fi::DANGER_5D + k] = d(si::TRAVEL_PAST + k);
-    }
-    let opp = sd.side[1 - stm as usize];
-    f[fi::TRAVEL_STM] = sign * (opp[si::TRAVEL_PAST] + opp[si::TRAVEL_NOW]);
     f
 }
 
