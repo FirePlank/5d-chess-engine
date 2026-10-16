@@ -123,22 +123,36 @@ enum MayCheck {
     Lines,
 }
 
+/// One jump of a build.
+struct Jump {
+    m: FullMove,
+    mover: Piece,
+    royal: bool,
+    /// Whether its result leaves the mover's royals unattacked: 0 not known yet, 1 yes, 2 no.
+    ok: u8,
+}
+
+impl Jump {
+    #[inline]
+    fn safe(&mut self, memo: &mut SafetyMemo) -> bool {
+        if self.ok == 0 {
+            self.ok = if memo.arrival_safe(self.m, self.royal) { 1 } else { 2 };
+        }
+        self.ok == 1
+    }
+}
+
 #[derive(Default)]
 struct BuildScratch {
     playable: Vec<i32>,
     departures: Vec<Vec<Vec4>>,
-    /// (destination line, move, moving piece, whether it is royal) of every jump, stably
-    /// sorted by line.
-    arrivals: Vec<(i32, FullMove, Piece, bool)>,
-    sorted: Vec<(i32, FullMove, Piece, bool)>,
-    line_counts: Vec<u32>,
+    /// Every jump, by destination line (from the lowest line), in generation order.
+    arrivals: Vec<Vec<Jump>>,
     ml: MoveList,
     /// Departure coordinate of each source square, per axis.
     jump_tab: Vec<[Index; 64]>,
     /// (build stamp, per-board facts lookups: see `SafetyMemo`).
     safety: (u32, Vec<(u32, u32, u32)>),
-    /// Per arrival (in `arrivals` order): whether its result is safe for the mover.
-    arrival_ok: Vec<u8>,
     /// Per axis: its first departure or arrival coordinate (the null and physical ones
     /// come first).
     first_jump: Vec<usize>,
@@ -642,12 +656,9 @@ impl HcInfo {
             playable,
             departures,
             arrivals,
-            sorted,
-            line_counts,
             ml,
             jump_tab,
             safety,
-            arrival_ok,
             first_jump,
             orphans,
             group_slots,
@@ -685,7 +696,11 @@ impl HcInfo {
         if axis_coords.len() < np {
             axis_coords.resize_with(np, Vec::new);
         }
-        arrivals.clear();
+        let nl = (lines_hi - lines_lo + 1) as usize;
+        if arrivals.len() < nl {
+            arrivals.resize_with(nl, Vec::new);
+        }
+        arrivals[..nl].iter_mut().for_each(|a| a.clear());
         let (_, size_y) = s.get_board_size();
         // Royal safety per board: only royal moves, pinned pieces, en passant or a board
         // already in check can leave the mover's royal attacked, so most results skip the
@@ -752,48 +767,21 @@ impl HcInfo {
                 let mover = source.kind(pos);
                 let royal = source.royal() & pmask(pos) != 0;
                 for &(r, bb) in ml.iter() {
+                    let jumps = &mut arrivals[(r.l() - lines_lo) as usize];
                     for sq in marked_pos(bb) {
-                        arrivals.push((r.l(), FullMove::new(from, Vec4::from_xy(sq, r)), mover, royal));
+                        jumps.push(Jump { m: FullMove::new(from, Vec4::from_xy(sq, r)), mover, royal, ok: 0 });
                     }
                 }
             }
         }
         PHYS_CACHE.with(|c| *c.borrow_mut() = cache);
         drop(gen_scope);
-        // Stable bucket sort by destination line.
-        let nl = (lines_hi - lines_lo + 1) as usize;
-        line_counts.clear();
-        line_counts.resize(nl + 1, 0);
-        for a in arrivals.iter() {
-            line_counts[(a.0 - lines_lo) as usize + 1] += 1;
-        }
-        for k in 1..=nl {
-            line_counts[k] += line_counts[k - 1];
-        }
-        sorted.clear();
-        sorted.resize(arrivals.len(), (0, FullMove::default(), NO_PIECE, false));
-        for &a in arrivals.iter() {
-            let k = &mut line_counts[(a.0 - lines_lo) as usize];
-            sorted[*k as usize] = a;
-            *k += 1;
-        }
-        std::mem::swap(arrivals, sorted);
         let max_branch = departures[..np].iter().filter(|d| !d.is_empty()).count();
         jump_tab.clear();
         jump_tab.resize(np, [INVALID; 64]);
         let find_jump = |jt: &[[Index; 64]], axis_of: &[usize], from: Vec4| {
             let i = jt[axis_of_line(axis_of, from.l())][from.xy() as usize];
             if i == INVALID { None } else { Some(i) }
-        };
-        // Whether an arrival leaves the mover's royals unattacked (memoized per arrival:
-        // 0 unknown, 1 safe, 2 not).
-        arrival_ok.clear();
-        arrival_ok.resize(arrivals.len(), 0);
-        let arrival_safe = |k: usize, m: FullMove, royal: bool, arrival_ok: &mut [u8], memo: &mut SafetyMemo| -> bool {
-            if arrival_ok[k] == 0 {
-                arrival_ok[k] = if memo.arrival_safe(m, royal) { 1 } else { 2 };
-            }
-            arrival_ok[k] == 1
         };
         let ent_scope = crate::misc::prof::scope(12);
         if axis_coords.len() < np {
@@ -823,13 +811,11 @@ impl HcInfo {
             if player != end_c {
                 continue;
             }
-            let lo = arrivals.partition_point(|a| a.0 < l);
-            let hi = arrivals.partition_point(|a| a.0 <= l);
             let locs = &mut axis_coords[axis];
             let target = s.board(l, end_t, player);
-            for k in lo..hi {
-                let (_, m, mover, royal) = arrivals[k];
-                if m.to.t() == end_t && arrival_safe(k, m, royal, arrival_ok, &mut memo) {
+            for a in arrivals[(l - lines_lo) as usize].iter_mut() {
+                let (m, mover) = (a.m, a.mover);
+                if m.to.t() == end_t && a.safe(&mut memo) {
                     let victim = target.kind(m.to.xy());
                     let fa = axis_of_line(axis_of, m.from.l()) as u32;
                     let idx = find_jump(jump_tab, axis_of, m.from).unwrap_or(INVALID);
@@ -846,11 +832,11 @@ impl HcInfo {
         // The branch arrivals: only the ones whose result needs a check test get their board
         // here; the entries are built by `materialize_branch`.
         branch_moves.clear();
-        for (k, &(_, m, mover, royal)) in arrivals.iter().enumerate() {
-            if let Some(dep) = find_jump(jump_tab, axis_of, m.from) {
-                if arrival_safe(k, m, royal, arrival_ok, &mut memo) {
-                    let fa = axis_of_line(axis_of, m.from.l()) as u32;
-                    branch_moves.push((m, dep, fa, mover));
+        for a in arrivals[..nl].iter_mut().flatten() {
+            if let Some(dep) = find_jump(jump_tab, axis_of, a.m.from) {
+                if a.safe(&mut memo) {
+                    let fa = axis_of_line(axis_of, a.m.from.l()) as u32;
+                    branch_moves.push((a.m, dep, fa, a.mover));
                 }
             }
         }
