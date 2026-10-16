@@ -2,7 +2,8 @@
 //!
 //! Runs with the eval net of commit 406688d (tests/data/evalnet_406688d.bin), under which the
 //! mate-in-7 puzzle of data/puzzles.g used to be reported as "mate 6" from depth 12 on: every
-//! defence the pruned search looked at got mated, but not every defence was looked at.
+//! defence the pruned search looked at got mated, but not every defence was looked at. (The
+//! blob is padded with zero weights for the net inputs added since.)
 
 use kairos::core::perft::parse_g_line;
 use kairos::engine::ab::{score_text, AlphaBeta, MATE};
