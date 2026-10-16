@@ -1,0 +1,12 @@
+{
+  "name": "root_future_dep",
+  "old": "4917bd63be692363aacbb595cd88bf639c9ce608",
+  "games": 9000,
+  "shards": 40,
+  "tc": "tc 10+0.1",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}
