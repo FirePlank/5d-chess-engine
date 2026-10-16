@@ -57,7 +57,7 @@ const RFP_MARGIN: i32 = 200;
 /// Null move (a pass, i.e. a phantom turn): at non-PV nodes from this depth, when the static
 /// eval is at least beta, search the pass with depth reduced by NMP_R + depth / NMP_DIV.
 const NMP_MIN_DEPTH: i32 = 3;
-const NMP_R: i32 = 3;
+const NMP_R: i32 = 2;
 const NMP_DIV: i32 = 3;
 const DEFAULT_HASH_MB: usize = 64;
 
@@ -118,6 +118,49 @@ impl Drop for TtTable {
     }
 }
 
+const KNOWN_EVAL: u8 = 1;
+const KNOWN_CHECK: u8 = 2;
+const IN_CHECK: u8 = 4;
+const KNOWN_BITS: u32 = 16;
+
+#[derive(Clone, Copy, Default)]
+struct KnownSlot {
+    key: u64,
+    eval: i32,
+    flags: u8,
+}
+
+/// Static evaluation and in-check status by position hash (direct-mapped; a hit is a full
+/// key match, as in the transposition table).
+struct KnownCache {
+    slots: Vec<KnownSlot>,
+}
+
+impl KnownCache {
+    fn new() -> Self {
+        KnownCache { slots: vec![KnownSlot::default(); 1 << KNOWN_BITS] }
+    }
+
+    #[inline(always)]
+    fn slot(&self, key: u64) -> usize {
+        (key >> (64 - KNOWN_BITS)) as usize
+    }
+
+    /// Update slot `i` for `key` (starting it afresh when it held another position).
+    #[inline(always)]
+    fn store(&mut self, i: usize, key: u64, f: impl FnOnce(&mut KnownSlot)) {
+        let e = &mut self.slots[i];
+        if e.key != key || e.flags == 0 {
+            *e = KnownSlot { key, eval: 0, flags: 0 };
+        }
+        f(e);
+    }
+
+    fn clear(&mut self) {
+        self.slots.fill(KnownSlot::default());
+    }
+}
+
 pub struct AlphaBeta {
     hce: hce::Weights,
     /// Exchange values for the per-board capture search at quiescent leaves.
@@ -139,6 +182,8 @@ pub struct AlphaBeta {
     terms: Box<hce::TermCache>,
     /// Whether the position the next `negamax` call searches is in check, when known.
     known_check: Option<bool>,
+    /// Static evaluations and in-check status of recently seen positions.
+    known: KnownCache,
 }
 
 // The raw stop pointer is only dereferenced during `find_best_move`, while the borrow it
@@ -360,19 +405,45 @@ impl AlphaBeta {
             bufs: Vec::new(),
             terms: Box::default(),
             known_check: None,
+            known: KnownCache::new(),
         }
     }
 
     #[inline]
     fn static_eval(&mut self, s: &State) -> i32 {
         let _p = crate::misc::prof::scope(9);
+        let key = s.hash();
+        let i = self.known.slot(key);
+        let e = self.known.slots[i];
+        if e.key == key && e.flags & KNOWN_EVAL != 0 {
+            return e.eval;
+        }
         let sd = hce::sides_with(s, &mut *self.terms);
         let f = hce::features_from(&sd, s, hce::needs_checks(&self.hce));
         let base = hce::score(&f, &self.hce, s.get_present().1);
-        match super::evalnet::embedded() {
+        let v = match super::evalnet::embedded() {
             Some(net) => base + net.residual(&super::evalnet::inputs_from(&sd, s, base)),
             None => base,
+        };
+        self.known.store(i, key, |e| {
+            e.eval = v;
+            e.flags |= KNOWN_EVAL;
+        });
+        v
+    }
+
+    /// Whether the side to move is in check (royal captures threatened if it passed).
+    fn in_check(&mut self, s: &State) -> bool {
+        let _p = crate::misc::prof::scope(10);
+        let key = s.hash();
+        let i = self.known.slot(key);
+        let e = self.known.slots[i];
+        if e.key == key && e.flags & KNOWN_CHECK != 0 {
+            return e.flags & IN_CHECK != 0;
         }
+        let c = s.has_phantom_check();
+        self.known.store(i, key, |e| e.flags |= KNOWN_CHECK | if c { IN_CHECK } else { 0 });
+        c
     }
 
     #[inline]
@@ -690,13 +761,8 @@ impl AlphaBeta {
         (amin..=amax).filter(|&l| s.get_timeline_end(l) == present).count()
     }
 
-    fn in_check(s: &State) -> bool {
-        let _p = crate::misc::prof::scope(10);
-        s.has_phantom_check()
-    }
-
-    fn terminal_score(s: &State, ply: usize) -> i32 {
-        if Self::in_check(s) { -(MATE - ply as i32) } else { 0 }
+    fn terminal_score(&mut self, s: &State, ply: usize) -> i32 {
+        if self.in_check(s) { -(MATE - ply as i32) } else { 0 }
     }
 
     /// `known_check`: whether `s` is in check, when the caller already knows.
@@ -705,19 +771,22 @@ impl AlphaBeta {
         if self.check_abort() {
             return 0;
         }
-        let stand = self.static_eval(s);
-        let in_check = known_check.unwrap_or_else(|| Self::in_check(s));
-        // Royal captures are threatened: standing pat is unsound, so search evasions.
+        let in_check = known_check.unwrap_or_else(|| self.in_check(s));
+        let leaf = qd <= 0 || ply >= MAX_PLY;
+        // Royal captures are threatened: standing pat is unsound, so search evasions (the
+        // static evaluation only matters at the depth limit).
+        if in_check && leaf {
+            return self.static_eval(s);
+        }
         if !in_check {
+            let stand = self.static_eval(s);
             if stand >= beta {
                 return stand;
             }
             alpha = alpha.max(stand);
-        }
-        if qd <= 0 || ply >= MAX_PLY {
-            return if in_check { stand } else { alpha };
-        }
-        if !in_check {
+            if leaf {
+                return alpha;
+            }
             // Moves on different boards don't interact (barring jumps between boards), so
             // the pending captures resolve board by board and their gains add up.
             let present = s.get_present();
@@ -839,12 +908,14 @@ impl AlphaBeta {
             }
         }
 
-        if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| Self::in_check(s)) {
-            let e = self.static_eval(s);
-            if depth <= RFP_DEPTH && e - RFP_MARGIN * depth >= beta {
-                return e;
+        if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| self.in_check(s)) {
+            if depth <= RFP_DEPTH {
+                let e = self.static_eval(s);
+                if e - RFP_MARGIN * depth >= beta {
+                    return e;
+                }
             }
-            if depth >= NMP_MIN_DEPTH && e >= beta && !self.seek_mate && Self::has_null_material(s) {
+            if depth >= NMP_MIN_DEPTH && !self.seek_mate && Self::has_null_material(s) && self.static_eval(s) >= beta {
                 let r = NMP_R + depth / NMP_DIV;
                 let mark = s.make_null();
                 let v = -self.negamax(s, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
@@ -957,7 +1028,7 @@ impl AlphaBeta {
                     let mut child_check = None;
                     // Checking actions are not reduced: mating lines run through them.
                     if depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet {
-                        let ic = Self::in_check(s);
+                        let ic = self.in_check(s);
                         child_check = Some(ic);
                         if !ic {
                             r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
@@ -1004,7 +1075,7 @@ impl AlphaBeta {
             return v;
         }
         if searched == 0 && generated == 0 && tt_action.is_none() {
-            return Self::terminal_score(s, ply);
+            return self.terminal_score(s, ply);
         }
         if searched == 0 {
             // Only the TT action existed but failed validation; fall back to static eval.
@@ -1088,6 +1159,7 @@ impl AlphaBeta {
         let start = Instant::now();
         self.stop_ptr = stop as *const AtomicBool;
         self.nodes = 0;
+        self.known.clear();
         self.aborted = false;
         self.node_limit = limits.nodes;
         let plan = TimePlan::new(limits, Self::mandatory_boards(root));
@@ -1150,7 +1222,7 @@ impl AlphaBeta {
                     -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true)
                 } else {
                     // Late root actions are reduced, never pruned.
-                    let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(Self::in_check(&work)) } else { None };
+                    let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(self.in_check(&work)) } else { None };
                     let r = if child_check == Some(false) { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
                     self.known_check = child_check;
                     let mut v = -self.negamax(&mut work, depth - 1 - r, 1, -alpha - 1, -alpha, false);
