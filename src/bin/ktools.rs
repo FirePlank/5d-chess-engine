@@ -984,7 +984,8 @@ fn puzzles(path: &str, ms: u64, out: &mut impl Write) {
 
 /// Eval-net training records from harness JSONL games: for every position where an engine
 /// chose an action, the net inputs, the handcrafted score, the engine's reported score and
-/// the game result, all from the side to move's view, and the game number.
+/// the game result, all from the side to move's view, and the game number. The teacher score
+/// is in internal units (records on the reported scale are converted back).
 ///   ktools netdata out.bin games1.jsonl games2.jsonl ...
 /// Record: NI + 4 little-endian f32 (inputs, base, teacher or NaN, wdl, game).
 fn netdata(args: &[String], out: &mut impl Write) {
@@ -1025,6 +1026,13 @@ fn netdata(args: &[String], out: &mut impl Write) {
                                 t.split(',').map(|x| x.trim().parse().ok()).collect()
                             }
                             None => vec![None; json_field(line, "actions").and_then(|a| a.parse().ok()).unwrap_or(0)],
+                        };
+                        // Scores on the reported scale ("eval_scale": internal * 100 / scale)
+                        // back to internal units; older records hold internal units. (Mates,
+                        // +-20000 on either scale, still land outside the kept range.)
+                        let evs: Vec<Option<i32>> = match json_field(line, "eval_scale").and_then(|x| x.parse::<f64>().ok()) {
+                            Some(scale) => evs.into_iter().map(|e| e.map(|v| (v as f64 * scale / 100.0).round() as i32)).collect(),
+                            None => evs,
                         };
                         let acts: Vec<&str> = moves.split(" submit").map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                         let n_eng = evs.len();

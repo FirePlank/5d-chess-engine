@@ -523,7 +523,8 @@ struct Session {
     last_seen: Instant,
     /// Latest engine info line while it thinks (parsed fields).
     info: Json,
-    /// Engine scores per engine action (engine POV).
+    /// Engine scores per engine action (engine POV, the engine's reported scale; mates as
+    /// +-20000).
     evals: Vec<Option<i32>>,
     started: SystemTime,
 }
@@ -594,6 +595,15 @@ fn parse_info(line: &str) -> Json {
                     kv.push((if kind == "mate" { "mate" } else { "cp" }.into(), v.into()));
                 }
                 i += 3;
+            }
+            // Win/draw/loss per mille (the "cp" score is on the engine's reported scale:
+            // +100 is about a 75% expected score).
+            "wdl" => {
+                let v: Vec<Json> = toks[i + 1..].iter().take(3).filter_map(|v| v.parse::<i64>().ok()).map(Json::from).collect();
+                if v.len() == 3 {
+                    kv.push(("wdl".into(), Json::Arr(v)));
+                }
+                i += 4;
             }
             "pv" => {
                 kv.push(("pv".into(), toks[i + 1..].join(" ").into()));

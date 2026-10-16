@@ -5,6 +5,32 @@ pub mod local;
 pub mod time;
 pub mod uci;
 
+/// Reported scores. Internally a pawn is about 142 and a queen 1250, and an evaluation `s`
+/// stands for an expected score of 1 / (1 + exp(-WDL_K * s)) (the logistic the evaluation is
+/// tuned against). `info ... score cp X` reports X = s * 100 / REPORT_SCALE, so that +100 is
+/// about a 75% expected score, +200 about 90% and +400 about 99%.
+pub const REPORT_SCALE: i32 = 275;
+/// Slope of the evaluation's win-probability logistic, per internal unit.
+pub const WDL_K: f64 = 0.004;
+
+/// Internal score to the reported (normalized) centipawn scale.
+pub fn report_cp(internal: i32) -> i32 {
+    (internal as f64 * 100.0 / REPORT_SCALE as f64).round() as i32
+}
+
+/// Reported (normalized) centipawns back to internal units.
+pub fn internal_cp(reported: i32) -> i32 {
+    (reported as f64 * REPORT_SCALE as f64 / 100.0).round() as i32
+}
+
+/// Win/draw/loss per mille for an internal (non-mate) score, from the evaluation's logistic
+/// (no draw model: draws are 0).
+pub fn wdl(internal: i32) -> (u32, u32, u32) {
+    let p = 1.0 / (1.0 + (-WDL_K * internal as f64).exp());
+    let w = (p * 1000.0).round() as u32;
+    (w, 0, 1000 - w)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum OptionValue {
     None,

@@ -13,15 +13,18 @@
 //! and `--book-plies` actions chosen by a shallow search with noise, the same for both games.
 //!
 //! `--games-out` appends one JSON object per game; games 2k and 2k+1 form pair k. Its moves
-//! start with the opening's `book` actions.
+//! start with the opening's `book` actions. Its `evals` are the engines' reported scores on
+//! the reported scale (`"eval_scale":275`: internal units * 100 / 275, see
+//! `kairos::engine::REPORT_SCALE`; mates as +-20000); records without `eval_scale` are older
+//! and hold internal units.
 
 use kairos::core::action::{ExtMove, MoveSeq};
 use kairos::core::hypercuboid::{HcCursor, HcInfo};
 use kairos::core::promotion::PromotionOptions;
 use kairos::core::state::{MateType, State};
 use kairos::core::variants::{apply_uci_moves, position_from_uci};
-use kairos::engine::ab::AlphaBeta;
-use kairos::engine::{Limits, OptionValue};
+use kairos::engine::ab::{AlphaBeta, MATE};
+use kairos::engine::{report_cp, Limits, OptionValue, REPORT_SCALE};
 use kairos::misc::ordering::{AxisOrders, HcOrdering};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -247,11 +250,14 @@ struct Proc {
     last_score: Option<i32>,
 }
 
-/// Score from an engine info line: "score cp X" or "score mate N".
+/// Score from an engine info line, on the reported scale: "score cp X" or "score mate N"
+/// (+-20000). Engines that print no "wdl" (kairos before the reported scale) report internal
+/// units, converted here.
 fn info_score(line: &str) -> Option<i32> {
+    let reported = line.split_whitespace().any(|w| w == "wdl");
     let mut it = line.split_whitespace().skip_while(|w| *w != "score").skip(1);
     match (it.next()?, it.next()?) {
-        ("cp", v) => v.parse().ok(),
+        ("cp", v) => v.parse().ok().map(|x| if reported { x } else { report_cp(x) }),
         ("mate", v) => v.parse::<i32>().ok().map(|n| if n > 0 || v == "+0" { 20000 } else { -20000 }),
         _ => None,
     }
@@ -438,9 +444,14 @@ fn gen_opening(eng: &mut AlphaBeta, seed: u64, pair: usize, plies: usize) -> Ope
             }
             txt += "submit";
             assert!(c.submit::<false>());
-            let mut last = None;
-            let v = match eng.find_best_move(&c, &limits, &stop, &mut |m| last = info_score(&m).or(last)) {
-                Some(_) => -last.unwrap_or(0),
+            // Internal units, mates as +-20000 (as the info lines read before they reported
+            // the normalized scale and only proven mates).
+            let v = match eng.find_best_move(&c, &limits, &stop, &mut |_| {}) {
+                Some(_) => -match eng.last_score() {
+                    x if x > MATE - 1000 => 20000,
+                    x if x < -(MATE - 1000) => -20000,
+                    x => x,
+                },
                 None if c.get_mate_type() == MateType::Checkmate => 30000,
                 None => 0,
             };
@@ -494,7 +505,7 @@ struct GameRecord {
     reason: String,
     actions: usize,
     log: String,
-    /// Each engine action's reported score, from the mover's view.
+    /// Each engine action's reported score, from the mover's view (reported scale).
     evals: Vec<Option<i32>>,
 }
 
@@ -767,7 +778,7 @@ fn main() {
                         let esc = |x: &str| x.replace('\\', "\\\\").replace('"', "\\\"");
                         let _ = writeln!(
                             f,
-                            "{{\"game\":{},\"pair\":{},\"new_first\":{},\"score\":{},\"reason\":\"{}\",\"actions\":{},\"position\":\"{}\",\"book\":{},\"moves\":\"{}\",\"evals\":[{}]}}",
+                            "{{\"game\":{},\"pair\":{},\"new_first\":{},\"score\":{},\"reason\":\"{}\",\"actions\":{},\"position\":\"{}\",\"book\":{},\"moves\":\"{}\",\"eval_scale\":{},\"evals\":[{}]}}",
                             2 * k + gi,
                             k,
                             gi == 0,
@@ -777,6 +788,7 @@ fn main() {
                             esc(&op.position),
                             op.book,
                             esc(r.log.trim()),
+                            REPORT_SCALE,
                             r.evals.iter().map(|e| e.map(|v| v.to_string()).unwrap_or("null".into())).collect::<Vec<_>>().join(",")
                         );
                         let _ = f.flush();
