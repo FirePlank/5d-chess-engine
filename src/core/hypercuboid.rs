@@ -1735,6 +1735,52 @@ fn get_move_path(s: &CheckPosition<'_>, fm: FullMove, c: bool) -> (Vec<Vec4>, i3
 }
 
 
+/// What interrupts the cursors of this thread (see `interrupt_on`): a stop flag and a deadline.
+#[derive(Clone, Copy)]
+struct Interrupt {
+    stop: *const std::sync::atomic::AtomicBool,
+    deadline: Option<std::time::Instant>,
+}
+
+thread_local! {
+    static INTERRUPT: std::cell::Cell<Option<Interrupt>> = const { std::cell::Cell::new(None) };
+}
+
+/// Cursor steps (hypercuboids taken) between interrupt checks.
+const INTERRUPT_EVERY: u32 = 4;
+
+/// While the guard lives, the cursors of this thread stop enumerating once `stop` is set or
+/// `deadline` has passed: `next`/`next_with` then report no further action, and the caller
+/// must ask `interrupted()` before taking that for the end of the actions. Finding a legal
+/// action can take arbitrarily long (huge spaces where most points fail, or none is legal),
+/// so a search on a clock enumerates under such a guard.
+pub fn interrupt_on(stop: &std::sync::atomic::AtomicBool, deadline: Option<std::time::Instant>) -> InterruptGuard<'_> {
+    let prev = INTERRUPT.with(|c| c.replace(Some(Interrupt { stop: stop as *const _, deadline })));
+    InterruptGuard { prev, _stop: std::marker::PhantomData }
+}
+
+/// Restores the previous interrupt of the thread when dropped (see `interrupt_on`).
+pub struct InterruptGuard<'a> {
+    prev: Option<Interrupt>,
+    _stop: std::marker::PhantomData<&'a std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for InterruptGuard<'_> {
+    fn drop(&mut self) {
+        INTERRUPT.with(|c| c.set(self.prev));
+    }
+}
+
+/// Whether the interrupt of this thread (see `interrupt_on`) has fired: its stop flag is set
+/// or its deadline has passed.
+pub fn interrupted() -> bool {
+    INTERRUPT.with(|c| match c.get() {
+        None => false,
+        // SAFETY: the guard that installed the flag borrows it for as long as it is installed.
+        Some(i) => unsafe { &*i.stop }.load(std::sync::atomic::Ordering::Relaxed) || i.deadline.is_some_and(|d| std::time::Instant::now() >= d),
+    })
+}
+
 /// Resumable legal-action enumeration. The caller supplies the context and the state it
 /// was built from on every call (the state may be modified between calls if restored).
 pub struct HcCursor {
@@ -1771,7 +1817,12 @@ impl HcCursor {
         s: &State,
         fill_branch: &mut dyn FnMut(&mut AxisOrders),
     ) -> Result<Option<MoveSeq>, NeedBranch> {
+        let mut steps = 0u32;
         while !self.ss.is_empty() {
+            steps += 1;
+            if steps % INTERRUPT_EVERY == 0 && interrupted() {
+                return Ok(None);
+            }
             let mut hc = self.ss.pop_back().unwrap();
             if info.needs_branch(&hc) {
                 self.ss.push_back(hc);
@@ -2008,7 +2059,13 @@ impl BestFirstCursor {
             }
             self.lone = None;
         }
-        while let Some(BfItem { key, mut hc }) = self.heap.heap.pop() {
+        let mut steps = 0u32;
+        while !self.heap.heap.is_empty() {
+            steps += 1;
+            if steps % INTERRUPT_EVERY == 0 && interrupted() {
+                return Ok(None);
+            }
+            let BfItem { key, mut hc } = self.heap.heap.pop().unwrap();
             if info.needs_branch(&hc) {
                 self.heap.heap.push(BfItem { key, hc });
                 return Err(NeedBranch);

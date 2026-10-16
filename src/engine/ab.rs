@@ -13,7 +13,7 @@ use crate::core::action::{Action, FullMove, MoveSeq};
 use crate::core::bitboard::{marked_pos, pmask};
 use crate::core::board::Board;
 use crate::core::check_position::{BoardOverlay, CheckBuf, CheckKind, CheckPosition, SpReach};
-use crate::core::hypercuboid::{has_physical_check, plays_wasted_move, BestFirstCursor, Entry, HcCursor, HcInfo, NeedBranch};
+use crate::core::hypercuboid::{has_physical_check, interrupt_on, interrupted, plays_wasted_move, BestFirstCursor, Entry, HcCursor, HcInfo, NeedBranch};
 use crate::core::multiverse::next_turn;
 use crate::core::piece::*;
 use crate::core::state::{Mark, State};
@@ -1073,6 +1073,11 @@ impl AlphaBeta {
                         continue;
                     }
                 }) else {
+                    if interrupted() {
+                        // Out of time, not out of evasions.
+                        self.aborted = true;
+                        break 'search true;
+                    }
                     // Every evasion was searched.
                     break 'search false;
                 };
@@ -1279,6 +1284,11 @@ impl AlphaBeta {
                     };
                     match next {
                         Err(NeedBranch) => nb.info.materialize_branch(s),
+                        // Out of time before the actions ran out: abort, never "no actions".
+                        Ok(None) if interrupted() => {
+                            self.aborted = true;
+                            break 'search Some(0);
+                        }
                         Ok(None) => {
                             // Every legal action may need a move on an optional board. (The
                             // ordering is unchanged: nothing was searched since it was made.)
@@ -1535,7 +1545,9 @@ impl Helper {
                             e.tt = tt;
                             e.begin_search(&stop, None, None);
                             e.nodes_out = &counters[thread_id - 1].0;
+                            let interrupt = interrupt_on(&stop, None);
                             let mut r = e.iterate(&root, roots, roots_complete, max_depth, start, None, &mut |_| {}, &[], resumed_depth, None);
+                            drop(interrupt);
                             r.nodes = e.nodes;
                             e.nodes_out = std::ptr::null();
                             e.stop_ptr = std::ptr::null();
@@ -1627,6 +1639,8 @@ impl AlphaBeta {
         let plan = TimePlan::new(limits, Self::mandatory_boards(root));
         let deadline = plan.as_ref().map(|p| start + Duration::from_millis(p.maximum.saturating_sub(5).max(1)));
         self.begin_search(stop, limits.nodes, deadline);
+        // Enumerating actions stops at the deadline or when told to stop (see `interrupted`).
+        let _interrupt = interrupt_on(stop, deadline);
         let max_depth = limits.depth.unwrap_or(64) as i32;
 
         // Resuming the last search of this position: its root actions, order and depth.
@@ -1654,8 +1668,24 @@ impl AlphaBeta {
             if !roots.is_empty() && (gen_deadline.map(|d| Instant::now() >= d).unwrap_or(false) || stop.load(Ordering::Relaxed)) {
                 break;
             }
-            match agen.next(&hc, root) {
+            // The space without moves on optional boards gets an eighth of the time to yield a
+            // first action: when most of its points fail it can take far longer than the whole
+            // space (whose actions are then generated instead).
+            let quick = match (roots.is_empty() && full.is_some(), plan.as_ref()) {
+                (true, Some(p)) => Some(start + Duration::from_millis(p.optimum / 8)),
+                _ => None,
+            };
+            let next = match quick {
+                Some(q) => {
+                    let _quick = interrupt_on(stop, Some(deadline.map_or(q, |d| d.min(q))));
+                    agen.next(&hc, root)
+                }
+                None => agen.next(&hc, root),
+            };
+            match next {
                 Some(a) => roots.push((self.action_score(root, &a, 0), a)),
+                // Out of time: with no action found yet, none can be played.
+                None if interrupted() => break,
                 None if roots.is_empty() && full.is_some() => agen.restart(&hc, full.take().unwrap()),
                 None => {
                     complete = true;
