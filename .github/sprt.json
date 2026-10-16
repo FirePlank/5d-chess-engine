@@ -1,0 +1,12 @@
+{
+  "name": "lmr_div4",
+  "old": "9fd5fa475da7a76b5fb2e971f3bcc032879761d2",
+  "games": 12000,
+  "shards": 40,
+  "tc": "tc 10+0.1",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}
