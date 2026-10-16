@@ -1,0 +1,12 @@
+{
+  "name": "qcap4",
+  "old": "081bb1610379b044dc385ec00c6a3ab5615d59dd",
+  "games": 12000,
+  "shards": 40,
+  "tc": "tc 10+0.1",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}
