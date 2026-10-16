@@ -551,7 +551,11 @@ export class Analysis {
     return !!(st && st.you && st.game && !st.game.over);
   }
 
-  restartEngine() {
+  /**
+   * Point the engine at the current position (as infinitechess.org's ceval). `restart`: search
+   * it afresh from depth 1 (a Lines change) instead of resuming the engine's last search of it.
+   */
+  restartEngine({ restart = false } = {}) {
     if (this.suppressed && !this.playing()) this.suppressed = false;
     if (!this.engineOn || this.suppressed || !this.tree) {
       this.engine.stop();
@@ -570,20 +574,28 @@ export class Analysis {
     const blackToMove = v.player === 1;
     const key = this.gameKey;
     const depth = this.targetDepth();
-    // Already searched to the target depth: show that result without searching again.
+    // A position newly shown whose cached result has fewer lines than now wanted: drop it and
+    // search afresh rather than show a short list until the engine catches up.
+    if (node !== this.lastSearchedNode && (this.cache.get(node)?.multiPv || 1) < this.lines) this.cache.delete(node);
+    this.lastSearchedNode = node;
+    // Already searched to the target depth with enough lines: show it without searching again.
     const cached = this.cache.get(node);
-    if (cached && cached.depth >= depth && (this.lines === 1 || (cached.lines || []).filter(Boolean).length >= this.lines)) {
+    if (cached && cached.depth >= depth && (cached.multiPv || 1) >= this.lines) {
       this.engine.stop();
       this.searching = { node, key, blackToMove, finished: true };
       this.renderEngine();
       return;
     }
-    this.searching = { node, key, blackToMove, started: performance.now() };
+    // After Lines was raised, the fresh search's shallower lines may replace the deeper cached
+    // ones (so the new lines show at once) until it gets as deep again.
+    this.searching = { node, key, blackToMove, started: performance.now(), multiPv: this.lines, regress: restart && !!this.allowRegression };
+    this.allowRegression = false;
     // The movetime only bounds the search (and lets a stop interrupt it); the depth ends it.
     // `resume`: when the engine's last search was this position (go deeper, a raised depth, a
-    // stopped search revisited), it continues from the depth reached instead of from 1.
+    // stopped search revisited), it continues from the depth reached instead of from 1; never
+    // after a Lines change, whose search has to produce every line.
     const multi = this.lines > 1 ? { multiPV: this.lines } : {};
-    this.engine.search({ position: v.position, depth, movetime: 86_400_000, resume: true, ...multi }).then((id) => {
+    this.engine.search({ position: v.position, depth, movetime: 86_400_000, resume: !restart, ...multi }).then((id) => {
       if (this.searching && this.searching.node === node) this.searching.id = id;
     }).catch((e) => {
       toast('Engine failed to start: ' + e.message, { error: true });
@@ -605,9 +617,13 @@ export class Analysis {
       const k = info.multipv || 1;
       const prev = this.cache.get(s.node);
       // Line 1 starts a depth's set of lines; the others join the set of their own depth (the
-      // lines of one depth arrive together, line 1 first).
+      // lines of one depth arrive together, line 1 first). A shallower set than the cached one
+      // is kept only right after Lines was raised (`regress`), until the search is as deep.
       if (k === 1) {
-        if (!prev || info.depth >= prev.depth) this.cache.set(s.node, { ...info, lines: [{ ...info }], at: performance.now() });
+        if (!prev || info.depth >= prev.depth || s.regress) {
+          this.cache.set(s.node, { ...info, lines: [{ ...info }], multiPv: s.multiPv || 1, at: performance.now() });
+          if (prev && info.depth >= prev.depth) s.regress = false;
+        }
       } else if (prev && prev.depth === info.depth && k <= MAX_LINES) {
         prev.lines = prev.lines || [prev];
         prev.lines[k - 1] = { ...info };
@@ -691,7 +707,17 @@ export class Analysis {
     } else bar.classList.add('hidden');
     // Lines (MultiPV): the best first, each with its score and clickable actions.
     const lines = $('#engine-lines');
-    const shown = this.engineOn && info && info.pv ? (info.lines || [info]).slice(0, this.lines).filter((l) => l && l.pv) : [];
+    const firsts = new Set();
+    const shown = this.engineOn && info && info.pv
+      ? (info.lines || [info]).filter((l) => {
+        if (!l || !l.pv) return false;
+        // A line repeating an earlier line's first action is that action's weaker follow-up.
+        const first = l.pv.split('submit')[0].trim();
+        if (firsts.has(first)) return false;
+        firsts.add(first);
+        return true;
+      }).slice(0, this.lines)
+      : [];
     if (shown.length) {
       const key = this.cur + '|' + shown.map((l) => l.pv).join('|');
       if (this.pvKey !== key) {
@@ -770,12 +796,16 @@ export class Analysis {
     const apply = () => {
       const s = { threads: +threads.value, hashMb: +hash.value, depth: +depth.value, lines: +lines.value };
       store('engineSettings', s);
+      const linesChanged = s.lines !== this.lines;
+      // Raising Lines lets the restarted search's first, shallower lines replace the cache.
+      this.allowRegression = s.lines > this.lines;
       this.depth = s.depth;
       this.lines = s.lines;
       this.pvKey = null;
       this.engine.configure(s);
+      // Show the new line count at once (fewer lines when lowered), before the engine re-runs.
       this.renderEngine();
-      if (this.engineOn) this.restartEngine();
+      if (this.engineOn) this.restartEngine({ restart: linesChanged });
     };
     threads.oninput = show;
     depth.oninput = show;
