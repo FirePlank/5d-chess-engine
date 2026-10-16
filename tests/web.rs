@@ -167,6 +167,24 @@ fn api_build_an_action() {
 }
 
 #[test]
+fn api_search_resumes_a_deeper_search() {
+    let mut api = Api::new();
+    let pos = r#""position":"startpos moves (0T1)e2e4 submit (0T1)e7e5 submit""#;
+    let depths = |api: &mut Api, req: &str| {
+        let mut d = Vec::new();
+        let r = Json::parse(&api.call(req, &mut |l| d.push(l.split_whitespace().nth(1).unwrap().parse::<i32>().unwrap()))).unwrap();
+        assert_eq!(r.get("ok").bool(), Some(true), "{}", r);
+        d
+    };
+    assert_eq!(depths(&mut api, &format!(r#"{{"cmd":"search",{},"depth":4,"movetime":60000}}"#, pos))[0], 1);
+    // Deeper on the same position: depths 5 and 6 only.
+    assert_eq!(depths(&mut api, &format!(r#"{{"cmd":"search",{},"depth":6,"movetime":60000,"resume":true}}"#, pos)), vec![5, 6]);
+    // A different position starts from depth 1 even when asked to resume.
+    let other = r#""position":"startpos moves (0T1)d2d4 submit""#;
+    assert_eq!(depths(&mut api, &format!(r#"{{"cmd":"search",{},"depth":3,"movetime":60000,"resume":true}}"#, other))[0], 1);
+}
+
+#[test]
 fn api_line_san_and_play_line() {
     let mut api = Api::new();
     call(&mut api, r#"{"cmd":"new","position":"Standard"}"#);

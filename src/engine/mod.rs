@@ -75,4 +75,8 @@ pub struct Limits {
     /// Remaining clock (ms) and increment for the side to move.
     pub time_left: Option<u64>,
     pub increment: Option<u64>,
+    /// Analysis: if the last search was of this same position, continue its iterative
+    /// deepening (at the depth it completed + 1, with its root order and best action) instead
+    /// of starting again from depth 1.
+    pub resume: bool,
 }

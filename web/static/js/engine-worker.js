@@ -3,13 +3,14 @@
 // in:  {type:'init', module, clock?, hashMb, threads, memory}  (memory: the limits of the
 //        shared memory the module imports; with threads > 1 a pool of threads - 1 thread
 //        workers is started on it)
-//      {type:'search', id, position, movetime, depth?, newGame?}
+//      {type:'search', id, position, movetime, depth?, newGame?, resume?}
 // out: {type:'ready', threads} | {type:'info', id, line} | {type:'done', id, bestmove}
 //      {type:'error', id?, message}
-import { instantiate } from './wasi.js';
+import { instantiate, startClock, clockStopped } from './wasi.js';
 
 let kairos = null;
 let current = 0;
+let clock = null;
 
 /** Start `n` thread workers on `memory`; returns the wasi-threads `thread-spawn` import. */
 async function threadPool(n, module, memory, clock) {
@@ -40,6 +41,7 @@ self.onmessage = async (e) => {
       const memory = new WebAssembly.Memory({ initial: msg.memory.initial, maximum: msg.memory.maximum, shared: true });
       const threads = Math.max(1, msg.threads | 0);
       const threadSpawn = threads > 1 ? await threadPool(threads - 1, msg.module, memory, msg.clock) : () => -6;
+      clock = msg.clock;
       kairos = await instantiate(msg.module, {
         clock: msg.clock,
         memory,
@@ -51,12 +53,19 @@ self.onmessage = async (e) => {
       self.postMessage({ type: 'ready', threads });
     } else if (msg.type === 'search') {
       current = msg.id;
+      // Stopped before it began (the page moved on while an earlier search ran): skip it.
+      if (clockStopped(clock, msg.id)) {
+        self.postMessage({ type: 'done', id: msg.id, bestmove: null });
+        return;
+      }
+      startClock(clock, msg.id);
       const r = kairos.call({
         cmd: 'search',
         position: msg.position,
         movetime: msg.movetime,
         depth: msg.depth,
         newGame: msg.newGame,
+        resume: msg.resume,
       });
       if (r.ok) self.postMessage({ type: 'done', id: msg.id, bestmove: r.bestmove });
       else self.postMessage({ type: 'error', id: msg.id, message: r.error });

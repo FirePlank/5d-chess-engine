@@ -13,7 +13,7 @@ use crate::core::action::{Action, FullMove, MoveSeq};
 use crate::core::bitboard::{marked_pos, pmask};
 use crate::core::board::Board;
 use crate::core::check_position::{BoardOverlay, CheckBuf, CheckKind, CheckPosition, SpReach};
-use crate::core::hypercuboid::{has_physical_check, BestFirstCursor, Entry, HcCursor, HcInfo, NeedBranch};
+use crate::core::hypercuboid::{has_physical_check, interrupt_on, interrupted, plays_wasted_move, BestFirstCursor, Entry, HcCursor, HcInfo, NeedBranch};
 use crate::core::multiverse::next_turn;
 use crate::core::piece::*;
 use crate::core::state::{Mark, State};
@@ -186,6 +186,20 @@ impl Drop for TtTable {
 #[derive(Default)]
 struct NodeCounter(AtomicU64);
 
+/// Where the main thread's last search left its root, for a search with `Limits::resume` of
+/// the same position (as Apeiron's analysis resumes a deeper search).
+#[derive(Clone)]
+struct SearchResume {
+    hash: u64,
+    /// Root actions, best first, as the last completed iteration ordered them.
+    roots: Vec<(i32, MoveSeq)>,
+    roots_complete: bool,
+    completed_depth: i32,
+    best: MoveSeq,
+    score: i32,
+    proven: bool,
+}
+
 /// One thread's search result, for the vote between threads.
 #[derive(Clone, Debug)]
 struct ThreadResult {
@@ -318,6 +332,8 @@ pub struct AlphaBeta {
     known: KnownCache,
     /// The score (internal units, side to move) of the last `find_best_move`.
     last_score: i32,
+    /// The main thread's last search, for a resumed one.
+    resume: Option<SearchResume>,
     /// Search threads (`Threads`), this one included.
     threads: usize,
     /// Lazy SMP helper threads (started by the first search that needs them).
@@ -577,6 +593,7 @@ impl AlphaBeta {
             known_check: None,
             known: KnownCache::new(),
             last_score: 0,
+            resume: None,
             threads: 1,
             helpers: Vec::new(),
             helper_nodes: 0,
@@ -880,16 +897,27 @@ impl AlphaBeta {
         let player = s.get_present().1;
         let mark = s.mark();
         let mut ok = true;
-        for &m in act {
+        // Bit i: move i created a timeline (moves past the 64th count as creating one).
+        let mut branching = 0u64;
+        for (i, &m) in act.iter().enumerate() {
             if s.get_board_ptr(m.from.l(), m.from.t(), player).is_none()
                 || s.get_timeline_end(m.from.l()) != (m.from.t(), player)
-                || !s.apply_move::<false>(m)
+                || s.get_board_ptr(m.to.l(), m.to.t(), player).is_none()
             {
                 ok = false;
                 break;
             }
+            if i < 64 && s.get_timeline_end(m.to.l()) != (m.to.t(), player) {
+                branching |= 1 << i;
+            }
+            if !s.apply_move::<false>(m) {
+                ok = false;
+                break;
+            }
         }
-        if ok && s.submit::<false>() && !s.royal_capturable(s.get_present().1) {
+        // A remembered action that wastes a move here is not one the search would generate.
+        let wasted = |s: &State| branching != 0 && plays_wasted_move(s, act, |i| i >= 64 || branching >> i & 1 != 0);
+        if ok && !wasted(s) && s.submit::<false>() && !s.royal_capturable(s.get_present().1) {
             return Some(mark);
         }
         s.unmake(mark);
@@ -1045,6 +1073,11 @@ impl AlphaBeta {
                         continue;
                     }
                 }) else {
+                    if interrupted() {
+                        // Out of time, not out of evasions.
+                        self.aborted = true;
+                        break 'search true;
+                    }
                     // Every evasion was searched.
                     break 'search false;
                 };
@@ -1251,6 +1284,11 @@ impl AlphaBeta {
                     };
                     match next {
                         Err(NeedBranch) => nb.info.materialize_branch(s),
+                        // Out of time before the actions ran out: abort, never "no actions".
+                        Ok(None) if interrupted() => {
+                            self.aborted = true;
+                            break 'search Some(0);
+                        }
                         Ok(None) => {
                             // Every legal action may need a move on an optional board. (The
                             // ordering is unchanged: nothing was searched since it was made.)
@@ -1401,13 +1439,13 @@ impl AlphaBeta {
     }
 }
 
-/// The reported score of an internal `score`: "mate N" for a proven mate, otherwise "cp X"
-/// on the reported scale (an unproven mate counts as the largest non-mate score), followed by
-/// "wdl W D L" from the evaluation's logistic.
-pub fn score_text(score: i32, proven: bool) -> String {
-    if proven && score > MATE - 1000 {
+/// The reported score of an internal `score`: "mate N" when the line ends in mate (found with
+/// pruning, so its length is the search's, not a proof), otherwise "cp X" on the reported
+/// scale, followed by "wdl W D L" from the evaluation's logistic.
+pub fn score_text(score: i32) -> String {
+    if score > MATE - 1000 {
         format!("mate {} wdl 1000 0 0", (MATE - score + 1) / 2)
-    } else if proven && score < -MATE + 1000 {
+    } else if score < -MATE + 1000 {
         format!("mate -{} wdl 0 0 1000", (MATE + score + 1) / 2)
     } else {
         let s = score.clamp(-(MATE - 1000), MATE - 1000);
@@ -1445,6 +1483,8 @@ struct HelperJob {
     /// Every legal root action is in `roots` (for proving the root mated).
     roots_complete: bool,
     max_depth: i32,
+    /// Depth already completed by the search this one resumes (0: none).
+    resumed_depth: i32,
     start: Instant,
     tt: Arc<TtTable>,
     stop: Arc<AtomicBool>,
@@ -1498,14 +1538,16 @@ impl Helper {
                     match msg {
                         HelperMsg::NewGame => e.history.iter_mut().for_each(|h| *h = 0),
                         HelperMsg::Search(job) => {
-                            let HelperJob { root, roots, roots_complete, max_depth, start, tt, stop, counters, done } = *job;
+                            let HelperJob { root, roots, roots_complete, max_depth, resumed_depth, start, tt, stop, counters, done } = *job;
                             if stop.load(Ordering::Relaxed) {
                                 continue; // That search is over already.
                             }
                             e.tt = tt;
                             e.begin_search(&stop, None, None);
                             e.nodes_out = &counters[thread_id - 1].0;
-                            let mut r = e.iterate(&root, roots, roots_complete, max_depth, start, None, &mut |_| {}, &[]);
+                            let interrupt = interrupt_on(&stop, None);
+                            let mut r = e.iterate(&root, roots, roots_complete, max_depth, start, None, &mut |_| {}, &[], resumed_depth, None);
+                            drop(interrupt);
                             r.nodes = e.nodes;
                             e.nodes_out = std::ptr::null();
                             e.stop_ptr = std::ptr::null();
@@ -1597,7 +1639,19 @@ impl AlphaBeta {
         let plan = TimePlan::new(limits, Self::mandatory_boards(root));
         let deadline = plan.as_ref().map(|p| start + Duration::from_millis(p.maximum.saturating_sub(5).max(1)));
         self.begin_search(stop, limits.nodes, deadline);
+        // Enumerating actions stops at the deadline or when told to stop (see `interrupted`).
+        let _interrupt = interrupt_on(stop, deadline);
         let max_depth = limits.depth.unwrap_or(64) as i32;
+
+        // Resuming the last search of this position: its root actions, order and depth.
+        let resume = if limits.resume { self.resume.clone().filter(|r| r.hash == root.hash() && r.completed_depth > 0) } else { None };
+        if let Some(r) = &resume {
+            if r.completed_depth >= max_depth {
+                self.last_score = r.score;
+                return Some(Action::from_moveseq(&r.best, root));
+            }
+            return self.search_roots(root, r.roots.clone(), r.roots_complete, max_depth, start, plan.as_ref(), info, Some(r));
+        }
 
         // Root actions (all of them, up to the root cap), ordered heuristically.
         let (hc, ss) = HcInfo::build_hc(root);
@@ -1614,8 +1668,24 @@ impl AlphaBeta {
             if !roots.is_empty() && (gen_deadline.map(|d| Instant::now() >= d).unwrap_or(false) || stop.load(Ordering::Relaxed)) {
                 break;
             }
-            match agen.next(&hc, root) {
+            // The space without moves on optional boards gets an eighth of the time to yield a
+            // first action: when most of its points fail it can take far longer than the whole
+            // space (whose actions are then generated instead).
+            let quick = match (roots.is_empty() && full.is_some(), plan.as_ref()) {
+                (true, Some(p)) => Some(start + Duration::from_millis(p.optimum / 8)),
+                _ => None,
+            };
+            let next = match quick {
+                Some(q) => {
+                    let _quick = interrupt_on(stop, Some(deadline.map_or(q, |d| d.min(q))));
+                    agen.next(&hc, root)
+                }
+                None => agen.next(&hc, root),
+            };
+            match next {
                 Some(a) => roots.push((self.action_score(root, &a, 0), a)),
+                // Out of time: with no action found yet, none can be played.
+                None if interrupted() => break,
                 None if roots.is_empty() && full.is_some() => agen.restart(&hc, full.take().unwrap()),
                 None => {
                     complete = true;
@@ -1633,8 +1703,26 @@ impl AlphaBeta {
             return Some(Action::from_moveseq(&roots[0].1, root));
         }
         roots.sort_by(|a, b| b.0.cmp(&a.0));
+        self.search_roots(root, roots, roots_complete, max_depth, start, plan.as_ref(), info, None)
+    }
+
+    /// Search the ordered root actions `roots` (Lazy SMP with helpers when `Threads` > 1),
+    /// from scratch or continuing `resume`.
+    #[allow(clippy::too_many_arguments)]
+    fn search_roots(
+        &mut self,
+        root: &State,
+        roots: Vec<(i32, MoveSeq)>,
+        roots_complete: bool,
+        max_depth: i32,
+        start: Instant,
+        plan: Option<&TimePlan>,
+        info: &mut dyn FnMut(String),
+        resume: Option<&SearchResume>,
+    ) -> Option<Action> {
+        let resumed_depth = resume.map_or(0, |r| r.completed_depth);
         if self.threads <= 1 {
-            let r = self.iterate(root, roots, roots_complete, max_depth, start, plan.as_ref(), info, &[]);
+            let r = self.iterate(root, roots, roots_complete, max_depth, start, plan, info, &[], resumed_depth, resume);
             self.last_score = r.score;
             return Some(Action::from_moveseq(&r.best, root));
         }
@@ -1657,6 +1745,7 @@ impl AlphaBeta {
                 roots: roots.clone(),
                 roots_complete,
                 max_depth,
+                resumed_depth,
                 start,
                 tt: self.tt.clone(),
                 stop: helper_stop.clone(),
@@ -1668,7 +1757,7 @@ impl AlphaBeta {
             }
         }
         drop(done);
-        let main = self.iterate(root, roots, roots_complete, max_depth, start, plan.as_ref(), info, &counters);
+        let main = self.iterate(root, roots, roots_complete, max_depth, start, plan, info, &counters, resumed_depth, resume);
         helper_stop.store(true, Ordering::Relaxed);
         let mut results = vec![main];
         let grace = Instant::now() + Duration::from_millis(HELPER_GRACE_MS);
@@ -1704,15 +1793,17 @@ impl AlphaBeta {
         plan: Option<&TimePlan>,
         info: &mut dyn FnMut(String),
         helper_nodes: &[NodeCounter],
+        resumed_depth: i32,
+        resume: Option<&SearchResume>,
     ) -> ThreadResult {
         let main = self.thread_id == 0;
         let mut work = root.clone();
         work.enable_undo();
-        let mut best: MoveSeq = roots[0].1.clone();
-        let mut best_score: i32 = 0;
+        let mut best: MoveSeq = resume.map_or_else(|| roots[0].1.clone(), |r| r.best.clone());
+        let mut best_score: i32 = resume.map_or(0, |r| r.score);
         // `best_score` is a proven mate (see `proven`): only then is it reported as a mate.
-        let mut best_proven = false;
-        let mut completed_depth = 0;
+        let mut best_proven = resume.is_some_and(|r| r.proven);
+        let mut completed_depth = resumed_depth;
         self.seek_mate = false;
         // Clock stability: decaying count of best-action changes and running average score.
         let mut changes = 0.0f64;
@@ -1720,7 +1811,7 @@ impl AlphaBeta {
         // Lazy SMP: odd helpers skip depth 1 and run a depth ahead, so the threads diverge
         // and fill the table at a spread of depths instead of re-walking the same iteration.
         let ahead = self.thread_id % 2 == 1;
-        let first = if ahead { 2.min(max_depth) } else { 1 };
+        let first = if ahead { 2.min(max_depth) } else { 1 }.max((resumed_depth + 1).min(max_depth));
         for base_depth in first..=max_depth {
             let depth = if ahead { (base_depth + 1).min(max_depth) } else { base_depth };
             let prev_best = best.clone();
@@ -1794,7 +1885,7 @@ impl AlphaBeta {
             }
             if !self.aborted && main {
                 let pv = self.pv_line(root, &best, depth as usize);
-                let score_txt = score_text(best_score, best_proven);
+                let score_txt = score_text(best_score);
                 let mut st = root.clone();
                 let mut pv_txt = Vec::new();
                 for a in &pv {
@@ -1828,11 +1919,8 @@ impl AlphaBeta {
                 }
             }
             // Keep searching after a mate (pruning can report false or long mates) until the
-            // mate is well inside the searched depth. On a time budget an unproven mate does
-            // not end the search early (that only changes the time used); depth- and
-            // node-limited searches stop as they always did, so they stay reproducible.
-            // (Helpers search on until stopped.)
-            if main && best_score.abs() > MATE - 1000 && depth >= 2 * (MATE - best_score.abs()) + 2 && (best_proven || plan.is_none()) {
+            // mate is well inside the searched depth. (Helpers search on until stopped.)
+            if main && best_score.abs() > MATE - 1000 && depth >= 2 * (MATE - best_score.abs()) + 2 {
                 break;
             }
             if let Some(d) = self.deadline {
@@ -1843,6 +1931,17 @@ impl AlphaBeta {
                     break;
                 }
             }
+        }
+        if main && completed_depth > 0 {
+            self.resume = Some(SearchResume {
+                hash: root.hash(),
+                roots,
+                roots_complete,
+                completed_depth,
+                best: best.clone(),
+                score: best_score,
+                proven: best_proven,
+            });
         }
         ThreadResult { best, score: best_score, proven: best_proven, completed_depth, pv_len: 0, nodes: self.nodes, thread_id: self.thread_id }
     }

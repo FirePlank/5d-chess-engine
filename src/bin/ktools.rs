@@ -289,6 +289,8 @@ fn main() {
             args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20),
             &mut out,
         ),
+        "overrunpos" => overrunpos(&args[2..], &mut out),
+        "firstact" => firstact(args.get(2).map(|s| s.as_str()).unwrap_or("games/ov_hard.g"), args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20000), &mut out),
         "overrun" => overrun(
             args.get(2).map(|s| s.as_str()).expect("overrun <games.jsonl> [threads] [ms] [games] [step]"),
             args.get(3).and_then(|s| s.parse().ok()).unwrap_or(8),
@@ -385,6 +387,7 @@ fn main() {
                     }
                     let (kind, prob) = if let Some(p) = w.jump_order_consistent(&s, &pt, &hc) { ("jump_order", Some(p)) }
                         else if let Some(p) = w.test_present(&s, &pt, &hc) { ("test_present", Some(p)) }
+                        else if let Some(p) = w.test_wasted(&s, &pt, &hc) { ("test_wasted", Some(p)) }
                         else if let Some(p) = w.find_checks(&s, &pt, &hc, &mut Default::default()) { ("find_checks", Some(p)) } else { ("ok", None) };
                     match prob {
                         None => { yielded.insert(pt.clone()); ss.concat(hc.remove_point(&pt)); }
@@ -437,9 +440,10 @@ fn main() {
             }
         }
         "validate" => {
-            // HC search (several orderings/modes) vs exhaustive naive search.
+            // HC search (several orderings/modes) vs exhaustive naive search (its actions
+            // without wasted moves).
             use kairos::core::hypercuboid::HcCursor;
-            use kairos::core::naive::naive_actions_budget;
+            use kairos::core::naive::{naive_actions_budget, wastes_moves};
             let limit: usize = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(20000);
             let (mut checked, mut skipped, mut bad) = (0, 0, 0);
             for (idx, line) in stdin.lock().lines().enumerate() {
@@ -456,7 +460,7 @@ fn main() {
                     skipped += 1;
                     continue;
                 }
-                let want: std::collections::BTreeSet<String> = naive.iter().map(seq_string).collect();
+                let want: std::collections::BTreeSet<String> = naive.iter().filter(|a| !wastes_moves(&s, a)).map(seq_string).collect();
                 checked += 1;
                 let mut results = Vec::new();
                 for variant in 0..5u64 {
@@ -724,6 +728,231 @@ fn main() {
             writeln!(out, "hcverify positions {} (complete sets {}) actions {} mismatches {} with repeated actions {}", positions, complete, actions, bad, repeating)
                 .unwrap();
         }
+        "pgn2g" => {
+            // pgn2g [all] <file.5dpgn>... : the "G" line of each game's main-line end ("all":
+            // of every position along the main line).
+            use kairos::core::variants::state_from_setup;
+            use kairos::web::pgn::parse_5dpgn;
+            use kairos::web::record::setup_to_uci;
+            let all = args.get(2).map(|s| s.as_str()) == Some("all");
+            for f in &args[2 + all as usize..] {
+                let text = std::fs::read(f).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+                let g = match parse_5dpgn(&text, None) {
+                    Ok(g) => g,
+                    Err(e) => {
+                        eprintln!("{}: {}", f, e);
+                        continue;
+                    }
+                };
+                let Ok(mut s) = state_from_setup(&g.setup) else { continue };
+                let mut line = format!("G {} {} moves", g.setup.promotions.0, setup_to_uci(&g.setup));
+                for a in g.root.mainline() {
+                    if all {
+                        writeln!(out, "{}", line).unwrap();
+                    }
+                    for m in a.moves() {
+                        line += &format!(" {}", m);
+                    }
+                    line += " submit";
+                    s = s.can_apply_action(a).expect("main-line action applies");
+                }
+                writeln!(out, "{}", line).unwrap();
+            }
+        }
+        "subdump" => {
+            // subdump <spaces> <seed> [volume] : for positions too big to enumerate, the actions
+            // the search yields in `spaces` random parts of each position's search universe
+            // (every axis keeps its null semimove and a few random others, plus the departures
+            // of the arrivals kept, about `volume` points at most), as "S <k>" then
+            // "a <wastes a move: 0|1> <action>|<action without its wasted moves>" lines. Two
+            // builds' dumps (one leaving actions with wasted moves in) compare part by part.
+            use kairos::core::hypercuboid::{Entry, HcCursor};
+            use kairos::core::naive::wastes_moves;
+            use kairos::misc::geometry::{Hc, SearchSpace};
+            use kairos::misc::integer_set::IntegerSet;
+            let spaces: usize = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(4);
+            let seed: u64 = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(1);
+            let volume: usize = args.get(4).and_then(|v| v.parse().ok()).unwrap_or(20000);
+            for line in stdin.lock().lines() {
+                let line = line.unwrap();
+                if !line.starts_with("G ") {
+                    continue;
+                }
+                let s = parse_g_line(&line).unwrap();
+                writeln!(out, "{}", line).unwrap();
+                let (w, _) = HcInfo::build_hc(&s);
+                let u = w.get_universe();
+                let (dim, na) = (w.dimension(), w.first_branch_axis());
+                let mut st = (s.hash() ^ seed.wrapping_mul(0xD6E8FEB86659FD93)) | 1;
+                let mut rnd = move |n: u64| {
+                    st ^= st << 13;
+                    st ^= st >> 7;
+                    st ^= st << 17;
+                    st % n.max(1)
+                };
+                for k in 0..spaces {
+                    // Random non-null coordinates per axis (the first branch axis always gets
+                    // one), axes in random order while the volume allows.
+                    let mut sets: Vec<IntegerSet> = (0..dim).map(|_| IntegerSet::singleton(0)).collect();
+                    let mut axes: Vec<usize> = (0..dim).collect();
+                    for i in (1..axes.len()).rev() {
+                        axes.swap(i, rnd(i as u64 + 1) as usize);
+                    }
+                    let mut vol = 1usize;
+                    for &n in &axes {
+                        let cands: Vec<u32> = u[n].iter().filter(|&i| i != 0).collect();
+                        let want = if n == na { 1 + rnd(3) } else if n > na { rnd(3) } else { rnd(5) } as usize;
+                        let mut c = want.min(cands.len());
+                        while c > 0 && vol * (c + 1) > volume {
+                            c -= 1;
+                        }
+                        for _ in 0..c {
+                            sets[n].insert(cands[rnd(cands.len() as u64) as usize]);
+                        }
+                        vol *= sets[n].len();
+                    }
+                    // The departure of every arrival kept.
+                    for n in 0..dim {
+                        let deps: Vec<(usize, u32)> = sets[n]
+                            .iter()
+                            .filter_map(|i| match w.entry(n, i) {
+                                Entry::Arriving { idx, fa, .. } => Some((*fa as usize, *idx)),
+                                _ => None,
+                            })
+                            .collect();
+                        for (fa, idx) in deps {
+                            sets[fa].insert(idx);
+                        }
+                    }
+                    // The branch axes in use form a prefix: one hypercuboid per count.
+                    let mut hcs = Vec::new();
+                    for j in 0..=dim - na {
+                        let mut axes = sets.clone();
+                        for (b, set) in axes[na..].iter_mut().enumerate() {
+                            if b < j {
+                                set.erase(0);
+                            } else {
+                                *set = IntegerSet::singleton(0);
+                            }
+                        }
+                        if axes.iter().all(|a| !a.is_empty()) {
+                            hcs.push(Hc::new(axes));
+                        }
+                    }
+                    writeln!(out, "S {}", k).unwrap();
+                    let mut cur = HcCursor::new(SearchSpace::from_vec(hcs), shuffled_order(&w, seed + k as u64));
+                    while let Some(a) = cur.next(&w, &s) {
+                        let wasted = wastes_moves(&s, &a);
+                        let reduced: Vec<String> = without_wasted(&s, &a).iter().map(|m| m.to_string()).collect();
+                        writeln!(out, "a {} {}|{}", wasted as u8, seq_string(&a), reduced.join(" ")).unwrap();
+                    }
+                }
+                out.flush().unwrap();
+            }
+        }
+        "wastecheck" => {
+            // wastecheck [cap] : reads the `ktools dump` output of a generator that still yields
+            // actions with wasted moves (G line, then M and a lines) and checks the current
+            // hypercuboid search against it: its actions are exactly the dumped ones without
+            // wasted moves (`naive::wastes_moves`, found by playing each on a copy), removing an
+            // action's wasted moves leaves an action it yields, and the mate type is the same.
+            // A dump cut short (as many actions as `cap`) is checked one way: every dumped
+            // action without wasted moves is yielded, and every yielded one is legal without
+            // wasted moves. Positions where the current search has `cap` actions or more are
+            // skipped.
+            use kairos::core::action::FullMove;
+            use kairos::core::naive::{is_legal_action, wastes_moves};
+            use std::collections::BTreeSet;
+            let cap: usize = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(200_000);
+            let (mut positions, mut cut, mut skipped, mut old_n, mut wasted_n, mut new_n, mut bad) = (0u64, 0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
+            let parse_seq = |a: &str| -> Vec<FullMove> { a.split_whitespace().map(|t| FullMove::parse(t).unwrap()).collect() };
+            let mut check = |g: &str, mate: &str, dumped: &[String], out: &mut dyn Write| {
+                let s = parse_g_line(g).unwrap();
+                positions += 1;
+                let (w, ss) = HcInfo::build_hc(&s);
+                let mut got: BTreeSet<String> = BTreeSet::new();
+                let mut fail: Vec<String> = Vec::new();
+                for a in w.search(&s, ss) {
+                    if got.len() >= cap {
+                        skipped += 1;
+                        return;
+                    }
+                    let txt = seq_string(&a);
+                    if !got.insert(txt.clone()) {
+                        fail.push(format!("repeated {}", txt));
+                    }
+                }
+                let full = dumped.len() < cap;
+                cut += !full as u64;
+                let mut want: BTreeSet<String> = BTreeSet::new();
+                for d in dumped {
+                    let mvs = parse_seq(d);
+                    old_n += 1;
+                    if !wastes_moves(&s, &mvs) {
+                        want.insert(d.clone());
+                        continue;
+                    }
+                    wasted_n += 1;
+                    let keep: Vec<String> = without_wasted(&s, &mvs).iter().map(|m| m.to_string()).collect();
+                    let reduced = keep.join(" ");
+                    if !got.contains(&reduced) {
+                        fail.push(format!("{} without its wasted moves ({}) not yielded", d, reduced));
+                    }
+                }
+                for a in want.difference(&got).take(3) {
+                    fail.push(format!("missing {}", a));
+                }
+                if full {
+                    for a in got.difference(&want).take(3) {
+                        fail.push(format!("extra {}", a));
+                    }
+                } else if let Some(a) = got.iter().find(|a| {
+                    let mvs = parse_seq(a);
+                    !is_legal_action(&s, &mvs) || wastes_moves(&s, &mvs)
+                }) {
+                    fail.push(format!("yielded {} is illegal or wastes a move", a));
+                }
+                new_n += got.len() as u64;
+                let m = mate_name(s.get_mate_type());
+                if m != mate {
+                    fail.push(format!("mate type {} was {}", m, mate));
+                }
+                if got.is_empty() != dumped.is_empty() {
+                    fail.push(format!("{} actions, {} dumped", got.len(), dumped.len()));
+                }
+                if !fail.is_empty() {
+                    bad += 1;
+                    writeln!(out, "MISMATCH {}\n  {}", fail.iter().take(4).cloned().collect::<Vec<_>>().join("\n  "), g).unwrap();
+                    out.flush().unwrap();
+                }
+            };
+            // (G line, mate type, dumped actions) of the position being read.
+            let mut cur: Option<(String, String, Vec<String>)> = None;
+            for line in stdin.lock().lines() {
+                let line = line.unwrap();
+                if line.starts_with("G ") {
+                    if let Some((g, m, d)) = cur.take() {
+                        check(&g, &m, &d, &mut out);
+                    }
+                    cur = Some((line, String::new(), Vec::new()));
+                } else if let Some((_, m, d)) = cur.as_mut() {
+                    if let Some(r) = line.strip_prefix("M ") {
+                        *m = r.split(' ').next().unwrap_or("").to_string();
+                    } else if let Some(a) = line.strip_prefix("a ") {
+                        d.push(a.to_string());
+                    }
+                }
+            }
+            if let Some((g, m, d)) = cur.take() {
+                check(&g, &m, &d, &mut out);
+            }
+            writeln!(
+                out,
+                "wastecheck positions {} (dumps cut short {}, skipped {}) dumped actions {} with wasted moves {} yielded {} mismatches {}",
+                positions, cut, skipped, old_n, wasted_n, new_n, bad
+            )
+            .unwrap();
+        }
         "bench" => bench(args.get(2).map(|s| s.as_str()).unwrap_or("data/bench.g"), &mut out),
         _ => {
             eprintln!(
@@ -733,7 +962,9 @@ fn main() {
                  bench [file]            perft oracle\n  \
                  abbench [file] [depth]  alpha-beta node oracle (AB_NODES caps nodes per position)\n  \
                  puzzles [file] [ms]     time to find each mate in data/puzzles.g
-                   blunders <games.jsonl> [n] | materank <games.jsonl> [n] | depthstat <games.jsonl> [ms] | rootgen [file]"
+                   blunders <games.jsonl> [n] | materank <games.jsonl> [n] | depthstat <games.jsonl> [ms] | rootgen [file]
+                   overrunpos <file.g>... [threads=1,4] [ms=100,1000] [clock=2000+100,30000+300]   worst time overrun
+                   firstact [file.g] [cap ms]   time to the first legal action by enumeration strategy"
             );
         }
     }
@@ -1066,6 +1297,20 @@ fn materank(path: &str, max_games: usize, out: &mut impl Write) {
 
 
 /// A random per-axis order (for checking that the action set does not depend on order).
+/// The moves of the action `mvs` (playable in `s`) that are not wasted (see
+/// `hypercuboid::wasted_moves`), in order.
+fn without_wasted(s: &State, mvs: &[kairos::core::action::FullMove]) -> Vec<kairos::core::action::FullMove> {
+    let player = s.get_present().1;
+    let mut c = s.clone();
+    let mut branching = Vec::new();
+    for &m in mvs {
+        branching.push(c.get_timeline_end(m.to.l()) != (m.to.t(), player));
+        c.apply_move::<true>(m);
+    }
+    let wasted = kairos::core::hypercuboid::wasted_moves(&c, mvs, |i| branching[i]);
+    mvs.iter().enumerate().filter(|(i, _)| !wasted.contains(i)).map(|(_, m)| *m).collect()
+}
+
 fn shuffled_order(w: &HcInfo, seed: u64) -> kairos::misc::ordering::HcOrdering {
     let mut st = seed.wrapping_mul(0x9E3779B97F4A7C15) | 1;
     let u = w.get_universe();
@@ -1345,4 +1590,150 @@ fn hcverify(s: &State, cap: usize, seeds: u64) -> Result<(usize, bool, Option<St
     let acts = take(&mut || cur.next(&w3, s));
     compare("depth-first (engine order)", &acts)?;
     Ok((reference.len(), full, repeats))
+}
+
+/// Time overruns over positions: every G line of the files (labelled by a preceding "# "
+/// line) is searched with each thread count and each limit, one search at a time, and the
+/// time past the hard limit (`TimePlan::maximum`) is reported, with searches that return no
+/// action or an illegal one. A search running 30 s past its limit is reported as hung (and
+/// left behind).
+///   ktools overrunpos <file.g>... [threads=1,4] [ms=100,1000] [clock=2000+100,30000+300]
+/// (`clock` is time left + increment in ms).
+fn overrunpos(args: &[String], out: &mut impl Write) {
+    use kairos::engine::ab::AlphaBeta;
+    use kairos::engine::time::TimePlan;
+    use kairos::engine::{Limits, OptionValue};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    let mut threads: Vec<usize> = vec![1, 4];
+    let mut limits: Vec<(String, Limits)> = Vec::new();
+    let mut items: Vec<(String, State)> = Vec::new();
+    let list = |v: &str| v.split(',').map(|x| x.to_string()).collect::<Vec<_>>();
+    let (mut mss, mut clocks) = (list("100,1000"), list("2000+100,30000+300"));
+    for a in args {
+        if let Some(v) = a.strip_prefix("threads=") {
+            threads = v.split(',').filter_map(|x| x.parse().ok()).collect();
+        } else if let Some(v) = a.strip_prefix("ms=") {
+            mss = list(v);
+        } else if let Some(v) = a.strip_prefix("clock=") {
+            clocks = list(v);
+        } else {
+            let text = std::fs::read_to_string(a).expect("positions");
+            let mut label = String::new();
+            for line in text.lines() {
+                if let Some(l) = line.strip_prefix("# ") {
+                    label = l.to_string();
+                } else if line.starts_with("G ") {
+                    let s = parse_g_line(line).unwrap();
+                    let name = if label.is_empty() { format!("{} #{}", a, items.len()) } else { std::mem::take(&mut label) };
+                    items.push((name, s));
+                }
+            }
+        }
+    }
+    for m in mss.iter().filter(|m| !m.is_empty()) {
+        limits.push((format!("movetime {}", m), Limits { movetime: m.parse().ok(), ..Default::default() }));
+    }
+    for c in clocks.iter().filter(|c| !c.is_empty()) {
+        let (t, i) = c.split_once('+').unwrap_or((c, "0"));
+        limits.push((format!("clock {}", c), Limits { time_left: t.parse().ok(), increment: i.parse().ok(), ..Default::default() }));
+    }
+    let mut worst_all = 0.0f64;
+    for &th in &threads {
+        for (lname, lim) in &limits {
+            let (mut worst, mut late, mut bad, mut n) = (f64::MIN, 0, 0, 0);
+            let mut worst_at = String::new();
+            for (name, s) in &items {
+                let boards = {
+                    let present = s.get_present();
+                    let (amin, amax) = s.get_active_range();
+                    (amin..=amax).filter(|&l| s.get_timeline_end(l) == present).count()
+                };
+                let hard = TimePlan::new(lim, boards).map(|p| p.maximum).unwrap_or(0) as f64;
+                let stop = Arc::new(AtomicBool::new(false));
+                let (tx, rx) = std::sync::mpsc::channel();
+                let (s2, lim2, stop2) = (s.clone(), lim.clone(), stop.clone());
+                std::thread::spawn(move || {
+                    let mut e = AlphaBeta::new();
+                    e.set_option("Threads", &OptionValue::Int(th as i64));
+                    let t0 = Instant::now();
+                    let a = e.find_best_move(&s2, &lim2, &stop2, &mut |_| {});
+                    let legal = a.as_ref().map(|a| s2.can_apply_action(a).is_some());
+                    let _ = tx.send((t0.elapsed().as_secs_f64() * 1e3, legal));
+                });
+                n += 1;
+                let (ms, legal) = match rx.recv_timeout(std::time::Duration::from_millis(hard as u64 + 30_000)) {
+                    Ok(r) => r,
+                    Err(_) => {
+                        stop.store(true, Ordering::Relaxed);
+                        (f64::INFINITY, None)
+                    }
+                };
+                let over = ms - hard;
+                if over > worst {
+                    worst = over;
+                    worst_at = name.clone();
+                }
+                let note = match legal {
+                    Some(true) => "",
+                    Some(false) => " ILLEGAL ACTION",
+                    None if ms.is_finite() => " no action",
+                    None => " HUNG",
+                };
+                if !note.is_empty() && note != " no action" {
+                    bad += 1;
+                }
+                if over > 50.0 || !note.is_empty() {
+                    late += (over > 50.0) as usize;
+                    writeln!(out, "  threads {} {} | {} | limit {:.0} ms, took {:.0} ms ({:+.0}){}", th, lname, name, hard, ms, over, note).unwrap();
+                }
+                out.flush().unwrap();
+            }
+            worst_all = worst_all.max(worst);
+            writeln!(out, "threads {} {}: {} searches, {} over by more than 50 ms, {} hung/illegal, worst {:+.0} ms ({})", th, lname, n, late, bad, worst, worst_at).unwrap();
+            out.flush().unwrap();
+        }
+    }
+    writeln!(out, "worst overrun {:+.0} ms", worst_all).unwrap();
+    out.flush().unwrap();
+    std::process::exit(0);
+}
+
+/// Time to the first legal action under several enumeration strategies (each capped).
+///   ktools firstact <file.g> [cap ms]
+fn firstact(path: &str, cap: u64, out: &mut impl Write) {
+    use kairos::core::hypercuboid::{interrupt_on, interrupted, HcCursor};
+    let text = std::fs::read_to_string(path).expect("positions");
+    let e = kairos::engine::ab::AlphaBeta::new();
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let deadline = || Some(Instant::now() + std::time::Duration::from_millis(cap));
+    for line in text.lines().filter(|l| l.starts_with("G ")) {
+        let s = parse_g_line(line).unwrap();
+        let t = Instant::now();
+        let (w, ss) = HcInfo::build_hc(&s);
+        writeln!(out, "dim {} playable {} hcs {} in_check {} build {:.1}ms", w.dimension(), w.first_branch_axis(), ss.len(), s.has_phantom_check(), t.elapsed().as_secs_f64() * 1e3).unwrap();
+        out.flush().unwrap();
+        {
+            let _g = interrupt_on(&stop, deadline());
+            let t = Instant::now();
+            let a = w.search(&s, ss.clone()).next();
+            writeln!(out, "  natural, full: {} in {:.0}ms (interrupted {})", a.is_some(), t.elapsed().as_secs_f64() * 1e3, interrupted()).unwrap();
+            out.flush().unwrap();
+        }
+        {
+            let _g = interrupt_on(&stop, deadline());
+            let t = Instant::now();
+            let mut cur = HcCursor::new(ss.clone(), e.ordering(&s, &w));
+            let a = cur.next(&w, &s);
+            writeln!(out, "  engine order depth-first, full: {} in {:.0}ms (interrupted {})", a.is_some(), t.elapsed().as_secs_f64() * 1e3, interrupted()).unwrap();
+            out.flush().unwrap();
+        }
+        {
+            let _g = interrupt_on(&stop, deadline());
+            let t = Instant::now();
+            let a = e.node_order(&s, 1);
+            writeln!(out, "  best-first, full: {} in {:.0}ms (interrupted {})", !a.is_empty(), t.elapsed().as_secs_f64() * 1e3, interrupted()).unwrap();
+            out.flush().unwrap();
+        }
+    }
 }

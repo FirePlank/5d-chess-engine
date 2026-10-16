@@ -32,10 +32,10 @@ export function newMemory(desc) {
 /** Threads the browser can use: workers can share memory only when cross-origin isolated. */
 export const threadsSupported = typeof SharedArrayBuffer !== 'undefined' && !!self.crossOriginIsolated;
 
-/** Default engine settings: all cores but one (at most 16 threads), 64 MB of hash. */
+/** Default engine settings: all cores but one (at most 16 threads), 64 MB of hash, depth 15. */
 export function defaultEngineSettings() {
   const cores = navigator.hardwareConcurrency || 2;
-  return { threads: threadsSupported ? Math.max(1, Math.min(16, cores - 1)) : 1, hashMb: 64 };
+  return { threads: threadsSupported ? Math.max(1, Math.min(16, cores - 1)) : 1, hashMb: 64, depth: 15 };
 }
 
 /** Rules and game tree (one game at a time). Calls throw on `ok: false`. */
@@ -150,19 +150,19 @@ export class Engine {
   }
 
   /** Start a search; a running one is stopped first. Returns the request id. */
-  async search({ position, movetime = 86_400_000, depth, newGame = false }) {
+  async search({ position, movetime = 86_400_000, depth, newGame = false, resume = false }) {
     await this.start();
     this.stop();
     const id = ++this.reqId;
     this.busy = true;
-    this.worker.postMessage({ type: 'search', id, position, movetime, depth, newGame });
+    this.worker.postMessage({ type: 'search', id, position, movetime, depth, newGame, resume });
     return id;
   }
 
   stop() {
     if (!this.busy) return;
     if (this.clock) {
-      stopClock(this.clock);
+      stopClock(this.clock, this.reqId);
     } else {
       // No shared memory: a search cannot be interrupted, so replace the worker.
       this.restart();

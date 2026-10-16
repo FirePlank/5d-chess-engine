@@ -2,11 +2,14 @@
 // worker and its thread workers. Only what Rust's std needs here: clocks, randomness,
 // stdout/stderr, exit.
 //
-// The clock doubles as the engine's stop signal. `clock` is a 16-byte SharedArrayBuffer that
-// every thread of one engine shares: an Int32 stop flag at byte 0 and a BigInt64 clock offset
-// at byte 8. When the flag is set, the next clock read (by any thread) moves the shared offset
-// a day ahead, so the search sees its deadline pass and returns its best action at once (see
-// `check_abort` in src/engine/ab.rs). A search always runs with a movetime limit for this.
+// The clock doubles as the engine's stop signal. `clock` is a SharedArrayBuffer that every
+// thread of one engine shares: Int32s [stop up to search id, current search id, id already
+// stopped, id whose start time was read] and a BigInt64 clock offset at byte 16. Once the
+// current search's id is stopped, a clock read (by any thread) moves the shared offset a day
+// ahead, once per search, so that search sees its deadline pass and returns its best action at
+// once (see `check_abort` in src/engine/ab.rs). The search's first read is its start time and
+// never jumps (that would move its deadline along). A search always runs with a movetime limit
+// for this. Stops name a search, so one never lands on a later search.
 //
 // The multi-threaded build (wasm32-wasip1-threads) also imports a shared `env.memory` and the
 // wasi-threads `wasi.thread-spawn`; engine-worker.js runs the thread pool behind it.
@@ -16,21 +19,36 @@ const DAY_NS = 86_400_000_000_000n;
 
 /** A new shared clock/stop state for one engine (null without SharedArrayBuffer). */
 export function makeClock() {
-  return typeof SharedArrayBuffer !== 'undefined' ? new SharedArrayBuffer(16) : null;
+  return typeof SharedArrayBuffer !== 'undefined' ? new SharedArrayBuffer(24) : null;
 }
 
-/** Ask the engine using `clock` to stop its search. */
-export function stopClock(clock) {
-  if (clock) Atomics.store(new Int32Array(clock, 0, 1), 0, 1);
+/** Stop every search of the engine using `clock` up to search `id`. */
+export function stopClock(clock, id) {
+  if (clock) Atomics.store(new Int32Array(clock, 0, 4), 0, id);
+}
+
+/** Whether search `id` is stopped already. */
+export function clockStopped(clock, id) {
+  return !!clock && Atomics.load(new Int32Array(clock, 0, 4), 0) >= id;
+}
+
+/** The engine worker announces the search it runs now. */
+export function startClock(clock, id) {
+  if (clock) Atomics.store(new Int32Array(clock, 0, 4), 1, id);
 }
 
 export function makeWasi({ clock = null, onStdout = null } = {}) {
   let memory = null;
-  const stop = clock ? new Int32Array(clock, 0, 1) : null;
-  const offset = clock ? new BigInt64Array(clock, 8, 1) : null;
+  const ids = clock ? new Int32Array(clock, 0, 4) : null;
+  const offset = clock ? new BigInt64Array(clock, 16, 1) : null;
   const view = () => new DataView(memory.buffer);
   const nowNs = () => {
-    if (stop && Atomics.exchange(stop, 0, 0) !== 0) Atomics.add(offset, 0, DAY_NS);
+    if (ids) {
+      const cur = Atomics.load(ids, 1);
+      if (cur && Atomics.exchange(ids, 3, cur) === cur && Atomics.load(ids, 0) >= cur && Atomics.exchange(ids, 2, cur) !== cur) {
+        Atomics.add(offset, 0, DAY_NS);
+      }
+    }
     const off = offset ? Atomics.load(offset, 0) : 0n;
     return BigInt(Math.round((performance.timeOrigin + performance.now()) * 1e6)) + off;
   };

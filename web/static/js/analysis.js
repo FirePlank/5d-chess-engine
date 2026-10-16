@@ -4,7 +4,8 @@ import { Rules, parseInfo, threadsSupported } from './kairos.js';
 import { $, $$, el, toast, fmtScore, fmtNodes, winChance, recordScore, parseLan, store, confirmDialog } from './util.js';
 
 const THROTTLE_MS = 70;
-const DEFAULT_BUDGET_MS = 30_000;
+/** "Go deeper" searches the current position to this depth. */
+const MAX_DEPTH = 64;
 
 export class Analysis {
   constructor(app) {
@@ -18,7 +19,10 @@ export class Analysis {
     this.cache = new Map(); // node id -> latest engine info (White's view)
     this.gameKey = 0;
     this.engineOn = !!store('engine');
-    this.unlimited = false;
+    // Analysis searches each position to a fixed depth (engine settings), and the current
+    // position deeper on request ("+").
+    this.depth = Math.max(1, Math.min(MAX_DEPTH, +(store('engineSettings') || {}).depth || 15));
+    this.deeperNode = null;
     this.autoplay = null;
     this.lastEmit = 0;
     this.pending = null;
@@ -423,7 +427,6 @@ export class Analysis {
       this.renderEngine();
       return;
     }
-    clearTimeout(this.budgetTimer);
     const v = this.view;
     if (!v || v.status === 'checkmate' || v.status === 'stalemate' || v.status === 'exiled-white' || v.status === 'exiled-black') {
       this.engine.stop();
@@ -434,9 +437,20 @@ export class Analysis {
     const node = this.cur;
     const blackToMove = v.player === 1;
     const key = this.gameKey;
+    const depth = this.targetDepth();
+    // Already searched to the target depth: show that result without searching again.
+    const cached = this.cache.get(node);
+    if (cached && cached.depth >= depth) {
+      this.engine.stop();
+      this.searching = { node, key, blackToMove, finished: true };
+      this.renderEngine();
+      return;
+    }
     this.searching = { node, key, blackToMove, started: performance.now() };
-    const budget = this.unlimited ? 86_400_000 : DEFAULT_BUDGET_MS;
-    this.engine.search({ position: v.position, movetime: budget }).then((id) => {
+    // The movetime only bounds the search (and lets a stop interrupt it); the depth ends it.
+    // `resume`: when the engine's last search was this position (go deeper, a raised depth, a
+    // stopped search revisited), it continues from the depth reached instead of from 1.
+    this.engine.search({ position: v.position, depth, movetime: 86_400_000, resume: true }).then((id) => {
       if (this.searching && this.searching.node === node) this.searching.id = id;
     }).catch((e) => {
       toast('Engine failed to start: ' + e.message, { error: true });
@@ -520,11 +534,11 @@ export class Analysis {
     else if (this.view && ['checkmate', 'stalemate', 'exiled-white', 'exiled-black'].includes(this.view.status)) stats = 'Game over';
     else if (!info) stats = running ? 'Starting…' : 'Waiting';
     else {
-      stats = `Depth ${info.depth}` + (info.nps ? ` · ${fmtNodes(info.nps)} nodes/s` : '') + (!running ? ' · done' : '');
+      stats = `Depth ${info.depth}/${this.targetDepth()}` + (info.nps ? ` · ${fmtNodes(info.nps)} nodes/s` : '');
     }
     $('#engine-stats').textContent = stats;
-    $('#engine-progress').style.width = running ? `${Math.min(100, ((performance.now() - s.started) / (this.unlimited ? 120000 : DEFAULT_BUDGET_MS)) * 100)}%` : info ? '100%' : '0%';
-    $('#engine-deeper').classList.toggle('hidden', !this.engineOn || this.unlimited);
+    $('#engine-progress').style.width = this.engineOn && info ? `${Math.min(100, (info.depth / this.targetDepth()) * 100)}%` : '0%';
+    $('#engine-deeper').classList.toggle('hidden', !this.engineOn || this.targetDepth() >= MAX_DEPTH);
     // Eval bar.
     const bar = $('#eval-bar');
     if (score) {
@@ -563,6 +577,11 @@ export class Analysis {
     }
   }
 
+  /** The depth to search the current position to. */
+  targetDepth() {
+    return this.deeperNode === this.cur ? MAX_DEPTH : this.depth;
+  }
+
   playPv(pv, count) {
     try {
       const r = this.rules.call({ cmd: 'play_line', node: this.cur, line: pv, count });
@@ -574,10 +593,12 @@ export class Analysis {
   }
 
   // ---------------------------------------------------------------- engine settings
-  /** Threads and hash for the in-browser engine (saved; applied by restarting it). */
+  /** Depth, threads and hash for the in-browser engine (saved; threads and hash restart it). */
   bindSettings() {
     const btn = $('#engine-settings-btn'), panel = $('#engine-settings');
-    const threads = $('#set-threads'), hash = $('#set-hash');
+    const threads = $('#set-threads'), hash = $('#set-hash'), depth = $('#set-depth');
+    depth.max = String(MAX_DEPTH);
+    depth.value = String(this.depth);
     const cores = navigator.hardwareConcurrency || 2;
     threads.max = String(threadsSupported ? Math.max(1, Math.min(32, cores)) : 1);
     const cur = { threads: this.engine.threads, hashMb: this.engine.hashMb };
@@ -585,6 +606,7 @@ export class Analysis {
     hash.value = String(cur.hashMb);
     const show = () => {
       $('#set-threads-v').textContent = threads.value;
+      $('#set-depth-v').textContent = depth.value;
       $('#set-note').textContent = threadsSupported
         ? `${cores} logical cores here; leave one free for the page.`
         : 'This page is not cross-origin isolated, so the engine runs on one thread.';
@@ -595,14 +617,17 @@ export class Analysis {
       btn.setAttribute('aria-expanded', String(open));
     };
     const apply = () => {
-      const s = { threads: +threads.value, hashMb: +hash.value };
+      const s = { threads: +threads.value, hashMb: +hash.value, depth: +depth.value };
       store('engineSettings', s);
+      this.depth = s.depth;
       this.engine.configure(s);
       this.renderEngine();
       if (this.engineOn) this.restartEngine();
     };
     threads.oninput = show;
+    depth.oninput = show;
     threads.onchange = apply;
+    depth.onchange = apply;
     hash.onchange = apply;
   }
 
@@ -632,7 +657,7 @@ export class Analysis {
     $('#nav-last').onclick = () => this.last();
     $('#nav-play').onclick = () => this.toggleAutoplay();
     $('#engine-toggle').onchange = (e) => this.setEngine(e.target.checked);
-    $('#engine-deeper').onclick = () => { this.unlimited = true; this.restartEngine(); };
+    $('#engine-deeper').onclick = () => { this.deeperNode = this.cur; this.restartEngine(); };
     const graph = $('#graph');
     graph.addEventListener('click', (e) => {
       const g = this.graphGeom;
