@@ -146,11 +146,6 @@ impl Timeline {
     pub fn end(&self) -> i32 {
         if self.boards.is_empty() { i32::MIN } else { self.start + self.boards.len() as i32 - 1 }
     }
-    /// `board_key` of each board, from `start`.
-    #[inline(always)]
-    pub fn keys(&self) -> &[u64] {
-        &self.keys
-    }
 }
 
 #[derive(Clone)]
