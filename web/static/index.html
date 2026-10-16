@@ -57,7 +57,6 @@
         </div>
         <div class="draft-hint" id="draft-hint"></div>
       </div>
-      <div class="mv-hud" id="mv-hud" aria-live="polite"></div>
       <div class="coord-chip" id="coord-chip"></div>
       <div class="toast-host" id="toasts" aria-live="polite"></div>
     </div>
@@ -80,6 +79,7 @@
           </div>
           <div class="game-meta" id="gm-meta"></div>
           <div class="status-line" id="status-chip"></div>
+          <div class="tl-line"></div>
         </div>
 
         <div class="panel ceval" id="engine-card">
@@ -88,7 +88,7 @@
             <label class="switch" title="Engine analysis (E)"><input type="checkbox" id="engine-toggle" aria-label="Engine analysis"><span></span></label>
             <div class="ceval-eval" id="engine-eval">-</div>
             <div class="ceval-info">
-              <div class="ceval-name">Kairos <span id="engine-where">· in browser</span></div>
+              <div class="ceval-name">Kairos <span id="engine-where"></span></div>
               <div class="ceval-stats" id="engine-stats">Off</div>
             </div>
             <button class="icon-btn sm" id="engine-deeper" title="Keep searching" aria-label="Keep searching"><svg><use href="#i-plus"/></svg></button>
@@ -172,6 +172,7 @@
         <div class="panel play-live hidden" id="play-live">
           <div class="player-bar" id="clock-top"><span class="pname" id="clock-top-name">Kairos</span><span class="clock" id="clock-top-time">-:--</span></div>
           <div class="play-status" id="play-status"></div>
+          <div class="tl-line play-tl"></div>
           <div class="moves play-moves" id="play-moves"></div>
           <div class="thinking" id="play-thinking"></div>
           <div class="play-actions">

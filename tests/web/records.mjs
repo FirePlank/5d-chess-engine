@@ -3,13 +3,12 @@
 // Every line must load; its action count must match the record; book/eval tags must line up
 // with the record's fields; a "checkmate"/"stalemate" ending must be the final position's status.
 import { readFileSync } from 'node:fs';
-import { instantiate } from '../../web/static/js/wasi.js';
+import { loadCore } from './core.mjs';
 
 const args = process.argv.slice(2);
 const maxIdx = args.indexOf('--max');
 const max = maxIdx >= 0 ? +args.splice(maxIdx, 2)[1] : Infinity;
-const module = await WebAssembly.compile(readFileSync(new URL('../../web/static/kairos.wasm', import.meta.url)));
-const k = await instantiate(module);
+const k = await loadCore();
 let total = 0, failed = 0;
 const t0 = performance.now();
 for (const file of args) {

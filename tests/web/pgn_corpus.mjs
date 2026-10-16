@@ -3,10 +3,9 @@
 //   node tests/web/pgn_corpus.mjs <dir>
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { instantiate } from '../../web/static/js/wasi.js';
+import { loadCore } from './core.mjs';
 
-const module = await WebAssembly.compile(readFileSync(new URL('../../web/static/kairos.wasm', import.meta.url)));
-const k = await instantiate(module);
+const k = await loadCore();
 const files = [];
 const walk = (d) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else if (p.endsWith('.5dpgn')) files.push(p); } };
 walk(process.argv[2]);

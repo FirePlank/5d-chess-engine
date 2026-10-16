@@ -9,33 +9,40 @@ export class MoveInput {
     this.draft = [];
     this.selected = null;
     this.targets = [];
-    // Like the Steam game, an action waits for Submit; auto-submit (toolbar) sends a lone
-    // action as soon as nothing else can be played.
-    this.autoSubmit = store('autoSubmit') === true;
+    // Auto-submit (toolbar) sends a lone action as soon as nothing else can be played. It is
+    // on by default on the analysis board, where a move is easily taken back, and off in play,
+    // where, as in the Steam game, every action waits for Submit. Remembered per page.
+    this.autoSubmitBy = { analysis: true, play: false, ...(store('autoSubmitBy') || {}) };
     this.peek = false;
     board.onSquare = (sq) => this.click(sq);
-    const tool = $('#tool-autosubmit');
-    const showTool = () => {
-      tool.classList.toggle('on', this.autoSubmit);
-      tool.title = this.autoSubmit
-        ? 'Auto-submit is on: an action is sent once nothing else can be played (click to turn off)'
-        : 'Auto-submit is off: press Submit or Enter after every action, like the Steam game (click to turn on)';
-    };
-    tool.onclick = () => {
-      this.autoSubmit = !this.autoSubmit;
-      store('autoSubmit', this.autoSubmit);
-      showTool();
+    $('#tool-autosubmit').onclick = () => {
+      this.autoSubmitBy[this.mode] = !this.autoSubmit;
+      store('autoSubmitBy', this.autoSubmitBy);
+      this.showAutoSubmit();
       toast(this.autoSubmit ? 'Auto-submit on' : 'Auto-submit off: press Submit (Enter) after each action');
     };
-    showTool();
+    this.showAutoSubmit();
     $('#draft-undo').onclick = () => this.undo();
     $('#draft-reset').onclick = () => this.clear();
     $('#draft-submit').onclick = () => this.submit();
   }
 
+  get mode() { return (this.source && this.source.mode) || 'analysis'; }
+  get autoSubmit() { return !!this.autoSubmitBy[this.mode]; }
+
+  showAutoSubmit() {
+    const tool = $('#tool-autosubmit');
+    const where = this.mode === 'play' ? 'in play' : 'on the analysis board';
+    tool.classList.toggle('on', this.autoSubmit);
+    tool.title = this.autoSubmit
+      ? `Auto-submit is on ${where}: an action is sent once nothing else can be played (click to turn off)`
+      : `Auto-submit is off ${where}: press Submit or Enter after every action, like the Steam game (click to turn on)`;
+  }
+
   /** Attach to a game source; resets any action in progress. */
   attach(source) {
     this.source = source;
+    this.showAutoSubmit();
     this.reset();
   }
 
@@ -60,7 +67,7 @@ export class MoveInput {
     const v = this.view();
     this.board.setView(v, { follow });
     this.renderBar(v);
-    renderHud(v);
+    renderTimelines(v);
     if (this.source.onView) this.source.onView(v, this.draft);
     return v;
   }
@@ -174,7 +181,8 @@ export class MoveInput {
     }
     bar.classList.remove('hidden');
     const moves = $('#draft-moves');
-    moves.replaceChildren(...this.draft.map((m) => el('span', { class: 'chip', text: lanText(m) })));
+    const san = v.draftSan || [];
+    moves.replaceChildren(...this.draft.map((m, i) => el('span', { class: 'chip', title: lanText(m), text: san[i] || lanText(m) })));
     const hint = $('#draft-hint');
     $('#draft-submit').disabled = !v.canSubmit;
     if (v.canSubmit) {
@@ -189,31 +197,31 @@ export class MoveInput {
 }
 
 /**
- * The present and timeline advantage, as in the Steam game: timelines each side has created,
- * who leads, and whether the side to move would get an active timeline by branching now (a
- * side may lead the other by one active timeline; further ones are inactive).
+ * The present and timeline advantage, as in the Steam game, in the side panels (`.tl-line`):
+ * the present turn, the timelines each side has created, who leads, and how many are inactive
+ * (or whether a new timeline by the side to move would be active: a side may lead the other by
+ * one active timeline; further ones are inactive).
  */
-export function renderHud(v) {
-  const hud = $('#mv-hud');
-  if (!v) return hud.replaceChildren();
+export function renderTimelines(v) {
+  const lines = document.querySelectorAll('.tl-line');
+  if (!v) return lines.forEach((n) => n.replaceChildren());
   const side = v.player ? 'Black' : 'White';
-  const dot = (black) => el('i', { class: 'side-dot ' + (black ? 'black' : 'white') });
-  const present = el('span', { class: 'hud-item', title: 'The present: the earliest turn among the active timelines. Every active board on it must be played.' },
-    dot(v.player), el('b', { text: `Present T${v.present}` }), el('span', { class: 'muted', text: `${side} to move` }));
   const white = v.lines[1] - v.initialLines[1];
   const black = v.initialLines[0] - v.lines[0];
   const inactive = (v.active[0] - v.lines[0]) + (v.lines[1] - v.active[1]);
   const lead = white - black;
-  const adv = lead > 0 ? `White +${lead}` : lead < 0 ? `Black +${-lead}` : 'Even';
   const mine = v.player ? black : white, theirs = v.player ? white : black;
   const next = mine <= theirs ? 'active' : 'inactive';
-  const items = [present];
-  if (white || black || inactive) {
-    items.push(el('span', { class: 'hud-item', title: `Timelines created: White ${white}, Black ${black}. A side may lead by one active timeline; ${inactive} timeline(s) are inactive. A new timeline by ${side} now would be ${next}.` },
-      el('b', { text: 'Timelines' }), el('span', { text: `W ${white} · B ${black}` }), el('b', { text: adv }),
-      el('span', { class: 'muted', text: inactive ? `${inactive} inactive` : `next ${side[0]} branch ${next}` })));
-  }
-  hud.replaceChildren(...items);
+  const parts = () => {
+    const out = [el('span', { title: 'The present: the earliest turn among the active timelines. Every active board on it must be played.' }, el('b', { text: `Present T${v.present}` }))];
+    if (white || black || inactive) {
+      out.push(el('span', { title: `Timelines created: White ${white}, Black ${black}. A side may lead by one active timeline. A new timeline by ${side} now would be ${next}.` },
+        `Timelines W ${white} · B ${black} · `, el('b', { text: lead > 0 ? `White +${lead}` : lead < 0 ? `Black +${-lead}` : 'even' }),
+        inactive ? ` · ${inactive} inactive` : ` · next ${side} timeline ${next}`));
+    }
+    return out;
+  };
+  lines.forEach((n) => n.replaceChildren(...parts()));
 }
 
 function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }

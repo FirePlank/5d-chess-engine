@@ -1,11 +1,9 @@
 // Node smoke test of the WASM build: node tests/web/smoke.mjs [games.jsonl]
 import { readFileSync } from 'node:fs';
-import { instantiate } from '../../web/static/js/wasi.js';
+import { loadCore } from './core.mjs';
 
-const wasm = readFileSync(new URL('../../web/static/kairos.wasm', import.meta.url));
-const module = await WebAssembly.compile(wasm);
 const infos = [];
-const k = await instantiate(module, { onInfo: (l) => infos.push(l) });
+const k = await loadCore({ onInfo: (l) => infos.push(l) });
 const line = process.argv[2] ? readFileSync(process.argv[2], 'utf8').split('\n')[0]
   : '{"game":0,"new_first":true,"score":1,"reason":"checkmate","position":"size 8x8 odd fen [k7/p*n6/K7/8/8/8/6P*B/8:0:1:w]","moves":"(0T1)h2g1 submit (0T1)a8b8 submit (0T2)g1d4 submit (0T2)b8c8 submit (0T3)d4c3 submit (0T3)b7(0T1)c7 submit (0T4)c3(0T1)c6 submit (0T4)c8(0T3)b8 (1T1)a8(0T2)a8 submit (1T2)c6(0T1)c6 submit (2T1)a8(1T2)a8 submit (2T2)h2b8 (-1T2)a6(0T3)b5 submit (-1T2)c7(1T1)c7 submit (-4T2)h2c7 submit"}';
 let t = performance.now();

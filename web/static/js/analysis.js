@@ -23,6 +23,7 @@ export class Analysis {
     this.lastEmit = 0;
     this.pending = null;
     this.source = {
+      mode: 'analysis',
       rules: null,
       node: () => this.cur,
       canMove: () => true,
@@ -236,7 +237,7 @@ export class Analysis {
     } else {
       const side = v.player ? 'Black' : 'White';
       const inCheck = v.checks.length > 0;
-      chip.textContent = `${side} to move · T${v.present}${inCheck ? ' · in check' : ''}`;
+      chip.textContent = `${side} to move${inCheck ? ' · in check' : ''}`;
       if (inCheck) chip.classList.add('check');
     }
   }
@@ -506,7 +507,7 @@ export class Analysis {
     const card = $('#engine-card');
     $('#engine-toggle').checked = this.engineOn && !this.suppressed;
     const n = this.engine.ready ? this.engine.threadsActive : threadsSupported ? this.engine.threads : 1;
-    $('#engine-where').textContent = `· in browser · ${n} thread${n > 1 ? 's' : ''}`;
+    $('#engine-where').textContent = `· ${n} thread${n > 1 ? 's' : ''}`;
     const info = this.cache.get(this.cur);
     const s = this.searching;
     const running = this.engineOn && s && s.node === this.cur && !s.finished;

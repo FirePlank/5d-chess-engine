@@ -16,6 +16,7 @@ export class Play {
     this.cur = 0;
     this.color = store('play.color') || 'w';
     this.source = {
+      mode: 'play',
       rules: null,
       node: () => this.cur,
       canMove: () => this.myTurn(),
