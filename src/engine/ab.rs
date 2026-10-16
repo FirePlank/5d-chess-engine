@@ -49,7 +49,7 @@ const ROOT_LMR_MIN_INDEX: usize = 6;
 /// Late move reduction for the `index`-th action at `depth`: 1 + ln(depth) ln(index) / 3.
 #[inline]
 fn lmr(depth: i32, index: usize) -> i32 {
-    (1.0 + (depth.max(1) as f32).ln() * (index.max(1) as f32).ln() / 3.0) as i32
+    (1.0 + (depth.max(1) as f32).ln() * (index.max(1) as f32).ln() / 4.0) as i32
 }
 /// Ordering bonus of a checking semimove (above every capture).
 const CHECK_BONUS: i32 = 30_000;
