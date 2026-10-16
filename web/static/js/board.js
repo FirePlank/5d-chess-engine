@@ -243,20 +243,6 @@ export class MultiverseView {
     this.vel = { x: 0, y: 0, s: 0 };
     this.redraw();
   }
-  /**
-   * Keep a world rectangle comfortably in view: when it leaves the middle of the view, centre
-   * on it (or, if it is wider than the view, show its right end: the latest turns).
-   */
-  ensureVisible(x0, y0, x1, y1) {
-    const c = this.target || this.cam;
-    const vw = this.w / c.s, vh = (this.h - 24) / c.s;
-    const mx = vw * 0.1, my = vh * 0.1;
-    let { x, y } = c;
-    if (x0 < x - vw / 2 + mx || x1 > x + vw / 2 - mx) x = x1 - x0 > vw - 2 * mx ? x1 + mx - vw / 2 : (x0 + x1) / 2;
-    if (y0 < y - vh / 2 + my || y1 > y + vh / 2 - my) y = (y0 + y1) / 2;
-    if (x !== c.x || y !== c.y) this.moveTo({ x, y, s: c.s });
-  }
-
   setFlipped(f) {
     if (f === this.flipped) return;
     const c = this.cam;
@@ -343,27 +329,63 @@ export class MultiverseView {
     });
   }
 
-  /** Keep the boards the last action touched in view. */
+  /**
+   * After an action (played, taken back or stepped through): show the boards it made and the
+   * boards that must be played next, as 5dcol does. The camera zooms out as far as needed to
+   * fit them (never in) and centres on them; when they cannot all be shown at a readable size,
+   * it shows the boards the action made. Nothing moves when they are all in view already.
+   */
   followAction() {
     const v = this.view;
-    const pts = [];
+    const made = [];
     for (const m of [...(v.last || []), ...(v.draft || [])]) {
-      for (const p of [m.from, m.to]) {
-        const c = m.c ?? v.player;
-        pts.push([p[0], 2 * p[1] + c]);
-        pts.push([p[0], 2 * p[1] + c + 1]);
-      }
+      const c = m.c ?? v.player;
+      const vf = 2 * m.from[1] + c, vt = 2 * m.to[1] + c;
+      made.push([m.from[0], vf + 1]);
+      // A move to a board that was not the latest of its timeline arrives on a new timeline.
+      const br = (v.branches || []).find((b) => b[1] === m.to[0] && 2 * b[2] + b[3] === vt + 1);
+      const sameBoard = m.from[0] === m.to[0] && m.from[1] === m.to[1];
+      made.push([br && !sameBoard ? br[0] : m.to[0], vt + 1]);
     }
     const present = 2 * v.present + v.player;
-    for (const tl of v.timelines) if (tl.status === 'mandatory') pts.push([tl.l, present]);
-    if (!pts.length) return;
+    const next = v.timelines.filter((tl) => tl.status === 'mandatory').map((tl) => [tl.l, present]);
+    const has = (b) => this.boards.has(`${b[0]},${b[1]}`);
+    const sets = [[...made, ...next].filter(has), made.filter(has), next.filter(has)];
+    for (const set of sets) if (set.length && this.showBoards(set)) return;
+    const last = made.filter(has).pop();
+    if (last) this.showBoards([last], true);
+  }
+
+  /** Square size (px) below which following an action would make the boards unreadable. */
+  static get FOLLOW_MIN_SCALE() { return 10; }
+
+  /**
+   * Bring boards `[l, v]` into view, zooming out (never in) to fit them with half a board around.
+   * Returns false, moving nothing, if that needs a scale below `FOLLOW_MIN_SCALE` (unless `force`,
+   * which then centres on them at that scale).
+   */
+  showBoards(list, force = false) {
     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
-    for (const [l, vv] of pts) {
-      x0 = Math.min(x0, this.boardX(vv)); x1 = Math.max(x1, this.boardX(vv) + this.bw);
-      const y = this.boardY(l);
+    for (const [l, vv] of list) {
+      const x = this.boardX(vv), y = this.boardY(l);
+      x0 = Math.min(x0, x); x1 = Math.max(x1, x + this.bw);
       y0 = Math.min(y0, y); y1 = Math.max(y1, y + this.bh);
     }
-    this.ensureVisible(x0, y0, x1, y1);
+    const c = this.target || this.cam;
+    const top = 24; // the turn labels along the top
+    // Already in view (with a little room)? Leave the camera where the user put it.
+    const m = 0.4;
+    const [sx0, sy0] = [(x0 - m - c.x) * c.s + this.w / 2, (y0 - m - c.y) * c.s + this.h / 2];
+    const [sx1, sy1] = [(x1 + m - c.x) * c.s + this.w / 2, (y1 + m - c.y) * c.s + this.h / 2];
+    if (sx0 >= 28 && sy0 >= top && sx1 <= this.w && sy1 <= this.h) return true;
+    const fit = Math.min(this.w / (x1 - x0 + this.bw), (this.h - top) / (y1 - y0 + this.bh));
+    let s = Math.min(c.s, fit);
+    if (s < MultiverseView.FOLLOW_MIN_SCALE) {
+      if (!force) return false;
+      s = Math.min(c.s, MultiverseView.FOLLOW_MIN_SCALE);
+    }
+    this.moveTo({ x: (x0 + x1) / 2, y: (y0 + y1) / 2 - top / 2 / s, s });
+    return true;
   }
 
   setOverlay(o) {
