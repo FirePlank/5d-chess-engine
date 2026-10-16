@@ -33,7 +33,12 @@ export class Play {
     $('#play-variant').replaceChildren(...variants.map((v) => el('option', { value: v.name, text: v.name, selected: v.name === saved })));
     $$('#play-color button').forEach((b) => {
       b.classList.toggle('on', b.dataset.v === this.color);
-      b.onclick = () => { this.color = b.dataset.v; store('play.color', this.color); $$('#play-color button').forEach((x) => x.classList.toggle('on', x === b)); };
+      b.onclick = () => {
+        this.color = b.dataset.v;
+        store('play.color', this.color);
+        $$('#play-color button').forEach((x) => x.classList.toggle('on', x === b));
+        this.preview();
+      };
     });
     const tcSaved = store('play.tc');
     $$('#play-tc button').forEach((b) => {
@@ -41,6 +46,7 @@ export class Play {
       b.onclick = () => { $$('#play-tc button').forEach((x) => x.classList.toggle('on', x === b)); store('play.tc', b.textContent); };
     });
     $('#play-form').onsubmit = (e) => { e.preventDefault(); this.start(); };
+    $('#play-variant').onchange = () => { store('play.variant', $('#play-variant').value); this.preview(); };
     $('#play-resign').onclick = async () => {
       if (await confirmDialog('Resign this game?', { text: 'Kairos wins the game.', ok: 'Resign', danger: true })) this.post('resign').catch(() => {});
     };
@@ -52,8 +58,35 @@ export class Play {
       const c = e.target.closest('[data-id]');
       if (c) { this.cur = +c.dataset.id; this.input.reset(); this.show(); }
     });
-    this.rules.call({ cmd: 'new', position: 'Standard' });
+    this.preview();
     setInterval(() => this.tickClocks(), 100);
+  }
+
+  /** No game in progress is on the board (none, a finished one, or you are setting up the next). */
+  previewable(s = this.state) {
+    const g = s && s.game;
+    return !g || !!g.over || !!(s.you && this.wantSetup);
+  }
+
+  /** Show the chosen variant's start position (from the chosen side) while setting up a game. */
+  preview() {
+    if (!this.rules || !this.previewable()) return;
+    try {
+      const r = this.rules.call({ cmd: 'new', position: $('#play-variant').value || 'Standard' });
+      this.tree = r.tree;
+    } catch (e) {
+      toast(e.message, { error: true });
+      return;
+    }
+    this.previewing = true;
+    this.cur = 0;
+    this.localStart = null;
+    this.localMoves = [];
+    this.input.reset();
+    this.board.setFlipped(this.color === 'b');
+    $('#tool-flip').classList.toggle('on', this.board.flipped);
+    this.board.fitted = false;
+    this.show();
   }
 
   activate() {
@@ -65,7 +98,8 @@ export class Play {
       return;
     }
     this.connect();
-    this.show();
+    if (this.previewable()) this.preview();
+    else this.show();
   }
 
   deactivate() {
@@ -202,6 +236,12 @@ export class Play {
   onState(s) {
     this.state = s;
     this.stateAt = performance.now();
+    // A setup preview stays on the board until a game is in progress.
+    if (this.previewing && this.previewable(s)) {
+      if (this.active) this.show();
+      return;
+    }
+    this.previewing = false;
     if (s.game) this.sync(s.game);
     if (s.you) this.wantSetup = this.wantSetup && !!(s.game && s.game.over);
     if (this.active) this.show();
@@ -219,7 +259,8 @@ export class Play {
 
   showSetup(on) {
     this.wantSetup = on;
-    this.show();
+    if (on) this.preview();
+    else this.show();
   }
 
   show() {
@@ -261,7 +302,7 @@ export class Play {
       $('#play-resign').classList.toggle('hidden', !mine || !!g.over);
       $('#play-new').classList.toggle('hidden', !mine || !g.over);
       this.tickClocks();
-      if (!mine && !this.flippedFor) {
+      if (!mine && !this.flippedFor && !this.previewing) {
         this.board.setFlipped(human === 'b');
         this.flippedFor = true;
       }

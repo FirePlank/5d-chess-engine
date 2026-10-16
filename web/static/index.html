@@ -201,12 +201,12 @@
 <dialog class="modal" id="dlg-load">
   <form method="dialog" class="modal-body">
     <h2>Load a game</h2>
-    <p class="muted">Paste SPRT <code>--games-out</code> lines, a 5dpgn game or a 5DUCI <code>position … moves …</code> line, or drop a file on the board.</p>
+    <p class="muted">Paste SPRT <code>--games-out</code> lines, a 5dpgn game, a 5DUCI <code>position … moves …</code> line or a board FEN, or drop a file on the board. Ctrl+V on the analysis page loads straight from the clipboard.</p>
     <textarea id="load-text" spellcheck="false" placeholder='{"game":0,"position":"size 8x8 odd fen [...]","book":6,"moves":"(0T1)e2e4 submit ...","evals":[...]}'></textarea>
     <div class="load-row">
       <label class="field grow">
         <span>Start position, if the record has none</span>
-        <input class="input" id="load-position" list="variant-list" placeholder="Standard, a variant name, or size 8x8 odd fen [...]">
+        <input class="input" id="load-position" list="variant-list" placeholder="A variant name, a board FEN (k7/p*n6/K7/8/8/8/6P*B/8) or a 5DUCI position">
       </label>
       <label class="btn file-btn">Open file<input type="file" id="load-file" accept=".jsonl,.json,.5dpgn,.txt,.g" hidden></label>
     </div>
@@ -223,7 +223,7 @@
   <form method="dialog" class="modal-body">
     <h2>New analysis board</h2>
     <label class="field"><span>Variant</span><select id="new-variant"></select></label>
-    <label class="field"><span>Or a 5DUCI position</span><input class="input" id="new-position" placeholder="size 8x8 odd fen [r*nbqk*bnr*/...:0:1:w]"></label>
+    <label class="field"><span>Or a position: board FEN, optionally with w/b, or 5DUCI</span><input class="input" id="new-position" placeholder="k7/p*n6/K7/8/8/8/6P*B/8 w"></label>
     <div class="error hidden" id="new-error"></div>
     <div class="modal-actions">
       <button class="btn" value="cancel">Cancel</button>
@@ -260,6 +260,7 @@
       <tr><td><kbd>Enter</kbd> <kbd>Backspace</kbd> <kbd>Esc</kbd></td><td>Submit / undo / clear the action you are building</td></tr>
       <tr><td><kbd>F</kbd> <kbd>P</kbd> <kbd>0</kbd></td><td>Flip, go to the present, fit all boards</td></tr>
       <tr><td><kbd>L</kbd></td><td>Load a game</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+<kbd>V</kbd> / <kbd>Ctrl</kbd>+<kbd>C</kbd></td><td>Load a game or position from the clipboard / copy the position</td></tr>
       <tr><td>Drag, wheel, pinch</td><td>Pan and zoom</td></tr>
       <tr><td>Double-click a board</td><td>Zoom to that board</td></tr>
       <tr><td>Click a piece, then a square</td><td>Move; play every board you must, then submit</td></tr>

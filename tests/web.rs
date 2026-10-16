@@ -35,7 +35,10 @@ fn sprt_records_replay() {
             assert_eq!(a, b, "action {}", i + 1);
             assert_eq!(node.book, i < book);
             if i >= book {
-                assert_eq!(node.eval.map(|e| e as i64), evals.get(i - book).and_then(|e| e.int()));
+                // Old records (no "eval_scale") hold internal units, shown on the reported scale.
+                let rec = evals.get(i - book).and_then(|e| e.int()).map(|e| e as i32);
+                let want = rec.map(|e| if j.get("eval_scale").is_null() && e.abs() < 20000 { kairos::engine::report_cp(e) } else { e });
+                assert_eq!(node.eval, want);
             }
             assert!(!node.san.is_empty());
         }
@@ -54,6 +57,18 @@ fn sprt_records_replay() {
 }
 
 #[test]
+fn record_eval_scales() {
+    // New records are on the reported scale; old ones hold internal units; mates stay.
+    let new = r#"{"position":"startpos","book":0,"moves":"(0T1)e2e4 submit (0T1)e7e5 submit (0T2)g1f3 submit","evals":[100,-20000,null],"eval_scale":275}"#;
+    let old = r#"{"position":"startpos","book":0,"moves":"(0T1)e2e4 submit (0T1)e7e5 submit (0T2)g1f3 submit","evals":[275,-20000,null]}"#;
+    for text in [new, old] {
+        let l = record::load(text, None).unwrap();
+        let evals: Vec<Option<i32>> = l.game.mainline()[1..].iter().map(|&id| l.game.nodes[id].eval).collect();
+        assert_eq!(evals, vec![Some(100), Some(-20000), None]);
+    }
+}
+
+#[test]
 fn uci_and_ktools_lines() {
     let l = record::load("position startpos moves (0T1)e2e4 submit (0T1)e7e5 submit", None).unwrap();
     assert_eq!(l.game.mainline().len(), 3);
@@ -66,6 +81,29 @@ fn uci_and_ktools_lines() {
     let l = record::load("(0T1)e2e4 submit", Some("size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w]")).unwrap();
     assert_eq!(l.meta.get("variant").str(), Some("Standard"));
     assert!(record::load("position startpos moves (0T1)e2e5 submit", None).is_err());
+}
+
+#[test]
+fn position_shorthands() {
+    // A bare board FEN: one board on L0 at T1, sized from the FEN.
+    let l = record::load("k7/p*n6/K7/8/8/8/6P*B/8", None).unwrap();
+    assert_eq!(l.game.start, "size 8x8 odd fen [k7/p*n6/K7/8/8/8/6P*B/8:0:1:w]");
+    assert_eq!(l.game.mainline().len(), 1);
+    let l = record::load("nbrk/3p*/P*3/KRBN b", None).unwrap();
+    assert_eq!(l.game.start, "size 4x4 odd fen [nbrk/3p*/P*3/KRBN:0:1:b]");
+    assert!(l.game.nodes[0].state.get_present().1);
+    // Board tags without a size prefix, and variant names.
+    let l = record::load("[k7/p*n6/K7/8/8/8/6P*B/8:0:1:w]", None).unwrap();
+    assert_eq!(l.game.mainline().len(), 1);
+    assert_eq!(record::load("Standard - Two Timelines", None).unwrap().meta.get("variant").str(), Some("Standard - Two Timelines"));
+    // As the start position of a bare move list or a headerless 5dpgn.
+    let pgn = std::fs::read_to_string("tests/data/pgn/expert_m7.5dpgn").unwrap();
+    assert_eq!(record::load(&pgn, Some("k7/p*n6/K7/8/8/8/6P*B/8")).unwrap().game.mainline().len(), 14);
+    assert!(record::load("(0T1)h2g1 submit", Some("k7/p*n6/K7/8/8/8/6P*B/8")).is_ok());
+    // Not positions.
+    assert!(record::as_position("k7/p*n6/K7 x").is_none());
+    assert!(record::as_position("k7/p*n6/K9").is_none());
+    assert!(record::as_position("1. e3 / Nf6").is_none());
 }
 
 #[test]
