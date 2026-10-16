@@ -37,8 +37,6 @@ const ROOT_CAP: usize = 1000;
 const BATCH: usize = 12;
 const QDEPTH: i32 = 3;
 const QCAP: usize = 10;
-/// Quiescence searches evasions only when at most this many boards must be played.
-const QEVASION_MAX_BOARDS: usize = 2;
 const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
@@ -776,9 +774,8 @@ impl AlphaBeta {
         let in_check = known_check.unwrap_or_else(|| self.in_check(s));
         let leaf = qd <= 0 || ply >= MAX_PLY;
         // Royal captures are threatened: standing pat is unsound, so search evasions (the
-        // static evaluation only matters at the depth limit). With many boards to play, building
-        // and enumerating the evasions costs more than the evaluation they correct.
-        if in_check && (leaf || Self::mandatory_boards(s) > QEVASION_MAX_BOARDS) {
+        // static evaluation only matters at the depth limit).
+        if in_check && leaf {
             return self.static_eval(s);
         }
         if !in_check {
