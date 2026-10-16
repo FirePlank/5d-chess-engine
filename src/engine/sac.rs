@@ -914,16 +914,6 @@ fn win_sources(m: &Multiverse, l: i32, c: bool) -> RootTravel {
     e
 }
 
-/// Whether the f7 sac table's terms apply to games from the start of `s`: Turn Zero starts
-/// (an original timeline with a board at turn 0, Black to move), where both sides' f7/f2 travels
-/// land on boards that are still the start position. In Standard-like starts only White gets
-/// such a target, and the terms cost Black more than they saved (SPRT of f7_sac_defense: 0.36
-/// as Black in Standard, 0.38 in Q/N swapped).
-pub fn turn_zero(s: &State) -> bool {
-    let (l0, l1) = s.get_initial_lines_range();
-    (l0..=l1).any(|l| s.get_board_ptr(l, 0, true).is_some())
-}
-
 /// `RootTravels` of the position `s` (empty unless a winning travel is known).
 pub fn root_travels(s: &State) -> RootTravels {
     let mut rt = RootTravels::default();
@@ -1205,16 +1195,6 @@ pub fn dump_table() -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::core::multiverse::tc_to_v;
-
-    #[test]
-    fn turn_zero_starts_only() {
-        let g = |fen: &str| crate::core::perft::parse_g_line(&format!("G 1 size 8x8 {} moves", fen)).unwrap();
-        let t0 = "odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:0:b] [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w]";
-        assert!(turn_zero(&g(t0)));
-        assert!(!turn_zero(&g("odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w]")));
-        let two = "even fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:-0:1:w] [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:+0:1:w]";
-        assert!(!turn_zero(&g(two)));
-    }
 
     /// 1. Bxf7+ (or Qxf7+) onto the start position: 1...Kxf7 2. Nh3 .. 3. Ng5+ .. 4. c3 ..
     /// 5. Qb3*, the softmate a check through time on the king's old square f7.

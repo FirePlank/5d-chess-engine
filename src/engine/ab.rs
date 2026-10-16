@@ -1863,15 +1863,11 @@ impl AlphaBeta {
         let plan = TimePlan::new(limits, Self::mandatory_boards(root), root.active_timelines());
         let deadline = plan.as_ref().map(|p| start + Duration::from_millis(p.maximum.saturating_sub(5).max(1)));
         // The f7 sac table: local outcomes of the travels (and created timelines) this
-        // position may need, kept for the rest of the game. Turn Zero starts only (see
-        // `sac::turn_zero`).
-        self.terms.sac_on = super::sac::turn_zero(root);
-        if self.terms.sac_on {
-            match plan.as_ref() {
-                Some(p) => super::sac::prepare(root, u64::MAX, Some(start + Duration::from_millis(p.optimum / SAC_PREP_DIV)), Some(stop), super::sac::PROBE_NODES, false),
-                None => super::sac::prepare(root, 0, None, Some(stop), super::sac::PROBE_NODES, false),
-            };
-        }
+        // position may need, kept for the rest of the game.
+        match plan.as_ref() {
+            Some(p) => super::sac::prepare(root, u64::MAX, Some(start + Duration::from_millis(p.optimum / SAC_PREP_DIV)), Some(stop), super::sac::PROBE_NODES, false),
+            None => super::sac::prepare(root, 0, None, Some(stop), super::sac::PROBE_NODES, false),
+        };
         self.begin_search(stop, limits.nodes, deadline);
         // Enumerating actions stops at the deadline or when told to stop (see `interrupted`).
         let _interrupt = interrupt_on(stop, deadline);
@@ -2053,8 +2049,7 @@ impl AlphaBeta {
     ) -> ThreadResult {
         let main = self.thread_id == 0;
         // The f7 sac table's winning travels at this root, for the evaluation.
-        self.terms.sac_on = super::sac::turn_zero(root);
-        self.terms.sac_root = if self.terms.sac_on { super::sac::root_travels(root) } else { super::sac::RootTravels::default() };
+        self.terms.sac_root = super::sac::root_travels(root);
         let mut work = root.clone();
         work.enable_undo();
         let mut best: MoveSeq = resume.map_or_else(|| roots[0].1.clone(), |r| r.best.clone());
