@@ -70,6 +70,7 @@ self.onmessage = async (e) => {
         increment: msg.increment,
         delay: msg.delay,
         delayPerTimeline: msg.delayPerTimeline,
+        multiPV: msg.multiPV,
         book: !!msg.book,
       });
       if (r.ok) self.postMessage({ type: 'done', id: msg.id, bestmove: r.bestmove });

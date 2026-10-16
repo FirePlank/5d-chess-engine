@@ -272,6 +272,8 @@ impl Api {
     /// Limits (ms): `depth`, `movetime`, `nodes`; a clock: `timeLeft` and `increment`, and a
     /// delay clock's `delay` (fixed per action) and `delayPerTimeline` (per active timeline of
     /// the position; 5D tournament clock: `timeLeft` 300000, `delayPerTimeline` 3000).
+    /// `multiPV` K (1..=256, default 1) reports the best K root actions' lines: each streamed
+    /// `info` line then carries `multipv k` (see README).
     fn search(&mut self, j: &Json, info: &mut dyn FnMut(&str)) -> Result<Json, String> {
         let s = Self::uci_state(j.get("position").str().ok_or("missing position")?)?;
         let limits = Limits {
@@ -300,6 +302,9 @@ impl Api {
             eng.new_game();
         }
         eng.set_option("OwnBook", &crate::engine::OptionValue::Bool(j.get("book").bool() == Some(true)));
+        // `multiPV`: this search's, else the `set_option` value, else 1.
+        let multipv = j.get("multiPV").int().or_else(|| options.iter().find(|(n, _)| n == "MultiPV").map(|o| o.1)).unwrap_or(1);
+        eng.set_option("MultiPV", &crate::engine::OptionValue::Int(multipv));
         let stop = AtomicBool::new(false);
         let best = eng.find_best_move(&s, &limits, &stop, &mut |m| info(&m));
         let bestmove = best.map(|a| super::tree::action_lan(&s, &a));

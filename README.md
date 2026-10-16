@@ -33,6 +33,16 @@ The engine answers with `bestmove <moves>`; the GUI applies them and sends `subm
 
 Clocks: `go wtime <ms> btime <ms> [winc <ms> binc <ms>]`, with an optional delay (the clock waits before running down; unused delay is lost): `wdelay/bdelay <ms>` per action and `wtldelay/btldelay <ms>` per active timeline of the position. The 5D tournament clock (5 min + 3 s per active timeline) is `go wtime 300000 btime 300000 wtldelay 3000 btldelay 3000`. The JSON API's `search` takes the same as `timeLeft`, `increment`, `delay` and `delayPerTimeline` (ms).
 
+MultiPV: `setoption name MultiPV value K` (default 1, 1 to 256) reports the best K root actions, each with an exact score and its own line (fewer when the position has fewer root actions). After each completed depth there is one info line per line, best first, with `multipv k` (1-based) right after the depth:
+
+```text
+info depth 4 multipv 1 score cp 34 wdl 592 0 408 nodes 1374 nps 171729 time 8 roots 20 pv (0T1)g1f3 submit (0T1)g8f6 submit ...
+info depth 4 multipv 2 score cp 26 wdl 571 0 429 nodes 1374 nps 171729 time 8 roots 20 pv (0T1)b1c3 submit (0T1)b8c6 submit ...
+info depth 4 multipv 3 score cp 6 wdl 517 0 483 nodes 1374 nps 171729 time 8 roots 20 pv (0T1)e2e4 submit (0T1)g8f6 submit ...
+```
+
+A depth's lines share its `nodes`, `nps`, `time` and `roots`; `score` reads as in a plain search (`cp X wdl W D L` or `mate N wdl ...`, side to move's view). With K = 1 the search and its output are the plain ones: no `multipv` tag. With `Threads` above 1, a final group of K lines follows when a helper's result wins the vote (its depth may be one more than the last group's); `bestmove` is the last group's line 1 action, unless a later, interrupted depth changed it (as in a plain search). The JSON API's `search` takes `"multiPV": K` (else the `set_option` value, else 1); its streamed info lines are the same text, and the browser's `parseInfo` (web/static/js/kairos.js) returns the tag as `multipv` (absent on a plain search). The Analysis page keeps line 1 as the shown entry and all lines of that depth in its `lines` array (index k - 1).
+
 ## Testing
 
 ```bash
