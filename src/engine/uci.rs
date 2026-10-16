@@ -43,6 +43,8 @@ pub fn run(engine: AlphaBeta) {
             "5duci" => {
                 out("id name kairos");
                 out("id author kairos");
+                out("option name Hash type spin default 64 min 1 max 65536");
+                out(&format!("option name Threads type spin default 1 min 1 max {}", super::ab::MAX_THREADS));
                 out("5duciok");
             }
             "isready" => out("readyok"),

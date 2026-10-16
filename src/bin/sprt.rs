@@ -8,6 +8,7 @@
 //!      [--concurrency 8] [--max-games 20000] [--min-games 0] [--elo0 0] [--elo1 5]
 //!      [--alpha 0.05] [--beta 0.05] [--model normalized|logistic] [--max-actions 160]
 //!      [--games-out games.jsonl] [--seed 1] [--compact]
+//!      [--new-option Name=Value]... [--base-option Name=Value]...
 //!
 //! Without `--book`, every pair opens from a generated opening: a random 8x8 built-in variant
 //! and `--book-plies` actions chosen by a shallow search with noise, the same for both games.
@@ -264,7 +265,8 @@ fn info_score(line: &str) -> Option<i32> {
 }
 
 impl Proc {
-    fn spawn(cmd: &str, name: &str) -> Result<Proc, String> {
+    /// Start the engine and set `options` (`Name=Value`) on it.
+    fn spawn(cmd: &str, name: &str, options: &[String]) -> Result<Proc, String> {
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         let mut child = Command::new(parts[0])
             .args(&parts[1..])
@@ -288,6 +290,10 @@ impl Proc {
         p.send("5duci")?;
         p.wait_for("5duciok", Duration::from_secs(30))?;
         p.send("setoption name debug value false")?;
+        for o in options {
+            let (k, v) = o.split_once('=').ok_or_else(|| format!("{}: bad option {} (want Name=Value)", name, o))?;
+            p.send(&format!("setoption name {} value {}", k.trim(), v.trim()))?;
+        }
         p.send("isready")?;
         p.wait_for("readyok", Duration::from_secs(30))?;
         Ok(p)
@@ -331,6 +337,9 @@ impl Drop for Proc {
 struct Config {
     new_cmd: String,
     base_cmd: String,
+    /// `Name=Value` options set on each engine.
+    new_options: Vec<String>,
+    base_options: Vec<String>,
     go: String,
     /// Clock games (`--tc base+inc`, seconds): base and increment in ms.
     clock: Option<(u64, u64)>,
@@ -600,6 +609,20 @@ fn arg(args: &[String], key: &str) -> Option<String> {
     args.iter().position(|a| a == key).and_then(|i| args.get(i + 1).cloned())
 }
 
+/// Every value of a repeatable `key` (`key value` or `key=value`).
+fn args_all(args: &[String], key: &str) -> Vec<String> {
+    let prefix = format!("{}=", key);
+    let mut out = Vec::new();
+    for (i, a) in args.iter().enumerate() {
+        if let Some(v) = a.strip_prefix(&prefix) {
+            out.push(v.to_string());
+        } else if a == key {
+            out.extend(args.get(i + 1).cloned());
+        }
+    }
+    out
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let new_cmd = arg(&args, "--new").expect("--new <cmd>");
@@ -639,6 +662,8 @@ fn main() {
     let cfg = Config {
         new_cmd: new_cmd.clone(),
         base_cmd: base_cmd.clone(),
+        new_options: args_all(&args, "--new-option"),
+        base_options: args_all(&args, "--base-option"),
         go: go.clone(),
         clock,
         timeout: Duration::from_millis(budget_ms * 4 + 10000),
@@ -646,7 +671,7 @@ fn main() {
     };
     let lower = (beta / (1.0 - alpha)).ln();
     let upper = ((1.0 - beta) / alpha).ln();
-    println!("SPRT  NEW: {}\n      BASE: {}", new_cmd, base_cmd);
+    println!("SPRT  NEW: {} {:?}\n      BASE: {} {:?}", new_cmd, cfg.new_options, base_cmd, cfg.base_options);
     println!(
         "      {} | bounds [{}, {}] {} | alpha={} beta={} | LLR bounds [{:.2}, {:.2}] | {} | {} workers",
         go,
@@ -726,10 +751,10 @@ fn main() {
                     let mut attempt = 0;
                     loop {
                         if procs[0].is_none() {
-                            procs[0] = Proc::spawn(&cfg.new_cmd, "NEW").ok();
+                            procs[0] = Proc::spawn(&cfg.new_cmd, "NEW", &cfg.new_options).ok();
                         }
                         if procs[1].is_none() {
-                            procs[1] = Proc::spawn(&cfg.base_cmd, "BASE").ok();
+                            procs[1] = Proc::spawn(&cfg.base_cmd, "BASE", &cfg.base_options).ok();
                         }
                         if procs[0].is_none() || procs[1].is_none() {
                             eprintln!("worker {}: engine failed to start", w);

@@ -289,6 +289,20 @@ fn main() {
             args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20),
             &mut out,
         ),
+        "overrun" => overrun(
+            args.get(2).map(|s| s.as_str()).expect("overrun <games.jsonl> [threads] [ms] [games] [step]"),
+            args.get(3).and_then(|s| s.parse().ok()).unwrap_or(8),
+            args.get(4).and_then(|s| s.parse().ok()).unwrap_or(100),
+            args.get(5).and_then(|s| s.parse().ok()).unwrap_or(1000),
+            args.get(6).and_then(|s| s.parse().ok()).unwrap_or(1),
+            &mut out,
+        ),
+        "smpbench" => smpbench(
+            args.get(2).map(|s| s.as_str()).unwrap_or("data/bench_ab.g"),
+            args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1000),
+            args.get(4).map(|s| s.split(',').filter_map(|t| t.parse().ok()).collect()).unwrap_or_else(|| vec![1, 2, 4, 8]),
+            &mut out,
+        ),
         "naive" => {
             use kairos::core::naive::{is_legal_action, naive_actions};
             for line in stdin.lock().lines() {
@@ -773,6 +787,103 @@ fn abbench(path: &str, depth: u32, out: &mut impl Write) {
     let secs = t0.elapsed().as_secs_f64();
     writeln!(out, "aboracle {:016x} | depth {} | nodes {} in {:.3}s ({:.0} nps)", h.finish(), depth, total_nodes, secs, total_nodes as f64 / secs).unwrap();
     write!(out, "{}", kairos::misc::prof::report()).unwrap();
+}
+
+/// Lazy SMP scaling: per thread count, total nodes/s and mean depth reached in `ms` per
+/// position, then the time to reach (with depth as the limit) the depth one thread reaches.
+fn smpbench(path: &str, ms: u64, threads: Vec<usize>, out: &mut impl Write) {
+    use kairos::engine::ab::AlphaBeta;
+    use kairos::engine::{Limits, OptionValue};
+    let text = std::fs::read_to_string(path).expect("bench positions");
+    let positions: Vec<State> = text.lines().filter(|l| l.starts_with("G ")).map(|l| parse_g_line(l).unwrap()).collect();
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let field = |line: &str, key: &str| -> u64 { line.split_whitespace().skip_while(|w| *w != key).nth(1).and_then(|x| x.parse().ok()).unwrap_or(0) };
+    let hash: i64 = std::env::var("SMP_HASH").ok().and_then(|v| v.parse().ok()).unwrap_or(256);
+    let engine = |t: usize| {
+        let mut e = AlphaBeta::new();
+        e.set_option("Hash", &OptionValue::Int(hash));
+        e.set_option("Threads", &OptionValue::Int(t as i64));
+        e
+    };
+    // Depth one thread reaches per position: the time-to-depth target.
+    let mut target: Vec<u32> = Vec::new();
+    let mut base_ttd = 0.0;
+    for &t in &threads {
+        let (mut nodes, mut depth_sum, mut secs) = (0u64, 0u64, 0.0);
+        let mut reached = Vec::new();
+        for s in &positions {
+            let mut e = engine(t);
+            let mut last = String::new();
+            let t0 = Instant::now();
+            e.find_best_move(s, &Limits { movetime: Some(ms), ..Default::default() }, &stop, &mut |m| last = m);
+            secs += t0.elapsed().as_secs_f64();
+            nodes += e.last_search_nodes();
+            depth_sum += field(&last, "depth");
+            reached.push(field(&last, "depth") as u32);
+        }
+        if target.is_empty() {
+            target = reached;
+        }
+        let mut ttd = 0.0;
+        for (s, &d) in positions.iter().zip(&target) {
+            let mut e = engine(t);
+            let t0 = Instant::now();
+            e.find_best_move(s, &Limits { depth: Some(d.max(1)), ..Default::default() }, &stop, &mut |_| {});
+            ttd += t0.elapsed().as_secs_f64();
+        }
+        if base_ttd == 0.0 {
+            base_ttd = ttd;
+        }
+        writeln!(
+            out,
+            "threads {:>2} | {:>9.0} nps | mean depth {:.2} | time to depth {:.2}s (x{:.2})",
+            t,
+            nodes as f64 / secs,
+            depth_sum as f64 / positions.len() as f64,
+            ttd,
+            base_ttd / ttd
+        )
+        .unwrap();
+        out.flush().unwrap();
+    }
+}
+
+/// Time overruns: searches every `step`-th position of the games in `path` for `ms` with
+/// `threads` threads (one engine throughout, as in a match) and reports the searches that
+/// returned late.
+fn overrun(path: &str, threads: usize, ms: u64, max_games: usize, step: usize, out: &mut impl Write) {
+    use kairos::core::variants::{apply_uci_moves, position_from_uci};
+    use kairos::engine::ab::AlphaBeta;
+    use kairos::engine::{Limits, OptionValue};
+    let text = std::fs::read_to_string(path).expect("games");
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let mut e = AlphaBeta::new();
+    e.set_option("Threads", &OptionValue::Int(threads as i64));
+    let (mut searches, mut worst, mut late) = (0usize, 0.0f64, 0usize);
+    for (g, line) in text.lines().take(max_games).enumerate() {
+        let (Some(pos), Some(moves)) = (json_field(line, "position"), json_field(line, "moves")) else { continue };
+        let Ok(mut s) = position_from_uci(pos) else { continue };
+        let acts: Vec<&str> = moves.split(" submit").map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+        for (k, a) in acts.iter().enumerate() {
+            if k % step == 0 {
+                let t = Instant::now();
+                let mut last = String::new();
+                e.find_best_move(&s, &Limits { movetime: Some(ms), ..Default::default() }, &stop, &mut |m| last = m);
+                let over = t.elapsed().as_secs_f64() * 1e3 - ms as f64;
+                searches += 1;
+                worst = worst.max(over);
+                if over > 30.0 {
+                    late += 1;
+                    let (lo, hi) = s.get_lines_range();
+                    writeln!(out, "game {} action {}: {:.0} ms late, {} timelines | {}", g, k, over, hi - lo + 1, last.chars().take(90).collect::<String>()).unwrap();
+                }
+            }
+            if apply_uci_moves(&mut s, &format!("{} submit", a)).is_err() {
+                break;
+            }
+        }
+    }
+    writeln!(out, "{} searches, {} late by over 30 ms, worst {:.0} ms", searches, late, worst).unwrap();
 }
 
 fn json_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {

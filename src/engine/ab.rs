@@ -20,7 +20,9 @@ use crate::core::state::{Mark, State};
 use crate::misc::geometry::SearchSpace;
 use crate::misc::integer_set::Index;
 use crate::misc::ordering::{AxisOrders, HcOrdering};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::cell::UnsafeCell;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub const MATE: i32 = 30000;
@@ -83,13 +85,28 @@ struct TtEntry {
     action: MoveSeq,
 }
 
-/// The transposition table: zero-allocated, so creating or clearing it costs nothing until
-/// slots are used.
-struct TtTable {
-    entries: Vec<TtEntry>,
-    /// Some stored action spilled to the heap (entries then need dropping one by one).
-    spilled: bool,
+/// One table slot: an entry and its lock. All-zero bytes are an empty, unlocked slot.
+struct TtSlot {
+    /// Held while the entry is read or written. Actions have any length (long ones live on
+    /// the heap), so threads cannot share entries without one: a reader racing a writer
+    /// could copy a torn action or follow a freed pointer. The lock is only ever tried: a
+    /// thread finding it held treats its probe as a miss or skips its store, so no thread
+    /// ever waits on another, and a single search thread never finds it held.
+    lock: AtomicBool,
+    entry: UnsafeCell<TtEntry>,
 }
+
+/// The transposition table, shared by every search thread: zero-allocated, so creating or
+/// clearing it costs nothing until slots are used.
+struct TtTable {
+    slots: Vec<TtSlot>,
+    /// Some stored action spilled to the heap (entries then need dropping one by one).
+    spilled: AtomicBool,
+}
+
+// SAFETY: an entry is only accessed by the thread holding its slot's lock.
+unsafe impl Sync for TtTable {}
+unsafe impl Send for TtTable {}
 
 impl TtTable {
     fn new(mb: usize) -> Self {
@@ -98,27 +115,128 @@ impl TtTable {
 
     /// An empty table of `n` slots.
     fn with_len(n: usize) -> Self {
-        let layout = std::alloc::Layout::array::<TtEntry>(n).expect("tt size");
-        // SAFETY: an all-zero `TtEntry` is valid (empty bound, empty inline action), and the
-        // block is allocated with the layout `Vec` uses for this capacity.
-        let entries = unsafe {
-            let p = std::alloc::alloc_zeroed(layout) as *mut TtEntry;
+        let layout = std::alloc::Layout::array::<TtSlot>(n).expect("tt size");
+        // SAFETY: an all-zero `TtSlot` is valid (unlocked, empty bound, empty inline action),
+        // and the block is allocated with the layout `Vec` uses for this capacity.
+        let slots = unsafe {
+            let p = std::alloc::alloc_zeroed(layout) as *mut TtSlot;
             if p.is_null() {
                 std::alloc::handle_alloc_error(layout);
             }
             Vec::from_raw_parts(p, n, n)
         };
-        TtTable { entries, spilled: false }
+        TtTable { slots, spilled: AtomicBool::new(false) }
+    }
+
+    fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// Run `f` on the entry for `key` under its slot's lock: None when the slot holds
+    /// another position or another thread holds the lock.
+    #[inline]
+    fn probe<R>(&self, key: u64, f: impl FnOnce(&TtEntry) -> R) -> Option<R> {
+        let slot = &self.slots[(key as usize) & (self.slots.len() - 1)];
+        if slot.lock.swap(true, Ordering::Acquire) {
+            return None;
+        }
+        // SAFETY: the lock gives this thread exclusive access to the entry.
+        let e = unsafe { &*slot.entry.get() };
+        let r = if e.bound != Bound::Empty && e.key == key { Some(f(e)) } else { None };
+        slot.lock.store(false, Ordering::Release);
+        r
+    }
+
+    fn store(&self, key: u64, depth: i32, bound: Bound, score: i32, proven: bool, action: &MoveSeq) {
+        let slot = &self.slots[(key as usize) & (self.slots.len() - 1)];
+        if slot.lock.swap(true, Ordering::Acquire) {
+            return;
+        }
+        // SAFETY: the lock gives this thread exclusive access to the entry.
+        let e = unsafe { &mut *slot.entry.get() };
+        if e.bound == Bound::Empty || e.key != key || depth as i16 >= e.depth - 1 || bound == Bound::Exact {
+            e.key = key;
+            e.depth = depth as i16;
+            e.bound = bound;
+            e.proven = proven;
+            e.score = score;
+            e.action.assign(action);
+            if e.action.spilled() && !self.spilled.load(Ordering::Relaxed) {
+                self.spilled.store(true, Ordering::Relaxed);
+            }
+        }
+        slot.lock.store(false, Ordering::Release);
     }
 }
 
 impl Drop for TtTable {
     fn drop(&mut self) {
-        if !self.spilled {
+        if !*self.spilled.get_mut() {
             // SAFETY: no entry owns heap memory, so nothing is leaked by skipping their drops.
-            unsafe { self.entries.set_len(0) };
+            unsafe { self.slots.set_len(0) };
         }
     }
+}
+
+/// Search nodes of one helper thread, published for the main thread's node count. Each
+/// sits on its own cache lines, so publishing never bounces a line between threads.
+#[repr(align(128))]
+#[derive(Default)]
+struct NodeCounter(AtomicU64);
+
+/// One thread's search result, for the vote between threads.
+#[derive(Clone, Debug)]
+struct ThreadResult {
+    best: MoveSeq,
+    score: i32,
+    /// A mate `score` is proven (see `AlphaBeta::proven`).
+    proven: bool,
+    /// Deepest iteration the thread finished (0: none, and then it does not vote).
+    completed_depth: i32,
+    pv_len: usize,
+    nodes: u64,
+    thread_id: usize,
+}
+
+/// The result to play, by Stockfish's thread voting (as in Apeiron): each action accrues
+/// `(score - min_score + 14) * completed_depth` from the threads choosing it. Proven wins
+/// win outright (the fastest mate among them; a mate score that is not proven is no more
+/// than a large score), a loss is never switched to, and a thread that finished no iteration
+/// does not vote.
+fn select_best_thread(results: &[ThreadResult]) -> usize {
+    let finished = |r: &ThreadResult| r.completed_depth > 0;
+    let proven_win = |r: &ThreadResult| r.proven && r.score > MATE - 1000;
+    let is_loss = |v: i32| v < -(MATE - 1000);
+    let min_score = results.iter().filter(|r| finished(r)).map(|r| r.score).min().unwrap_or(0);
+    let value = |r: &ThreadResult| (r.score - min_score + 14) as i64 * r.completed_depth as i64;
+    let vote = |m: &MoveSeq| -> i64 { results.iter().filter(|r| finished(r) && r.best == *m).map(value).sum() };
+    // Prefer threads with a non-truncated PV on exact vote ties.
+    let with_pv = |r: &ThreadResult| value(r) * (r.pv_len > 2) as i64;
+    // With no finished thread at all, the main thread's fallback action stands.
+    let mut best_idx = results.iter().position(|r| r.thread_id == 0).unwrap_or(0);
+    for (i, r) in results.iter().enumerate() {
+        let best = &results[best_idx];
+        if !finished(r) {
+            continue;
+        }
+        if !finished(best) {
+            best_idx = i;
+            continue;
+        }
+        let (best_vote, new_vote) = (vote(&best.best), vote(&r.best));
+        if proven_win(best) {
+            if proven_win(r) && r.score > best.score {
+                best_idx = i;
+            }
+        } else if is_loss(best.score) {
+            if r.score > best.score {
+                best_idx = i;
+            }
+        } else if proven_win(r) || (!is_loss(r.score) && (new_vote > best_vote || (new_vote == best_vote && with_pv(r) > with_pv(best)))) {
+            best_idx = i;
+        }
+    }
+    best_idx
 }
 
 const KNOWN_EVAL: u8 = 1;
@@ -168,7 +286,8 @@ pub struct AlphaBeta {
     hce: hce::Weights,
     /// Exchange values for the per-board capture search at quiescent leaves.
     local_vals: super::local::Values,
-    tt: TtTable,
+    /// Shared with the helper threads.
+    tt: Arc<TtTable>,
     history: Vec<i32>,
     killers: Vec<[Option<MoveSeq>; 2]>,
     /// Per ply: the last evasion that failed high in quiescence (tried before building).
@@ -197,10 +316,22 @@ pub struct AlphaBeta {
     known: KnownCache,
     /// The score (internal units, side to move) of the last `find_best_move`.
     last_score: i32,
+    /// Search threads (`Threads`), this one included.
+    threads: usize,
+    /// Lazy SMP helper threads (started by the first search that needs them).
+    helpers: Vec<Helper>,
+    /// Nodes of the helpers in the last search.
+    helper_nodes: u64,
+    /// Helpers whose results the last search collected.
+    helper_results: usize,
+    /// 0 for the main thread; helpers count from 1.
+    thread_id: usize,
+    /// A helper publishes its node count here (null for the main thread).
+    nodes_out: *const AtomicU64,
 }
 
-// The raw stop pointer is only dereferenced during `find_best_move`, while the borrow it
-// came from is alive.
+// The raw stop and node-count pointers are only dereferenced during a search, while what
+// they point to is alive.
 unsafe impl Send for AlphaBeta {}
 
 impl Default for AlphaBeta {
@@ -420,11 +551,15 @@ struct NodeBufs {
 
 impl AlphaBeta {
     pub fn new() -> Self {
+        Self::with_tt(Arc::new(TtTable::new(DEFAULT_HASH_MB)))
+    }
+
+    fn with_tt(tt: Arc<TtTable>) -> Self {
         let hce = hce::tuned_weights();
         AlphaBeta {
             local_vals: super::local::values_from(&hce[hce::fi::MAT_A..hce::fi::MAT_A + 10]),
             hce,
-            tt: TtTable::new(DEFAULT_HASH_MB),
+            tt,
             history: vec![0; 1 << 16],
             killers: vec![[None, None]; MAX_PLY + 1],
             qkillers: vec![None; MAX_PLY + 1],
@@ -440,6 +575,12 @@ impl AlphaBeta {
             known_check: None,
             known: KnownCache::new(),
             last_score: 0,
+            threads: 1,
+            helpers: Vec::new(),
+            helper_nodes: 0,
+            helper_results: 0,
+            thread_id: 0,
+            nodes_out: std::ptr::null(),
         }
     }
 
@@ -481,32 +622,17 @@ impl AlphaBeta {
     }
 
     #[inline]
-    fn tt_slot(&self, key: u64) -> usize {
-        (key as usize) & (self.tt.entries.len() - 1)
-    }
-
-    fn tt_probe(&self, key: u64) -> Option<&TtEntry> {
-        let e = &self.tt.entries[self.tt_slot(key)];
-        if e.bound != Bound::Empty && e.key == key { Some(e) } else { None }
-    }
-
-    fn tt_store(&mut self, key: u64, depth: i32, bound: Bound, score: i32, proven: bool, action: &MoveSeq) {
-        let slot = self.tt_slot(key);
-        let e = &mut self.tt.entries[slot];
-        if e.bound == Bound::Empty || e.key != key || depth as i16 >= e.depth - 1 || bound == Bound::Exact {
-            e.key = key;
-            e.depth = depth as i16;
-            e.bound = bound;
-            e.proven = proven;
-            e.score = score;
-            e.action.assign(action);
-            self.tt.spilled |= e.action.spilled();
-        }
+    fn tt_store(&self, key: u64, depth: i32, bound: Bound, score: i32, proven: bool, action: &MoveSeq) {
+        self.tt.store(key, depth, bound, score, proven, action);
     }
 
     fn check_abort(&mut self) -> bool {
         if self.aborted {
             return true;
+        }
+        if !self.nodes_out.is_null() {
+            // SAFETY: a helper's counter outlives its search (see `Helper::spawn`).
+            unsafe { (*self.nodes_out).store(self.nodes, Ordering::Relaxed) };
         }
         // Nodes cost tens of microseconds, so reading the clock every node is free.
         let stop = unsafe { &*self.stop_ptr };
@@ -993,7 +1119,9 @@ impl AlphaBeta {
         let alpha0 = alpha;
         let key = s.hash();
         let mut tt_action: Option<MoveSeq> = None;
-        if let Some(e) = self.tt_probe(key) {
+        // Ok((score, proven)): a cutoff; Err(action): the remembered action, if any. (Read
+        // under the slot's lock, so the score, its proof and the action are one entry's.)
+        let probe = self.tt.probe(key, |e| {
             let sc = mate_from_tt(e.score, ply);
             if !pv && e.depth as i32 >= depth {
                 let cut = match e.bound {
@@ -1003,13 +1131,18 @@ impl AlphaBeta {
                     Bound::Empty => false,
                 };
                 if cut {
-                    self.proven = e.proven;
-                    return sc;
+                    return Ok((sc, e.proven));
                 }
             }
-            if !e.action.is_empty() {
-                tt_action = Some(e.action.clone());
+            Err(if e.action.is_empty() { None } else { Some(e.action.clone()) })
+        });
+        match probe {
+            Some(Ok((sc, proven))) => {
+                self.proven = proven;
+                return sc;
             }
+            Some(Err(a)) => tt_action = a,
+            None => {}
         }
 
         if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| self.in_check(s)) {
@@ -1250,8 +1383,7 @@ impl AlphaBeta {
         let mut line = vec![first.clone()];
         let mut s = Self::child(root, first);
         while line.len() < max {
-            let Some(e) = self.tt_probe(s.hash()) else { break };
-            let act = e.action.clone();
+            let Some(act) = self.tt.probe(s.hash(), |e| e.action.clone()) else { break };
             if act.is_empty() {
                 break;
             }
@@ -1292,41 +1424,175 @@ fn action_text(s: &State, act: &MoveSeq) -> String {
     parts.join(" ")
 }
 
+/// Most search threads `Threads` accepts.
+pub const MAX_THREADS: usize = 256;
+/// Stack of each helper search thread (the recursion runs deep in many-timeline positions).
+const SEARCH_STACK: usize = 64 << 20;
+/// How long the main thread waits for the helpers' results once it is done (ms). Helpers stop
+/// within a node, but one the OS has not scheduled can take a time slice or more: it is left
+/// to finish on its own (and sits out the vote) rather than holding up the action.
+const HELPER_GRACE_MS: u64 = 3;
+
+/// One search for a helper thread.
+struct HelperJob {
+    root: State,
+    roots: Vec<(i32, MoveSeq)>,
+    /// Every legal root action is in `roots` (for proving the root mated).
+    roots_complete: bool,
+    max_depth: i32,
+    start: Instant,
+    tt: Arc<TtTable>,
+    stop: Arc<AtomicBool>,
+    /// Node counters of this search's helpers (this one's: `thread_id - 1`).
+    counters: Arc<Vec<NodeCounter>>,
+    done: std::sync::mpsc::Sender<ThreadResult>,
+}
+
+enum HelperMsg {
+    Search(Box<HelperJob>),
+    NewGame,
+}
+
+/// A Lazy SMP helper: a thread with its own searcher (killers, history, buffers, kept between
+/// searches), searching the jobs it is sent in order (one still finishing a stopped search
+/// joins the next as soon as it is done). It exits once its `Helper` is dropped and its
+/// current search is over.
+struct Helper {
+    tx: std::sync::mpsc::Sender<HelperMsg>,
+}
+
+/// Run the calling thread (the main search thread) above normal priority: on a busy machine
+/// it then keeps the time instead of waiting for a core behind its own helpers. (Helpers stay
+/// at normal priority: below it, any other busy process would starve them.)
+fn raise_thread_priority() {
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetCurrentThread() -> *mut std::ffi::c_void;
+            fn SetThreadPriority(thread: *mut std::ffi::c_void, priority: i32) -> i32;
+        }
+        const THREAD_PRIORITY_ABOVE_NORMAL: i32 = 1;
+        // SAFETY: plain Win32 calls on the current thread's pseudo-handle.
+        unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL) };
+    }
+}
+
+impl Helper {
+    fn spawn(thread_id: usize) -> Option<Helper> {
+        let (tx, rx) = std::sync::mpsc::channel::<HelperMsg>();
+        std::thread::Builder::new()
+            .name(format!("search {}", thread_id))
+            .stack_size(SEARCH_STACK)
+            .spawn(move || {
+                // Between searches the helper holds no table, so a replaced one is freed.
+                let no_tt = Arc::new(TtTable::with_len(1));
+                let mut e = AlphaBeta::with_tt(no_tt.clone());
+                e.thread_id = thread_id;
+                while let Ok(msg) = rx.recv() {
+                    match msg {
+                        HelperMsg::NewGame => e.history.iter_mut().for_each(|h| *h = 0),
+                        HelperMsg::Search(job) => {
+                            let HelperJob { root, roots, roots_complete, max_depth, start, tt, stop, counters, done } = *job;
+                            if stop.load(Ordering::Relaxed) {
+                                continue; // That search is over already.
+                            }
+                            e.tt = tt;
+                            e.begin_search(&stop, None, None);
+                            e.nodes_out = &counters[thread_id - 1].0;
+                            let mut r = e.iterate(&root, roots, roots_complete, max_depth, start, None, &mut |_| {}, &[]);
+                            r.nodes = e.nodes;
+                            e.nodes_out = std::ptr::null();
+                            e.stop_ptr = std::ptr::null();
+                            e.tt = no_tt.clone();
+                            // The main thread may have moved on without this result.
+                            let _ = done.send(r);
+                        }
+                    }
+                }
+            })
+            .ok()?;
+        Some(Helper { tx })
+    }
+}
+
 impl AlphaBeta {
     pub fn new_game(&mut self) {
-        self.tt = TtTable::with_len(self.tt.entries.len());
+        let n = self.tt.len();
+        self.set_tt(|| TtTable::with_len(n));
         for h in self.history.iter_mut() {
             *h = 0;
         }
+        for helper in &self.helpers {
+            let _ = helper.tx.send(HelperMsg::NewGame);
+        }
     }
 
-    /// Returns true when the option was recognized (only `Hash`, in MB).
+    /// Replace the (shared) transposition table, freeing the old one first.
+    fn set_tt(&mut self, make: impl FnOnce() -> TtTable) {
+        self.tt = Arc::new(TtTable::with_len(1));
+        self.tt = Arc::new(make());
+    }
+
+    /// Returns true when the option was recognized: `Hash` (MB) or `Threads`.
     pub fn set_option(&mut self, key: &str, value: &OptionValue) -> bool {
         match (key, value.as_f64()) {
             ("Hash", Some(mb)) => {
-                self.tt = TtTable::new((mb as usize).max(1));
+                self.set_tt(|| TtTable::new((mb as usize).max(1)));
+                true
+            }
+            ("Threads", Some(n)) => {
+                self.threads = (n.max(1.0) as usize).min(MAX_THREADS);
+                self.helpers.truncate(self.threads - 1);
                 true
             }
             _ => false,
         }
     }
 
-    pub fn find_best_move(&mut self, root: &State, limits: &Limits, stop: &AtomicBool, info: &mut dyn FnMut(String)) -> Option<Action> {
-        let start = Instant::now();
+    /// Search threads in use (`Threads`).
+    pub fn threads(&self) -> usize {
+        self.threads
+    }
+
+    /// Nodes the last search visited, over all its threads.
+    pub fn last_search_nodes(&self) -> u64 {
+        self.nodes + self.helper_nodes
+    }
+
+    /// Threads whose results the last search collected (the main thread included).
+    pub fn last_search_threads(&self) -> usize {
+        1 + self.helper_results
+    }
+
+    /// Ready this searcher for a new search.
+    fn begin_search(&mut self, stop: &AtomicBool, node_limit: Option<u64>, deadline: Option<Instant>) {
         self.stop_ptr = stop as *const AtomicBool;
         self.nodes = 0;
+        self.helper_nodes = 0;
+        self.helper_results = 0;
         self.known.clear();
         self.aborted = false;
-        self.node_limit = limits.nodes;
-        let plan = TimePlan::new(limits, Self::mandatory_boards(root));
-        self.deadline = plan.as_ref().map(|p| start + Duration::from_millis(p.maximum.saturating_sub(5).max(1)));
+        self.node_limit = node_limit;
+        self.deadline = deadline;
         for k in self.killers.iter_mut() {
             *k = [None, None];
         }
         self.qkillers.iter_mut().for_each(|k| *k = None);
+    }
+
+    /// Search `root` and return the action to play. With `Threads` above 1 this is Lazy SMP
+    /// (as in Apeiron): helper threads run the same iterative deepening on the same root into
+    /// the shared transposition table, odd ones a depth ahead, with no clock of their own; the
+    /// calling (main) thread keeps the time, reports progress, and stops the helpers when it
+    /// is done; the action played is chosen by the vote of the threads that report back within
+    /// a few milliseconds (never waiting longer on a helper).
+    pub fn find_best_move(&mut self, root: &State, limits: &Limits, stop: &AtomicBool, info: &mut dyn FnMut(String)) -> Option<Action> {
+        let start = Instant::now();
+        let plan = TimePlan::new(limits, Self::mandatory_boards(root));
+        let deadline = plan.as_ref().map(|p| start + Duration::from_millis(p.maximum.saturating_sub(5).max(1)));
+        self.begin_search(stop, limits.nodes, deadline);
         let max_depth = limits.depth.unwrap_or(64) as i32;
-        let mut work = root.clone();
-        work.enable_undo();
 
         // Root actions (all of them, up to the root cap), ordered heuristically.
         let (hc, ss) = HcInfo::build_hc(root);
@@ -1335,11 +1601,12 @@ impl AlphaBeta {
         let mut full = Some(ss);
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
         // Enumerating every root action can take seconds with many timelines: spend at most
-        // a quarter of the budget on it (always keeping at least one action).
+        // a quarter of the budget on it (always keeping at least one action), and stop at once
+        // when told to.
         let gen_deadline = plan.as_ref().map(|p| start + Duration::from_millis(p.optimum / 4));
         let mut complete = false;
         while roots.len() < ROOT_CAP {
-            if !roots.is_empty() && gen_deadline.map(|d| Instant::now() >= d).unwrap_or(false) {
+            if !roots.is_empty() && (gen_deadline.map(|d| Instant::now() >= d).unwrap_or(false) || stop.load(Ordering::Relaxed)) {
                 break;
             }
             match agen.next(&hc, root) {
@@ -1361,15 +1628,96 @@ impl AlphaBeta {
             return Some(Action::from_moveseq(&roots[0].1, root));
         }
         roots.sort_by(|a, b| b.0.cmp(&a.0));
+        if self.threads <= 1 {
+            let r = self.iterate(root, roots, roots_complete, max_depth, start, plan.as_ref(), info, &[]);
+            self.last_score = r.score;
+            return Some(Action::from_moveseq(&r.best, root));
+        }
+
+        raise_thread_priority();
+        // A helper that cannot start is done without (the search stays correct).
+        while self.helpers.len() < self.threads - 1 {
+            match Helper::spawn(self.helpers.len() + 1) {
+                Some(h) => self.helpers.push(h),
+                None => break,
+            }
+        }
+        let counters: Arc<Vec<NodeCounter>> = Arc::new((0..self.helpers.len()).map(|_| NodeCounter::default()).collect());
+        let helper_stop = Arc::new(AtomicBool::new(false));
+        let (done, results_rx) = std::sync::mpsc::channel();
+        let mut launched = 0;
+        for h in &self.helpers {
+            let job = HelperJob {
+                root: root.clone(),
+                roots: roots.clone(),
+                roots_complete,
+                max_depth,
+                start,
+                tt: self.tt.clone(),
+                stop: helper_stop.clone(),
+                counters: counters.clone(),
+                done: done.clone(),
+            };
+            if h.tx.send(HelperMsg::Search(Box::new(job))).is_ok() {
+                launched += 1;
+            }
+        }
+        drop(done);
+        let main = self.iterate(root, roots, roots_complete, max_depth, start, plan.as_ref(), info, &counters);
+        helper_stop.store(true, Ordering::Relaxed);
+        let mut results = vec![main];
+        let grace = Instant::now() + Duration::from_millis(HELPER_GRACE_MS);
+        while results.len() <= launched {
+            match results_rx.recv_timeout(grace.saturating_duration_since(Instant::now())) {
+                Ok(r) => results.push(r),
+                Err(_) => break,
+            }
+        }
+        // Counted as published, including helpers whose results came too late.
+        self.helper_nodes = counters.iter().map(|c| c.0.load(Ordering::Relaxed)).sum();
+        self.helper_results = results.len() - 1;
+        for r in &mut results {
+            r.pv_len = self.pv_line(root, &r.best, 3).len();
+        }
+        let chosen = &results[select_best_thread(&results)];
+        self.last_score = chosen.score;
+        Some(Action::from_moveseq(&chosen.best, root))
+    }
+
+    /// Iterative deepening over the root actions `roots` (ordered best first; all legal ones
+    /// when `roots_complete`). The main thread (`thread_id` 0) keeps the time of `plan` and
+    /// reports each depth through `info` with the helpers' nodes (`helper_nodes`) added;
+    /// helpers search until stopped.
+    #[allow(clippy::too_many_arguments)]
+    fn iterate(
+        &mut self,
+        root: &State,
+        mut roots: Vec<(i32, MoveSeq)>,
+        roots_complete: bool,
+        max_depth: i32,
+        start: Instant,
+        plan: Option<&TimePlan>,
+        info: &mut dyn FnMut(String),
+        helper_nodes: &[NodeCounter],
+    ) -> ThreadResult {
+        let main = self.thread_id == 0;
+        let mut work = root.clone();
+        work.enable_undo();
         let mut best: MoveSeq = roots[0].1.clone();
         let mut best_score: i32 = 0;
         // `best_score` is a proven mate (see `proven`): only then is it reported as a mate.
         let mut best_proven = false;
+        let mut completed_depth = 0;
         self.seek_mate = false;
         // Clock stability: decaying count of best-action changes and running average score.
         let mut changes = 0.0f64;
         let mut avg_score: Option<i32> = None;
-        for depth in 1..=max_depth {
+        // Lazy SMP: odd helpers skip depth 1 and run a depth ahead, so the threads diverge
+        // and fill the table at a spread of depths instead of re-walking the same iteration.
+        let ahead = self.thread_id % 2 == 1;
+        let first = if ahead { 2.min(max_depth) } else { 1 };
+        for base_depth in first..=max_depth {
+            let depth = if ahead { (base_depth + 1).min(max_depth) } else { base_depth };
             let prev_best = best.clone();
             // seekMate bar: 3000 + 100000 / depth^2 (Stockfish's form, in our units).
             self.seek_mate = depth > 1 && best_score.abs() >= 3000 + 100_000 / (depth * depth);
@@ -1427,6 +1775,7 @@ impl AlphaBeta {
             }
             let elapsed = start.elapsed().as_secs_f64();
             if !self.aborted {
+                completed_depth = depth;
                 // Reorder roots: best first, rest by this iteration's scores.
                 let mut idx: Vec<usize> = (0..roots.len()).collect();
                 idx.sort_by(|&a, &b| scores.get(b).copied().unwrap_or(-INF).cmp(&scores.get(a).copied().unwrap_or(-INF)));
@@ -1437,6 +1786,8 @@ impl AlphaBeta {
                         roots[..=i].rotate_right(1);
                     }
                 }
+            }
+            if !self.aborted && main {
                 let pv = self.pv_line(root, &best, depth as usize);
                 let score_txt = score_text(best_score, best_proven);
                 let mut st = root.clone();
@@ -1445,12 +1796,13 @@ impl AlphaBeta {
                     pv_txt.push(format!("{} submit", action_text(&st, a)));
                     st = Self::child(&st, a);
                 }
+                let nodes = self.nodes + helper_nodes.iter().map(|c| c.0.load(Ordering::Relaxed)).sum::<u64>();
                 info(format!(
                     "depth {} score {} nodes {} nps {:.0} time {} roots {} pv {}",
                     depth,
                     score_txt,
-                    self.nodes,
-                    self.nodes as f64 / elapsed.max(1e-6),
+                    nodes,
+                    nodes as f64 / elapsed.max(1e-6),
                     (elapsed * 1000.0) as u64,
                     roots.len(),
                     pv_txt.join(" ")
@@ -1459,7 +1811,7 @@ impl AlphaBeta {
             if self.aborted {
                 break;
             }
-            if let Some(p) = plan.as_ref().filter(|p| p.clock) {
+            if let Some(p) = plan.filter(|p| p.clock) {
                 changes = changes / 2.0 + if depth > 1 && best != prev_best { 1.0 } else { 0.0 };
                 let falling = avg_score.map_or(1.0, |a| (1.0 + (a - best_score) as f64 / 150.0).clamp(0.75, 1.6));
                 avg_score = Some(avg_score.map_or(best_score, |a| (a + best_score) / 2));
@@ -1474,7 +1826,8 @@ impl AlphaBeta {
             // mate is well inside the searched depth. On a time budget an unproven mate does
             // not end the search early (that only changes the time used); depth- and
             // node-limited searches stop as they always did, so they stay reproducible.
-            if best_score.abs() > MATE - 1000 && depth >= 2 * (MATE - best_score.abs()) + 2 && (best_proven || plan.is_none()) {
+            // (Helpers search on until stopped.)
+            if main && best_score.abs() > MATE - 1000 && depth >= 2 * (MATE - best_score.abs()) + 2 && (best_proven || plan.is_none()) {
                 break;
             }
             if let Some(d) = self.deadline {
@@ -1486,13 +1839,101 @@ impl AlphaBeta {
                 }
             }
         }
-        self.last_score = best_score;
-        Some(Action::from_moveseq(&best, root))
+        ThreadResult { best, score: best_score, proven: best_proven, completed_depth, pv_len: 0, nodes: self.nodes, thread_id: self.thread_id }
     }
 
     /// The score of the action the last `find_best_move` returned (internal units, from the
     /// side to move's view; mates as `MATE - plies`, proven or not).
     pub fn last_score(&self) -> i32 {
         self.last_score
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A thread's result; mate scores proven.
+    fn result(from: u32, score: i32, depth: i32, thread_id: usize) -> ThreadResult {
+        let m = FullMove { from: crate::core::vec4::Vec4(from), to: crate::core::vec4::Vec4(from + 1) };
+        ThreadResult { best: MoveSeq::from(&[m][..]), score, proven: true, completed_depth: depth, pv_len: 5, nodes: 0, thread_id }
+    }
+
+    fn unproven(mut r: ThreadResult) -> ThreadResult {
+        r.proven = false;
+        r
+    }
+
+    #[test]
+    fn thread_vote_prefers_proven_mates() {
+        let win = MATE - 20;
+        // A proven mate is not given up for a faster mate that is not proven ...
+        assert_eq!(select_best_thread(&[result(1, win, 10, 0), unproven(result(2, win + 6, 10, 1))]), 0);
+        // ... and wins outright over one, even outvoted.
+        let r = [unproven(result(1, win + 6, 10, 0)), unproven(result(1, win + 6, 10, 1)), result(2, win, 10, 2)];
+        assert_eq!(select_best_thread(&r), 2);
+    }
+
+    #[test]
+    fn thread_vote_matches_stockfish() {
+        let (win, loss, long_loss) = (MATE - 20, -MATE + 20, -MATE + 60);
+        // A losing best yields to a normal thread; a normal best never to a proven loss.
+        assert_eq!(select_best_thread(&[result(1, loss, 10, 0), result(2, 50, 10, 1)]), 1);
+        assert_eq!(select_best_thread(&[result(1, 50, 10, 0), result(2, loss, 10, 1)]), 0);
+        // Between losses the longest resistance, between wins the fastest mate.
+        assert_eq!(select_best_thread(&[result(1, loss, 10, 0), result(2, long_loss, 10, 1)]), 1);
+        assert_eq!(select_best_thread(&[result(1, win, 10, 0), result(2, win + 5, 10, 1)]), 1);
+        // Votes pool by action: two threads agreeing outvote a slightly better lone one.
+        assert_eq!(select_best_thread(&[result(1, 60, 10, 0), result(2, 50, 10, 1), result(2, 50, 10, 2)]), 1);
+        // A deeper thread outvotes a shallower one at equal score.
+        assert_eq!(select_best_thread(&[result(1, 50, 8, 0), result(2, 50, 10, 1)]), 1);
+        // A thread that finished no iteration has no vote.
+        assert_eq!(select_best_thread(&[result(1, 0, 3, 0), result(2, 900, 0, 1)]), 0);
+        assert_eq!(select_best_thread(&[result(1, 0, 0, 0), result(2, 10, 2, 1)]), 1);
+    }
+
+    fn start_with_moves(moves: &str) -> State {
+        let mut s = crate::core::variants::startpos();
+        crate::core::variants::apply_uci_moves(&mut s, moves).unwrap();
+        s
+    }
+
+    #[test]
+    fn smp_search_returns_legal_actions_and_stops() {
+        let mut e = AlphaBeta::new();
+        assert!(e.set_option("Threads", &OptionValue::Int(4)));
+        e.set_option("Hash", &OptionValue::Int(16));
+        let stop = AtomicBool::new(false);
+        for (moves, ms) in [("", 150), ("(0T1)e2e4 submit", 150), ("(0T1)e2e4 submit (0T1)e7e5 submit (0T2)g1f3 submit", 300)] {
+            let s = start_with_moves(moves);
+            let t = Instant::now();
+            let mut last = String::new();
+            let a = e.find_best_move(&s, &Limits { movetime: Some(ms), ..Default::default() }, &stop, &mut |m| last = m).expect("an action");
+            assert!(t.elapsed() < Duration::from_millis(ms + 1000), "search overran its time");
+            let mut c = s.clone();
+            c.enable_undo();
+            let seq: MoveSeq = a.moves().iter().map(|m| m.fm).collect();
+            assert!(AlphaBeta::make_checked(&mut c, &seq).is_some(), "illegal action {:?}", seq);
+            assert!(last.starts_with("depth"), "no report: {}", last);
+        }
+        // Stopped from outside, a search without limits returns promptly.
+        let s = start_with_moves("(0T1)e2e4 submit (0T1)e7e5 submit");
+        let stop = Arc::new(AtomicBool::new(false));
+        let st = stop.clone();
+        let stopper = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            st.store(true, Ordering::SeqCst);
+        });
+        let t = Instant::now();
+        assert!(e.find_best_move(&s, &Limits::default(), &stop, &mut |_| {}).is_some());
+        assert!(t.elapsed() < Duration::from_millis(200 + 300), "stop took {:?}", t.elapsed());
+        stopper.join().unwrap();
+        // The search right after (a reply after pondering) has every helper again.
+        let free = AtomicBool::new(false);
+        e.find_best_move(&s, &Limits { movetime: Some(100), ..Default::default() }, &free, &mut |_| {});
+        assert!(e.helper_nodes > 0, "the helpers sat the search out: {} {} {}", e.nodes, e.helper_nodes, e.helper_results);
+        // Back to one thread: the helpers are dropped.
+        e.set_option("Threads", &OptionValue::Int(1));
+        assert!(e.helpers.is_empty());
     }
 }
