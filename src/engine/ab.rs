@@ -65,7 +65,7 @@ const RFP_MARGIN: i32 = 200;
 /// eval is at least beta, search the pass with depth reduced by NMP_R + depth / NMP_DIV.
 const NMP_MIN_DEPTH: i32 = 3;
 const NMP_R: i32 = 2;
-const NMP_DIV: i32 = 3;
+const NMP_DIV: i32 = 4;
 const DEFAULT_HASH_MB: usize = 64;
 /// Static evaluations are kept within +-EVAL_MAX, well clear of mate scores.
 const EVAL_MAX: i32 = 20000;
