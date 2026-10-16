@@ -6,7 +6,7 @@ use crate::core::board::Board;
 use crate::core::check_position::CheckPosition;
 use crate::core::state::State;
 
-pub const NF: usize = 70;
+pub const NF: usize = 68;
 
 /// Feature indices.
 pub mod fi {
@@ -68,10 +68,6 @@ pub mod fi {
     /// Travel landings (past and now) next to the opponent's royals that the side to move
     /// has (+ for white to move, - for black).
     pub const TRAVEL_STM: usize = 67;
-    /// Timeline slots by initiative: each side's slots times the danger to the enemy royals
-    /// (`royal_danger`), and the side to move's slots (+ for white to move, - for black).
-    pub const TL_SLOTS_THREAT: usize = 68;
-    pub const TL_SLOTS_STM: usize = 69;
 }
 
 pub const FEATURE_NAMES: [&str; NF] = [
@@ -84,7 +80,7 @@ pub const FEATURE_NAMES: [&str; NF] = [
     "checks_5d", "sp_checks", "mandatory", "passed", "doubled", "isolated", "king_prox", "undeveloped",
     "king_prox_5d", "queen_prox", "travel_past", "travel_now", "travel_backed", "weak_sq", "open_orth5",
     "open_diag5", "open_multi5", "king_off", "king_off_new", "low_flight", "exiled", "inactive_royal_att",
-    "travel_stm", "tl_slots_threat", "tl_slots_stm",
+    "travel_stm",
 ];
 
 pub type Features = [i32; NF];
@@ -113,76 +109,74 @@ pub fn default_weights() -> Weights {
 /// Weights used by the alpha-beta search with `use_hce` (Texel-tuned, see bin/tune.rs).
 pub fn tuned_weights() -> Weights {
     weights_by_name(&[
-        ("mat_a_pawn", 453.3),
+        ("mat_a_pawn", 384.9),
         ("mat_a_brawn", 150.0),
-        ("mat_a_knight", 735.1),
-        ("mat_a_bishop", 1532.4),
-        ("mat_a_rook", 1096.5),
-        ("mat_a_queen", 1898.2),
-        ("mat_a_princess", 899.8),
+        ("mat_a_knight", 551.9),
+        ("mat_a_bishop", 1330.6),
+        ("mat_a_rook", 988.8),
+        ("mat_a_queen", 1608.4),
+        ("mat_a_princess", 899.9),
         ("mat_a_unicorn", 250.0),
         ("mat_a_dragon", 150.0),
-        ("mat_a_cking", 294.0),
-        ("mat_i_pawn", -11.3),
+        ("mat_a_cking", 303.1),
+        ("mat_i_pawn", 33.5),
         ("mat_i_brawn", 74.9),
-        ("mat_i_knight", 255.3),
-        ("mat_i_bishop", 724.7),
-        ("mat_i_rook", 341.5),
-        ("mat_i_queen", 1118.0),
+        ("mat_i_knight", 273.2),
+        ("mat_i_bishop", 741.6),
+        ("mat_i_rook", 345.4),
+        ("mat_i_queen", 1124.6),
         ("mat_i_princess", 450.0),
         ("mat_i_unicorn", 125.1),
         ("mat_i_dragon", 74.9),
         ("mat_i_cking", 150.0),
-        ("cent_knight", 123.3),
-        ("cent_bishop", 24.9),
-        ("cent_rook", -24.7),
-        ("cent_queen", 19.1),
-        ("cent_other", 64.7),
-        ("pawn_adv", -54.4),
-        ("pawn_near", 311.1),
-        ("king_cent", -60.7),
-        ("tl_slots", 2724.7),
-        ("tl_slots_heavy", -152.5),
-        ("k_holes", -287.5),
-        ("k_knights", 2578.7),
-        ("k_open_orth", -561.1),
-        ("k_open_diag", 107.1),
-        ("k_shield", 773.1),
-        ("k_zone_att", -156.5),
-        ("mob_knight", 134.2),
-        ("mob_bishop", 146.9),
-        ("mob_rook", 156.4),
-        ("mob_queen", 95.3),
-        ("mob_king", 201.1),
-        ("hanging", -16.4),
-        ("royal_att", -1946.2),
-        ("tempo", 15.1),
-        ("active_lines", 12.9),
+        ("cent_knight", 120.0),
+        ("cent_bishop", 45.1),
+        ("cent_rook", -39.1),
+        ("cent_queen", 18.5),
+        ("cent_other", 82.2),
+        ("pawn_adv", -37.5),
+        ("pawn_near", 209.4),
+        ("king_cent", -49.4),
+        ("tl_slots", 2870.1),
+        ("tl_slots_heavy", -15.8),
+        ("k_holes", -288.9),
+        ("k_knights", 2588.7),
+        ("k_open_orth", -498.5),
+        ("k_open_diag", 85.3),
+        ("k_shield", 759.0),
+        ("k_zone_att", -303.1),
+        ("mob_knight", 139.4),
+        ("mob_bishop", 136.9),
+        ("mob_rook", 143.6),
+        ("mob_queen", 102.2),
+        ("mob_king", 157.4),
+        ("hanging", -15.8),
+        ("royal_att", -1894.9),
+        ("tempo", 67.3),
+        ("active_lines", 5.6),
         ("checks_5d", 0.0),
         ("sp_checks", 0.0),
-        ("mandatory", 690.9),
-        ("passed", 174.7),
-        ("doubled", -3.3),
+        ("mandatory", 561.2),
+        ("passed", 121.3),
+        ("doubled", 20.0),
         ("isolated", -60.7),
-        ("king_prox", 1048.7),
-        ("undeveloped", -23.8),
-        ("king_prox_5d", -24.4),
-        ("queen_prox", -597.3),
-        ("travel_past", -130.7),
-        ("travel_now", 255.5),
-        ("travel_backed", -340.7),
-        ("weak_sq", 27.6),
+        ("king_prox", 1112.1),
+        ("undeveloped", -54.2),
+        ("king_prox_5d", -4.0),
+        ("queen_prox", -772.1),
+        ("travel_past", -357.8),
+        ("travel_now", 118.0),
+        ("travel_backed", -224.5),
+        ("weak_sq", -213.6),
         ("open_orth5", 0.0),
-        ("open_diag5", 1.6),
-        ("open_multi5", -6.7),
-        ("king_off", -680.5),
-        ("king_off_new", -829.5),
-        ("low_flight", 444.2),
-        ("exiled", 1.8),
+        ("open_diag5", 1.3),
+        ("open_multi5", -2.2),
+        ("king_off", -559.4),
+        ("king_off_new", -499.8),
+        ("low_flight", 108.4),
+        ("exiled", 2.7),
         ("inactive_royal_att", 0.0),
-        ("travel_stm", 573.1),
-        ("tl_slots_threat", 468.4),
-        ("tl_slots_stm", -120.5),
+        ("travel_stm", 478.3),
     ])
 }
 
@@ -1076,20 +1070,7 @@ pub fn features_from(sd: &Sides, s: &State, checks: bool) -> Features {
     }
     let opp = sd.side[1 - stm as usize];
     f[fi::TRAVEL_STM] = sign * (opp[si::TRAVEL_PAST] + opp[si::TRAVEL_NOW]);
-    let sl = [sd.side[0][si::SLOTS], sd.side[1][si::SLOTS]];
-    let dg = [royal_danger(&sd.side[0]), royal_danger(&sd.side[1])];
-    f[fi::TL_SLOTS_THREAT] = sl[0] * dg[1] - sl[1] * dg[0];
-    f[fi::TL_SLOTS_STM] = sign * sl[stm as usize];
     f
-}
-
-const DANGER_CAP: i32 = 6;
-
-/// How much a side's royals are under attack (0..DANGER_CAP): attacked, travel landings next
-/// to them, weak squares, few flight squares, off the home rank.
-#[inline]
-fn royal_danger(f: &[i32; si::COUNT]) -> i32 {
-    (f[si::ROYAL_ATT] + f[si::TRAVEL_PAST] + f[si::TRAVEL_NOW] + f[si::WEAK_SQ] + f[si::LOW_FLIGHT] + f[si::KING_OFF]).min(DANGER_CAP)
 }
 
 /// Weights from (feature name, value) pairs; unnamed features get zero.
