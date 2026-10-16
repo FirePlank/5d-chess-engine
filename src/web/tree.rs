@@ -468,9 +468,12 @@ impl Game {
         for &n in &self.path(id) {
             branches.extend_from_slice(&self.nodes[n].branches);
         }
+        // The draft's moves in short 5dpgn, as the move list writes them.
+        let mut draft_san = Vec::with_capacity(draft.len());
         let mut ds = self.nodes[id].state.clone();
         for &m in draft {
             branches.extend(branch_of(&ds, &m));
+            draft_san.push(Json::from(pgn::move_to_pgn_short(&ds, &m)));
             let _ = apply_draft_move(&mut ds, m);
         }
         let branches: Vec<Json> = branches
@@ -501,6 +504,7 @@ impl Game {
             ("last", Json::Arr(last)),
             ("branches", Json::Arr(branches)),
             ("draft", Json::Arr(draft.iter().map(move_json).collect())),
+            ("draftSan", Json::Arr(draft_san)),
             ("presentMoved", present_ok),
             ("canSubmit", can_submit),
             ("submitError", submit_error),

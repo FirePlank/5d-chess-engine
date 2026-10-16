@@ -474,18 +474,23 @@ export class MultiverseView {
     }
     ctx.stroke();
 
+    // Boards, then square highlights, then pieces (so highlights sit under them, as on
+    // lichess), then move dots and arrows on top.
+    const visible = [];
     for (const b of this.boards.values()) {
       if (b.v < vMin || b.v > vMax) continue;
       const by = this.boardY(b.l);
       if (by > vy1 || by + this.bh < vy0) continue;
       const tl = this.timelines.get(b.l);
-      this.drawBoard(b, tl && !tl.active ? C.inactive : 1, s, tl);
+      visible.push([b, tl && !tl.active ? C.inactive : 1, tl, false]);
     }
     for (const b of this.phantom) {
-      if (b.v < vMin || b.v > vMax) continue;
-      this.drawBoard(b, 0.35, s, null, true);
+      if (b.v >= vMin && b.v <= vMax) visible.push([b, 0.35, null, true]);
     }
+    for (const [b, alpha, tl, phantom] of visible) this.drawBoard(b, alpha, s, tl, phantom);
     this.drawHighlights();
+    for (const [b, alpha] of visible) this.drawPieces(b, alpha, s);
+    this.drawTargets();
     this.drawArrows(s);
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -527,8 +532,14 @@ export class MultiverseView {
       }
       ctx.strokeRect(x0 - o, y0 - o, bw + 2 * o, bh + 2 * o);
       ctx.setLineDash([]);
-      ctx.globalAlpha = alpha;
     }
+    ctx.globalAlpha = 1;
+  }
+
+  drawPieces(b, alpha, s) {
+    const { ctx, bw, bh } = this;
+    const x0 = this.boardX(b.v), y0 = this.boardY(b.l);
+    ctx.globalAlpha = alpha;
     if (s >= 4) {
       for (let y = 0; y < bh; y++) {
         for (let x = 0; x < bw; x++) {
@@ -599,6 +610,11 @@ export class MultiverseView {
     }
     if (o.hover && !o.readonly && this.isInteresting(o.hover)) fill(o.hover.l, o.hover.v, o.hover.x, o.hover.y, 'rgba(255,255,255,.18)');
     if (o.selected) fill(o.selected.l, 2 * o.selected.t + o.selected.c, o.selected.x, o.selected.y, o.peek ? C.peekSelect : C.select);
+  }
+
+  /** Where the selected piece can go: dots on empty squares, corners on captures. */
+  drawTargets() {
+    const { ctx, colors: C, view: v, overlay: o } = this;
     const tc = o.targetColor ?? v.player;
     for (const t of o.targets) {
       const vv = 2 * t[1] + tc;

@@ -3,13 +3,13 @@
 //! the engine, one human player at a time.
 //!
 //! kairos-web [--port 8080] [--host 127.0.0.1] [--root <repo>] [--games <dir>]...
-//!            [--hash 2048] [--threads <cores - 1>] [--no-wasm-build]
+//!            [--hash 2048] [--threads <cores - 1>]
 //!
 //! The play engine searches with `--threads` threads into a `--hash` MB table, kept across
 //! actions, and ponders (searches the position) while the human thinks.
 //!
-//! On start it builds web/static/kairos.wasm (`cargo build --target wasm32-wasip1` of web/wasm)
-//! when it is missing or older than the crate sources.
+//! The browser engine is built separately, with `cargo wasm` (see .cargo/config.toml), and
+//! served as /kairos.wasm.
 
 use kairos::core::state::State;
 use kairos::engine::ab::AlphaBeta;
@@ -205,6 +205,11 @@ fn serve_static(dir: &Path, req: &Request) -> Response {
     if p.is_dir() {
         p = p.join("index.html");
     }
+    serve_file(&p, req)
+}
+
+fn serve_file(p: &Path, req: &Request) -> Response {
+    let p = p.to_path_buf();
     let Ok(meta) = std::fs::metadata(&p) else { return Response::error(404, "not found") };
     let mtime = meta.modified().ok().and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
     let etag = format!("\"{:x}-{:x}\"", meta.len(), mtime);
@@ -1165,6 +1170,8 @@ impl Play {
 // ------------------------------------------------------------------ server
 
 struct Server {
+    /// The browser engine served as /kairos.wasm.
+    wasm: PathBuf,
     static_dir: PathBuf,
     games: Games,
     play: Arc<Play>,
@@ -1193,6 +1200,9 @@ impl Server {
         }
         if req.method != "GET" && req.method != "HEAD" {
             return Response::error(405, "method not allowed");
+        }
+        if p == "/kairos.wasm" {
+            return serve_file(&self.wasm, req);
         }
         serve_static(&self.static_dir, req)
     }
@@ -1236,51 +1246,31 @@ fn newest_mtime(dir: &Path, exts: &[&str], acc: &mut SystemTime) {
     }
 }
 
-/// Build the browser engine when it is missing or older than the sources:
-/// web/static/kairos.wasm (wasm32-wasip1) and the multi-threaded web/static/kairos-mt.wasm
-/// (wasm32-wasip1-threads: shared memory, the search's helper threads in Web Workers).
-fn ensure_wasm(root: &Path) -> Result<(), String> {
+/// The browser engine as `cargo wasm` builds it: one wasm32-wasip1-threads build, threaded when
+/// the browser allows shared memory and single-threaded otherwise.
+const WASM_BUILD: &str = "web/wasm/target/wasm32-wasip1-threads/release/kairos_wasm.wasm";
+
+/// The browser engine to serve: web/static/kairos.wasm if present (a deployed copy), else the
+/// build output. Warns when it is missing or older than the sources; it is never built here.
+fn browser_engine(root: &Path) -> PathBuf {
+    let copy = root.join("web/static/kairos.wasm");
+    let path = if copy.is_file() { copy } else { root.join(WASM_BUILD) };
     let mut newest = SystemTime::UNIX_EPOCH;
     newest_mtime(&root.join("src"), &["rs"], &mut newest);
     newest_mtime(&root.join("web/wasm"), &["rs", "toml"], &mut newest);
     newest_mtime(&root.join("data"), &["bin"], &mut newest);
-    // A 32 MB stack for the recursive search; RUSTFLAGS also overrides target-cpu=native.
-    const STACK: &str = "-C link-arg=-zstack-size=33554432";
-    let builds = [
-        ("wasm32-wasip1", "kairos.wasm", STACK.to_string()),
-        ("wasm32-wasip1-threads", "kairos-mt.wasm", format!("{} -C link-arg=--max-memory=4294967296", STACK)),
-    ];
-    let mut result = Ok(());
-    for (target, file, flags) in builds {
-        let out = root.join("web/static").join(file);
-        if std::fs::metadata(&out).and_then(|m| m.modified()).is_ok_and(|m| m >= newest) {
-            continue;
-        }
-        eprintln!("building the browser engine (web/wasm → web/static/{})...", file);
-        let manifest = root.join("web/wasm/Cargo.toml");
-        let target_dir = root.join("web/wasm/target");
-        let status = std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
-            .args(["build", "--release", "--target", target, "--manifest-path"])
-            .arg(&manifest)
-            .arg("--target-dir")
-            .arg(&target_dir)
-            .env("RUSTFLAGS", flags)
-            .env_remove("CARGO_ENCODED_RUSTFLAGS")
-            .status()
-            .map_err(|e| format!("cannot run cargo: {}", e))?;
-        if !status.success() {
-            result = Err(format!("wasm build failed (is the {0} target installed? `rustup target add {0}`)", target));
-            continue;
-        }
-        std::fs::copy(target_dir.join(target).join("release/kairos_wasm.wasm"), &out).map_err(|e| e.to_string())?;
+    match std::fs::metadata(&path).and_then(|m| m.modified()) {
+        Err(_) => eprintln!("warning: the browser engine is not built (analysis needs it): run `cargo wasm`"),
+        Ok(m) if m < newest => eprintln!("warning: the browser engine is older than the sources: run `cargo wasm`"),
+        Ok(_) => {}
     }
-    result
+    path
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        eprintln!("kairos-web [--port 8080] [--host 127.0.0.1] [--root <repo>] [--games <dir>]... [--hash 2048] [--threads N] [--archive <file>] [--no-wasm-build]");
+        eprintln!("kairos-web [--port 8080] [--host 127.0.0.1] [--root <repo>] [--games <dir>]... [--hash 2048] [--threads N] [--archive <file>]");
         return;
     }
     let root = PathBuf::from(arg(&args, "--root").unwrap_or_else(|| env!("CARGO_MANIFEST_DIR").to_string()));
@@ -1295,12 +1285,8 @@ fn main() {
         dirs.push(root.join("games"));
     }
     let archive = arg(&args, "--archive").map(PathBuf::from).or_else(|| Some(root.join("games/web/played.jsonl")));
-    if !args.iter().any(|a| a == "--no-wasm-build") {
-        if let Err(e) = ensure_wasm(&root) {
-            eprintln!("warning: {}", e);
-        }
-    }
     let server = Arc::new(Server {
+        wasm: browser_engine(&root),
         static_dir: root.join("web/static"),
         games: Games { dirs: dirs.clone(), index: Mutex::new(HashMap::new()), variants: Mutex::new(HashMap::new()) },
         play: Play::new(hash, threads, archive),

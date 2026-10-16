@@ -1,7 +1,8 @@
 // Engine worker: runs Kairos searches off the main thread.
 //
-// in:  {type:'init', module, clock?, hashMb, threads, memory?}  (memory: the threads build's
-//        imported-memory limits; then a pool of threads - 1 thread workers is started)
+// in:  {type:'init', module, clock?, hashMb, threads, memory}  (memory: the limits of the
+//        shared memory the module imports; with threads > 1 a pool of threads - 1 thread
+//        workers is started on it)
 //      {type:'search', id, position, movetime, depth?, newGame?}
 // out: {type:'ready', threads} | {type:'info', id, line} | {type:'done', id, bestmove}
 //      {type:'error', id?, message}
@@ -36,12 +37,9 @@ self.onmessage = async (e) => {
   const msg = e.data;
   try {
     if (msg.type === 'init') {
-      let memory = null, threadSpawn = null, threads = 1;
-      if (msg.memory) {
-        memory = new WebAssembly.Memory({ initial: msg.memory.initial, maximum: msg.memory.maximum, shared: true });
-        threads = Math.max(1, msg.threads | 0);
-        threadSpawn = await threadPool(threads - 1, msg.module, memory, msg.clock);
-      }
+      const memory = new WebAssembly.Memory({ initial: msg.memory.initial, maximum: msg.memory.maximum, shared: true });
+      const threads = Math.max(1, msg.threads | 0);
+      const threadSpawn = threads > 1 ? await threadPool(threads - 1, msg.module, memory, msg.clock) : () => -6;
       kairos = await instantiate(msg.module, {
         clock: msg.clock,
         memory,

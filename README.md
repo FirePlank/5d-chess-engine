@@ -56,22 +56,24 @@ Larger tests run sharded on GitHub Actions with `scripts/sprt_run.sh`, which pus
 ## Website: viewer, analysis board and play
 
 ```bash
+rustup target add wasm32-wasip1-threads   # once
+cargo wasm                                # the browser engine (again after engine changes)
 cargo run --release --bin kairos-web
 ```
 
-Then open <http://127.0.0.1:8080/>. On its first start the server builds the browser engine (`web/wasm` for `wasm32-wasip1`, into `web/static/kairos.wasm`; it rebuilds when the crate sources change). Install the target once with `rustup target add wasm32-wasip1`.
+Then open <http://127.0.0.1:8080/>. `cargo wasm` (an alias in `.cargo/config.toml`) builds `web/wasm` into `web/wasm/target/wasm32-wasip1-threads/release/kairos_wasm.wasm`, which the server serves as `/kairos.wasm`; the server warns at start if it is missing or older than the sources.
 
-- **Analysis**: paste or drop a game (SPRT `--games-out` JSON lines, 5dpgn, or a 5DUCI `position … moves …` line) and step through it: every timeline and turn on one zoomable board, arrows for the last action and for checks, the present, book actions marked, the recorded evaluations as a graph. Kairos analyses the position in the browser (a WASM build in a Web Worker): live depth, score and principal variation, click a PV action to play it. Moves can be made on the board (select on every board you want to play, then submit), building variations.
+- **Analysis**: paste or drop a game (SPRT `--games-out` JSON lines, 5dpgn, a 5DUCI `position … moves …` line or a board FEN; Ctrl+V loads from the clipboard) and step through it: every timeline and turn on one zoomable board, arrows for the last action and for checks, the present, book actions marked, the recorded evaluations as a graph. Kairos analyses the position in the browser: live depth, score and principal variation, click a PV action to play it. Moves can be made on the board (select on every board you want to play, then submit), building variations.
 - **Play**: play Kairos on any built-in variant, as either side, with a clock or a fixed think time. The server runs the engine; one person plays at a time, everyone else watches the live game and can queue for the next one. Finished games are appended to `games/web/played.jsonl`.
 - **Games**: browse the record files under `games/` (JSONL and 5dpgn) with filters for variant, result, ending and length, and open any game in the viewer.
 
-The analysis engine in the browser is multi-threaded (Lazy SMP helpers in Web Workers on shared memory, `web/static/kairos-mt.wasm` built for `wasm32-wasip1-threads`; `rustup target add wasm32-wasip1-threads`) whenever the page is cross-origin isolated, as kairos-web serves it; otherwise it runs on one thread. Threads and hash size are set in the engine settings (gear) on the Analysis page.
+There is one browser build (`wasm32-wasip1-threads`, like Apeiron's single build): it runs on shared memory, and when the page is cross-origin isolated (kairos-web sends COOP/COEP) the analysis engine also runs its Lazy SMP helper threads in Web Workers; otherwise it searches on one thread. Threads and hash size are in the engine settings (gear) on the Analysis page.
 
-Options: `--port 8080`, `--host 0.0.0.0` (listen on every interface), `--games <dir>` (repeatable; default `games/`), `--hash <MB>` (engine hash for play), `--archive <file>`, `--no-wasm-build`.
+Options: `--port 8080`, `--host 0.0.0.0` (listen on every interface), `--games <dir>` (repeatable; default `games/`), `--threads <n>` and `--hash <MB>` (the play engine), `--archive <file>`.
 
-The site is plain HTML/CSS/ES modules in `web/static`, with no build step. Without the server (any static file host that sends `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`), the viewer and analysis work; play and the game browser need `kairos-web`.
+The site is plain HTML/CSS/ES modules in `web/static`, with no build step. To host it statically, copy the built engine to `web/static/kairos.wasm` and serve the folder with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`; the viewer and analysis then work, while play and the game browser need `kairos-web`.
 
-Tests: `cargo test` covers the record loader and 5dpgn; `node tests/web/records.mjs games/sprt/*.jsonl` replays SPRT records through the WASM build and cross-checks actions, book/eval tags and results; `node tests/web/pgn_corpus.mjs <dir>` loads every 5dpgn file under a directory and views each main-line position.
+Tests: `cargo test` covers the record loader and 5dpgn; after `cargo wasm`, `node tests/web/records.mjs games/sprt/*.jsonl` replays SPRT records through the browser build and cross-checks actions, book/eval tags and results, and `node tests/web/pgn_corpus.mjs <dir>` loads every 5dpgn file under a directory and views each main-line position.
 
 ## License
 
