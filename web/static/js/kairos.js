@@ -162,7 +162,7 @@ export class Engine {
   stop() {
     if (!this.busy) return;
     if (this.clock) {
-      stopClock(this.clock);
+      stopClock(this.clock, this.reqId);
     } else {
       // No shared memory: a search cannot be interrupted, so replace the worker.
       this.restart();
