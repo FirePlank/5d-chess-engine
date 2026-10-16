@@ -789,6 +789,32 @@ fn main() {
                 }
             }
         }
+        "tacticsgen" => {
+            // tacticsgen [source] : the tactics suite (data/tactics.g) from its 5dpgn source.
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or("data/tactics_src.txt");
+            let src = std::fs::read_to_string(path).expect("tactics source");
+            let mut notes = Vec::new();
+            match kairos::misc::tactics::generate_with_notes(&src, &mut notes) {
+                Ok(text) => {
+                    write!(out, "{}", text).unwrap();
+                    let n = kairos::misc::tactics::parse(&text).expect("generated suite parses").len();
+                    for note in &notes {
+                        eprintln!("note: {}", note);
+                    }
+                    eprintln!("tactics: {} positions", n);
+                }
+                Err(e) => {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        "tactics" => tactics(
+            args.get(2).map(|s| s.as_str()).unwrap_or("data/tactics.g"),
+            args.get(3).and_then(|s| s.parse().ok()).unwrap_or(2000),
+            args.get(4).and_then(|s| s.parse().ok()).unwrap_or(1),
+            &mut out,
+        ),
         "pgn2g" => {
             // pgn2g [all] <file.5dpgn>... : the "G" line of each game's main-line end ("all":
             // of every position along the main line).
@@ -1023,7 +1049,8 @@ fn main() {
                  bench [file]            perft oracle\n  \
                  abbench [file] [depth]  alpha-beta node oracle (AB_NODES caps nodes per position)\n  \
                  puzzles [file] [ms]     time to find each mate in data/puzzles.g
-                   bookgen [src]           build data/book_theory.txt from its source
+                   tactics [file] [ms] [threads]   solved/unsolved and time to solve per position of data/tactics.g
+                   bookgen [src] | tacticsgen [src]   build data/book_theory.txt / data/tactics.g from their sources
                    blunders <games.jsonl> [n] | materank <games.jsonl> [n] | depthstat <games.jsonl> [ms] | rootgen [file]
                    overrunpos <file.g>... [threads=1,4] [ms=100,1000] [clock=2000+100,30000+300]   worst time overrun
                    firstact [file.g] [cap ms]   time to the first legal action by enumeration strategy"
@@ -1434,6 +1461,83 @@ fn puzzles(path: &str, ms: u64, out: &mut impl Write) {
         out.flush().unwrap();
     }
     writeln!(out, "solved {}/{}", solved, total).unwrap();
+}
+
+/// Tactics regression suite (see `kairos::misc::tactics`): searches each position for `ms`
+/// with `threads` threads (a fresh engine, no opening book) and reports it solved when the
+/// action played is one of the correct ones, with the time from which every reported line
+/// (and the action played) started with a correct action.
+fn tactics(path: &str, ms: u64, threads: usize, out: &mut impl Write) {
+    use kairos::core::action::Action;
+    use kairos::engine::ab::AlphaBeta;
+    use kairos::engine::{Limits, OptionValue};
+    use kairos::web::tree::parse_lan_moves;
+    let text = std::fs::read_to_string(path).expect("tactics suite");
+    let suite = match kairos::misc::tactics::parse(&text) {
+        Ok(s) => s,
+        Err(e) => {
+            writeln!(out, "{}", e).unwrap();
+            std::process::exit(1);
+        }
+    };
+    let (mut solved, mut time_sum) = (0, 0.0);
+    let t_all = Instant::now();
+    for t in &suite {
+        let mut e = AlphaBeta::new();
+        e.set_option("Threads", &OptionValue::Int(threads as i64));
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let t0 = Instant::now();
+        // Time of the first info line of the current run of lines starting with a correct action.
+        let mut since: Option<f64> = None;
+        let mut last = String::new();
+        // A proven mate as fast as the known one also solves a `mate <n>` position.
+        let fast_mate = |line: &str| -> bool {
+            let mut w = line.split_whitespace().skip_while(|w| *w != "score").skip(1);
+            w.next() == Some("mate") && w.next().and_then(|k| k.parse::<i64>().ok()).is_some_and(|k| k > 0 && t.mate.is_some_and(|n| k <= n as i64))
+        };
+        let first_action = |line: &str| -> Option<Action> {
+            let pv = line.split(" pv ").nth(1)?;
+            let first = pv.split("submit").next()?.trim();
+            parse_lan_moves(first).ok().filter(|m| !m.is_empty()).map(|m| Action::from_vector(&m, &t.state))
+        };
+        let best = e.find_best_move(&t.state, &Limits { movetime: Some(ms), ..Default::default() }, &stop, &mut |m| {
+            match first_action(&m) {
+                Some(a) if t.best.contains(&a) || fast_mate(&m) => {
+                    since.get_or_insert(t0.elapsed().as_secs_f64());
+                }
+                Some(_) => since = None,
+                None => {}
+            }
+            last = m;
+        });
+        let secs = t0.elapsed().as_secs_f64();
+        let depth = last.split_whitespace().nth(1).unwrap_or("?").to_string();
+        let score = last.split_whitespace().skip_while(|w| *w != "score").take(3).collect::<Vec<_>>().join(" ");
+        match best {
+            Some(a) if t.best.contains(&a) || (fast_mate(&last) && first_action(&last).as_ref() == Some(&a)) => {
+                let at = since.unwrap_or(secs);
+                solved += 1;
+                time_sum += at;
+                writeln!(out, "solved   {:>6.2}s  depth {:>2}  {:<16} {}", at, depth, score, t.name).unwrap();
+            }
+            other => {
+                let played = other.map(|a| kairos::web::tree::action_lan(&t.state, &a)).unwrap_or_else(|| "none".into());
+                writeln!(out, "UNSOLVED {:>6.2}s  depth {:>2}  {:<16} {}  (played {}, wanted {})", secs, depth, score, t.name, played, t.best_lan.join(" | ")).unwrap();
+            }
+        }
+        out.flush().unwrap();
+    }
+    writeln!(
+        out,
+        "solved {}/{} | {} ms per position, {} thread(s) | mean time to solve {:.2}s | total {:.1}s",
+        solved,
+        suite.len(),
+        ms,
+        threads,
+        time_sum / solved.max(1) as f64,
+        t_all.elapsed().as_secs_f64()
+    )
+    .unwrap();
 }
 
 /// Eval-net training records from harness JSONL games: for every position where an engine
