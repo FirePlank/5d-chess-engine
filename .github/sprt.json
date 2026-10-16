@@ -1,0 +1,12 @@
+{
+  "name": "net_cap3k",
+  "old": "a2059dbfa8b4c61ed168ea79d39546a632573006",
+  "games": 9000,
+  "shards": 40,
+  "tc": "tc 10+0.1",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}
