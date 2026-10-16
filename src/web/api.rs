@@ -17,6 +17,8 @@ pub struct Api {
     game: Option<Game>,
     engine: Option<AlphaBeta>,
     hash_mb: Option<usize>,
+    /// Engine options (`Threads`, ...) applied to the engine now and when it is created.
+    options: Vec<(String, i64)>,
 }
 
 fn err(e: impl Into<String>) -> Json {
@@ -214,6 +216,16 @@ impl Api {
                 self.engine = None;
                 Ok(ok(obj![]))
             }
+            "set_option" => {
+                let name = j.get("name").str().ok_or("missing name")?.to_string();
+                let value = j.get("value").int().ok_or("missing value")?;
+                if let Some(e) = self.engine.as_mut() {
+                    e.set_option(&name, &crate::engine::OptionValue::Int(value));
+                }
+                self.options.retain(|(n, _)| *n != name);
+                self.options.push((name, value));
+                Ok(ok(obj![]))
+            }
             _ => Err(format!("unknown command {:?}", cmd)),
         }
     }
@@ -235,10 +247,14 @@ impl Api {
             increment: None,
         };
         let hash = self.hash_mb;
+        let options = &self.options;
         let eng = self.engine.get_or_insert_with(|| {
             let mut e = AlphaBeta::new();
             if let Some(mb) = hash {
                 e.set_option("Hash", &crate::engine::OptionValue::Int(mb as i64));
+            }
+            for (name, value) in options {
+                e.set_option(name, &crate::engine::OptionValue::Int(*value));
             }
             e
         });

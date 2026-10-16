@@ -1,6 +1,6 @@
 // The analysis board / game viewer: a game tree with variations, step-through navigation,
 // book and engine actions, the recorded eval graph and live engine analysis.
-import { Rules, parseInfo } from './kairos.js';
+import { Rules, parseInfo, threadsSupported } from './kairos.js';
 import { $, $$, el, toast, fmtScore, fmtNodes, winChance, recordScore, parseLan, store, confirmDialog } from './util.js';
 
 const THROTTLE_MS = 70;
@@ -37,6 +37,7 @@ export class Analysis {
     this.variants = this.rules.call({ cmd: 'variants' }).variants;
     this.bindUi();
     this.engine.on((m) => this.onEngine(m));
+    this.bindSettings();
     $('#engine-toggle').checked = this.engineOn;
     this.newGame('Standard', { quiet: true });
   }
@@ -444,6 +445,7 @@ export class Analysis {
   }
 
   onEngine(m) {
+    if (m.type === 'ready') return this.renderEngine();
     const s = this.searching;
     if (!s || (s.id != null && m.id !== s.id)) return;
     if (m.type === 'info') {
@@ -503,6 +505,8 @@ export class Analysis {
   renderEngine() {
     const card = $('#engine-card');
     $('#engine-toggle').checked = this.engineOn && !this.suppressed;
+    const n = this.engine.ready ? this.engine.threadsActive : threadsSupported ? this.engine.threads : 1;
+    $('#engine-where').textContent = `· in browser · ${n} thread${n > 1 ? 's' : ''}`;
     const info = this.cache.get(this.cur);
     const s = this.searching;
     const running = this.engineOn && s && s.node === this.cur && !s.finished;
@@ -566,6 +570,39 @@ export class Analysis {
     } catch (e) {
       toast(e.message, { error: true });
     }
+  }
+
+  // ---------------------------------------------------------------- engine settings
+  /** Threads and hash for the in-browser engine (saved; applied by restarting it). */
+  bindSettings() {
+    const btn = $('#engine-settings-btn'), panel = $('#engine-settings');
+    const threads = $('#set-threads'), hash = $('#set-hash');
+    const cores = navigator.hardwareConcurrency || 2;
+    threads.max = String(threadsSupported ? Math.max(1, Math.min(32, cores)) : 1);
+    const cur = { threads: this.engine.threads, hashMb: this.engine.hashMb };
+    threads.value = String(cur.threads);
+    hash.value = String(cur.hashMb);
+    const show = () => {
+      $('#set-threads-v').textContent = threads.value;
+      $('#set-note').textContent = threadsSupported
+        ? `${cores} logical cores here; leave one free for the page.`
+        : 'This page is not cross-origin isolated, so the engine runs on one thread.';
+    };
+    show();
+    btn.onclick = () => {
+      const open = panel.classList.toggle('hidden') === false;
+      btn.setAttribute('aria-expanded', String(open));
+    };
+    const apply = () => {
+      const s = { threads: +threads.value, hashMb: +hash.value };
+      store('engineSettings', s);
+      this.engine.configure(s);
+      this.renderEngine();
+      if (this.engineOn) this.restartEngine();
+    };
+    threads.oninput = show;
+    threads.onchange = apply;
+    hash.onchange = apply;
   }
 
   // ---------------------------------------------------------------- UI wiring

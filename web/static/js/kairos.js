@@ -1,22 +1,43 @@
 // The Kairos core in the browser: a synchronous rules/game-tree instance on the main thread
-// and an engine controller around a worker.
-import { instantiate } from './wasi.js';
+// and an engine controller around a worker. When the page is cross-origin isolated (the
+// kairos-web server sends COOP/COEP), the engine is the multi-threaded build (kairos-mt.wasm,
+// Lazy SMP helpers in Web Workers on shared memory); otherwise the single-threaded one.
+import { instantiate, importedMemory, makeClock, stopClock } from './wasi.js';
 
-let modulePromise = null;
+const modules = new Map();
+
+async function compile(file, withMemory) {
+  const resp = await fetch(file);
+  if (!resp.ok) throw new Error(`${file}: HTTP ${resp.status} (build it with the kairos-web server)`);
+  const bytes = await resp.arrayBuffer();
+  return { module: await WebAssembly.compile(bytes), memory: withMemory ? importedMemory(bytes) : null };
+}
 
 /** Compile kairos.wasm once; the module is shared with the worker. */
 export function loadModule() {
-  if (!modulePromise) {
-    modulePromise = (async () => {
-      const resp = await fetch('kairos.wasm');
-      if (!resp.ok) throw new Error(`kairos.wasm: HTTP ${resp.status} (build it with the kairos-web server or scripts/web.sh)`);
-      if (WebAssembly.compileStreaming && (resp.headers.get('content-type') || '').includes('wasm')) {
-        return WebAssembly.compileStreaming(resp);
-      }
-      return WebAssembly.compile(await resp.arrayBuffer());
-    })();
+  if (!modules.has('st')) modules.set('st', compile('kairos.wasm', false).then((m) => m.module));
+  return modules.get('st');
+}
+
+/** Threads the browser can use: shared memory needs cross-origin isolation. */
+export const threadsSupported = typeof SharedArrayBuffer !== 'undefined' && !!self.crossOriginIsolated;
+
+/** The multi-threaded build, or null when unavailable (not isolated, or not built). */
+export function loadThreadedModule() {
+  if (!threadsSupported) return Promise.resolve(null);
+  if (!modules.has('mt')) {
+    modules.set('mt', compile('kairos-mt.wasm', true).then((m) => (m.memory && m.memory.shared ? m : null)).catch((e) => {
+      console.warn('multi-threaded engine unavailable:', e.message);
+      return null;
+    }));
   }
-  return modulePromise;
+  return modules.get('mt');
+}
+
+/** Default engine settings: all cores but one (at most 16 threads), 64 MB of hash. */
+export function defaultEngineSettings() {
+  const cores = navigator.hardwareConcurrency || 2;
+  return { threads: threadsSupported ? Math.max(1, Math.min(16, cores - 1)) : 1, hashMb: 64 };
 }
 
 /** Rules and game tree (one game at a time). Calls throw on `ok: false`. */
@@ -73,8 +94,10 @@ export function parseInfo(line, blackToMove) {
  * when the page is cross-origin isolated (otherwise the worker is replaced to stop it).
  */
 export class Engine {
-  constructor({ hashMb = 64 } = {}) {
+  constructor({ hashMb = 64, threads = 1 } = {}) {
     this.hashMb = hashMb;
+    this.threads = threads;
+    this.threadsActive = 1;
     this.reqId = 0;
     this.listeners = new Set();
     this.ready = null;
@@ -84,28 +107,38 @@ export class Engine {
   on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   emit(ev) { for (const fn of this.listeners) fn(ev); }
 
+  /** New thread count and hash size; the worker restarts on the next search. */
+  configure({ threads, hashMb }) {
+    if (threads === this.threads && hashMb === this.hashMb) return;
+    this.threads = threads;
+    this.hashMb = hashMb;
+    this.restart();
+  }
+
   async start() {
     if (this.ready) return this.ready;
     this.ready = (async () => {
-      const module = await loadModule();
+      const mt = this.threads > 1 ? await loadThreadedModule() : null;
+      const module = mt ? mt.module : await loadModule();
       this.worker = new Worker(new URL('./engine-worker.js', import.meta.url), { type: 'module' });
-      this.stopBuffer = this.shared ? new SharedArrayBuffer(4) : null;
-      this.stopFlag = this.stopBuffer ? new Int32Array(this.stopBuffer) : null;
-      await new Promise((resolve, reject) => {
+      this.clock = this.shared ? makeClock() : null;
+      const threads = await new Promise((resolve, reject) => {
         this.worker.onmessage = (e) => {
-          if (e.data.type === 'ready') resolve();
+          if (e.data.type === 'ready') resolve(e.data.threads);
           else if (e.data.type === 'error') reject(new Error(e.data.message));
         };
         this.worker.onerror = (e) => reject(new Error(e.message || 'engine worker failed to start'));
-        this.worker.postMessage({ type: 'init', module, stopBuffer: this.stopBuffer, hashMb: this.hashMb });
+        this.worker.postMessage({ type: 'init', module, clock: this.clock, hashMb: this.hashMb, threads: this.threads, memory: mt ? mt.memory : null });
       });
+      this.threadsActive = threads;
       this.worker.onmessage = (e) => this.onMessage(e.data);
       this.worker.onerror = (e) => this.emit({ type: 'error', message: e.message || 'engine worker error', fatal: true });
+      this.emit({ type: 'ready', threads });
     })();
     try {
       await this.ready;
     } catch (e) {
-      this.ready = null;
+      this.restart();
       throw e;
     }
     return this.ready;
@@ -130,8 +163,8 @@ export class Engine {
 
   stop() {
     if (!this.busy) return;
-    if (this.stopFlag) {
-      Atomics.store(this.stopFlag, 0, 1);
+    if (this.clock) {
+      stopClock(this.clock);
     } else {
       // No shared memory: a search cannot be interrupted, so replace the worker.
       this.restart();
@@ -141,6 +174,7 @@ export class Engine {
   }
 
   restart() {
+    // Terminating the engine worker also ends its search-thread workers.
     if (this.worker) this.worker.terminate();
     this.worker = null;
     this.ready = null;

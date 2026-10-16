@@ -13,4 +13,5 @@
 # Web build outputs (built by kairos-web / scripts/web.sh)
 /web/wasm/target
 /web/static/kairos.wasm
+/web/static/kairos-mt.wasm
 !/tests/data/**

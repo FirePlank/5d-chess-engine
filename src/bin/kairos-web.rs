@@ -1236,34 +1236,45 @@ fn newest_mtime(dir: &Path, exts: &[&str], acc: &mut SystemTime) {
     }
 }
 
-/// Build web/static/kairos.wasm when it is missing or older than the sources.
+/// Build the browser engine when it is missing or older than the sources:
+/// web/static/kairos.wasm (wasm32-wasip1) and the multi-threaded web/static/kairos-mt.wasm
+/// (wasm32-wasip1-threads: shared memory, the search's helper threads in Web Workers).
 fn ensure_wasm(root: &Path) -> Result<(), String> {
-    let out = root.join("web/static/kairos.wasm");
     let mut newest = SystemTime::UNIX_EPOCH;
     newest_mtime(&root.join("src"), &["rs"], &mut newest);
     newest_mtime(&root.join("web/wasm"), &["rs", "toml"], &mut newest);
     newest_mtime(&root.join("data"), &["bin"], &mut newest);
-    if std::fs::metadata(&out).and_then(|m| m.modified()).is_ok_and(|m| m >= newest) {
-        return Ok(());
+    // A 32 MB stack for the recursive search; RUSTFLAGS also overrides target-cpu=native.
+    const STACK: &str = "-C link-arg=-zstack-size=33554432";
+    let builds = [
+        ("wasm32-wasip1", "kairos.wasm", STACK.to_string()),
+        ("wasm32-wasip1-threads", "kairos-mt.wasm", format!("{} -C link-arg=--max-memory=4294967296", STACK)),
+    ];
+    let mut result = Ok(());
+    for (target, file, flags) in builds {
+        let out = root.join("web/static").join(file);
+        if std::fs::metadata(&out).and_then(|m| m.modified()).is_ok_and(|m| m >= newest) {
+            continue;
+        }
+        eprintln!("building the browser engine (web/wasm → web/static/{})...", file);
+        let manifest = root.join("web/wasm/Cargo.toml");
+        let target_dir = root.join("web/wasm/target");
+        let status = std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+            .args(["build", "--release", "--target", target, "--manifest-path"])
+            .arg(&manifest)
+            .arg("--target-dir")
+            .arg(&target_dir)
+            .env("RUSTFLAGS", flags)
+            .env_remove("CARGO_ENCODED_RUSTFLAGS")
+            .status()
+            .map_err(|e| format!("cannot run cargo: {}", e))?;
+        if !status.success() {
+            result = Err(format!("wasm build failed (is the {0} target installed? `rustup target add {0}`)", target));
+            continue;
+        }
+        std::fs::copy(target_dir.join(target).join("release/kairos_wasm.wasm"), &out).map_err(|e| e.to_string())?;
     }
-    eprintln!("building the browser engine (web/wasm → web/static/kairos.wasm)...");
-    let manifest = root.join("web/wasm/Cargo.toml");
-    let target_dir = root.join("web/wasm/target");
-    let status = std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
-        .args(["build", "--release", "--target", "wasm32-wasip1", "--manifest-path"])
-        .arg(&manifest)
-        .arg("--target-dir")
-        .arg(&target_dir)
-        // A 32 MB stack for the recursive search; RUSTFLAGS also overrides target-cpu=native.
-        .env("RUSTFLAGS", "-C link-arg=-zstack-size=33554432")
-        .env_remove("CARGO_ENCODED_RUSTFLAGS")
-        .status()
-        .map_err(|e| format!("cannot run cargo: {}", e))?;
-    if !status.success() {
-        return Err("wasm build failed (is the wasm32-wasip1 target installed? `rustup target add wasm32-wasip1`)".into());
-    }
-    std::fs::copy(target_dir.join("wasm32-wasip1/release/kairos_wasm.wasm"), &out).map_err(|e| e.to_string())?;
-    Ok(())
+    result
 }
 
 fn main() {
