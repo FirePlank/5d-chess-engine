@@ -91,10 +91,15 @@
               <div class="ceval-name">Kairos <span id="engine-where"></span></div>
               <div class="ceval-stats" id="engine-stats">Off</div>
             </div>
-            <button class="icon-btn sm" id="engine-deeper" title="Keep searching" aria-label="Keep searching"><svg><use href="#i-plus"/></svg></button>
+            <button class="icon-btn sm" id="engine-deeper" title="Go deeper: search this position to depth 64" aria-label="Go deeper"><svg><use href="#i-plus"/></svg></button>
             <button class="icon-btn sm" id="engine-settings-btn" title="Engine settings" aria-label="Engine settings" aria-expanded="false"><svg><use href="#i-gear"/></svg></button>
           </div>
           <div class="ceval-settings hidden" id="engine-settings">
+            <label class="setting">
+              <span>Depth</span>
+              <input type="range" id="set-depth" min="1" max="64" step="1">
+              <output id="set-depth-v">15</output>
+            </label>
             <label class="setting">
               <span>Threads</span>
               <input type="range" id="set-threads" min="1" max="16" step="1">

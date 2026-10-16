@@ -32,10 +32,10 @@ export function newMemory(desc) {
 /** Threads the browser can use: workers can share memory only when cross-origin isolated. */
 export const threadsSupported = typeof SharedArrayBuffer !== 'undefined' && !!self.crossOriginIsolated;
 
-/** Default engine settings: all cores but one (at most 16 threads), 64 MB of hash. */
+/** Default engine settings: all cores but one (at most 16 threads), 64 MB of hash, depth 15. */
 export function defaultEngineSettings() {
   const cores = navigator.hardwareConcurrency || 2;
-  return { threads: threadsSupported ? Math.max(1, Math.min(16, cores - 1)) : 1, hashMb: 64 };
+  return { threads: threadsSupported ? Math.max(1, Math.min(16, cores - 1)) : 1, hashMb: 64, depth: 15 };
 }
 
 /** Rules and game tree (one game at a time). Calls throw on `ok: false`. */
