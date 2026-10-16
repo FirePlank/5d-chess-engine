@@ -236,17 +236,13 @@ fn main() {
             let text = std::fs::read_to_string(&args[2]).expect("positions");
             for line in text.lines().filter(|l| l.starts_with("G ")) {
                 let s = parse_g_line(line).unwrap();
-                // The f7 sac table's outcomes for the position (as a search would work them out).
-                kairos::engine::sac::prepare(&s, u64::MAX, None, None, kairos::engine::sac::NODE_BUDGET, false);
                 let w = hce::tuned_weights();
                 let sd = hce::sides(&s);
                 let f = hce::features_from(&sd, &s, false);
                 let black = s.get_present().1;
-                let mut f0 = f;
-                hce::split_sac(&mut f0);
                 let base = hce::score(&f, &w, black);
                 let res = kairos::engine::evalnet::embedded()
-                    .map(|n| n.residual(&kairos::engine::evalnet::inputs_from(&sd, &s, hce::score(&f0, &w, black))))
+                    .map(|n| n.residual(&kairos::engine::evalnet::inputs_from(&sd, &s, base)))
                     .unwrap_or(0);
                 let sg = if black { -1 } else { 1 };
                 writeln!(out, "present {:?}: hce {} net residual {} total {} (white's view)", s.get_present(), sg * base, sg * res, sg * (base + res)).unwrap();
@@ -268,16 +264,9 @@ fn main() {
                 if ms > 0 {
                     let mut e = kairos::engine::ab::AlphaBeta::new();
                     let stop = std::sync::atomic::AtomicBool::new(false);
-                    let depth = std::env::var("EVALPOS_DEPTH").ok().and_then(|d| d.parse().ok());
-                    let limits = kairos::engine::Limits { movetime: Some(ms), depth, ..Default::default() };
+                    let limits = kairos::engine::Limits { movetime: Some(ms), ..Default::default() };
                     let mut last = String::new();
-                    let verbose = std::env::var_os("EVALPOS_INFO").is_some();
-                    let best = e.find_best_move(&s, &limits, &stop, &mut |m| {
-                        if verbose {
-                            eprintln!("    {}", m);
-                        }
-                        last = m
-                    });
+                    let best = e.find_best_move(&s, &limits, &stop, &mut |m| last = m);
                     writeln!(out, "  search {}ms: {} | {}", ms, best.map(|a| a.to_string()).unwrap_or_default(), last).unwrap();
                 }
             }
@@ -337,46 +326,6 @@ fn main() {
             }
             writeln!(out, "engine actions {} | with a move on a non-mandatory board {} ({:.2}%) | physical {} departures {} arrivals {} | optional boards per action {:.2}",
                 actions, with_future, 100.0 * with_future as f64 / actions.max(1) as f64, phys, dep, arr, optional_boards as f64 / actions.max(1) as f64).unwrap();
-        }
-        "sacprep" => {
-            // sacprep [file] : the f7 sac table's work for each position (`sac::prepare`).
-            use kairos::engine::sac;
-            let text = std::fs::read_to_string(args.get(2).map(|s| s.as_str()).unwrap_or("data/tactics.g")).expect("positions");
-            let mut name = String::new();
-            for line in text.lines() {
-                if let Some(n) = line.strip_prefix("# ") {
-                    name = n.to_string();
-                }
-                if !line.starts_with("G ") {
-                    continue;
-                }
-                let s = parse_g_line(line).unwrap();
-                let t = Instant::now();
-                let st = sac::prepare(&s, u64::MAX, None, None, sac::NODE_BUDGET, false);
-                writeln!(out, "{:>7.3}s resolved {:>2} wins {} nodes {:>8} | {}", t.elapsed().as_secs_f64(), st.resolved, st.wins, st.nodes, name).unwrap();
-            }
-        }
-        "sactable" => {
-            // sactable <out.bin> <file>... : precompute the f7 sac table (data/fsac_table.bin) from
-            // every position ("G" and book "P G" lines) of the files.
-            use kairos::engine::sac;
-            sac::skip_table();
-            let t = Instant::now();
-            let (mut n, mut st) = (0, sac::PrepStats::default());
-            for f in &args[3..] {
-                for line in std::fs::read_to_string(f).expect("positions").lines() {
-                    let Some(g) = line.strip_prefix("P ").or(Some(line)).filter(|l| l.starts_with("G ")) else { continue };
-                    let Ok(s) = parse_g_line(g) else { continue };
-                    let p = sac::prepare(&s, u64::MAX, None, None, sac::NODE_BUDGET, true);
-                    st.resolved += p.resolved;
-                    st.wins += p.wins;
-                    st.nodes += p.nodes;
-                    n += 1;
-                }
-            }
-            let bytes = sac::dump_table();
-            std::fs::write(&args[2], &bytes).expect("write table");
-            writeln!(out, "{} positions, {:?}, {} bytes, {:.1}s", n, st, bytes.len(), t.elapsed().as_secs_f64()).unwrap();
         }
         "abbench" => abbench(
             args.get(2).map(|s| s.as_str()).unwrap_or("data/bench_ab.g"),
@@ -1101,8 +1050,6 @@ fn main() {
                  abbench [file] [depth]  alpha-beta node oracle (AB_NODES caps nodes per position)\n  \
                  puzzles [file] [ms]     time to find each mate in data/puzzles.g
                    tactics [file] [ms] [threads]   solved/unsolved and time to solve per position of data/tactics.g
-                   sacprep [file]   the f7 sac table's local searches per position (SAC_VERBOSE=1: each outcome)
-                   sactable <out.bin> <file>...   precompute data/fsac_table.bin from the files' positions
                    bookgen [src] | tacticsgen [src]   build data/book_theory.txt / data/tactics.g from their sources
                    blunders <games.jsonl> [n] | materank <games.jsonl> [n] | depthstat <games.jsonl> [ms] | rootgen [file]
                    overrunpos <file.g>... [threads=1,4] [ms=100,1000] [clock=2000+100,30000+300]   worst time overrun
