@@ -517,8 +517,11 @@ impl Multiverse {
     #[inline(always)]
     fn piece_with_flag(&self, p: Vec4, c: bool) -> Piece {
         let b = self.board(p.l(), p.t(), c);
-        let mut piece = b.get_piece(p.xy());
-        if b.umove() & pmask(p.xy()) != 0 {
+        // `get_piece`, decoded the fast way.
+        let z = pmask(p.xy());
+        let kind = b.kind(p.xy());
+        let mut piece = if kind == NO_PIECE || kind == WALL_PIECE || b.white() & z != 0 { kind } else { to_black(kind) };
+        if b.umove() & z != 0 {
             piece |= 0x80;
         }
         piece

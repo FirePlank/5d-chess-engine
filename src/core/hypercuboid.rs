@@ -103,7 +103,6 @@ pub struct HcInfo {
 #[derive(Default)]
 struct BuildScratch {
     playable: Vec<i32>,
-    stays: Vec<Vec<FullMove>>,
     departures: Vec<Vec<Vec4>>,
     /// (destination line, move) of every jump, stably sorted by line.
     arrivals: Vec<(i32, FullMove)>,
@@ -409,7 +408,7 @@ impl HcInfo {
             all_lines_mine,
             lone_checks,
         } = self;
-        let BuildScratch { playable, stays, departures, arrivals, sorted, line_counts, ml, jump_tab, safety, arrival_ok, group_slots } = scratch;
+        let BuildScratch { playable, departures, arrivals, sorted, line_counts, ml, jump_tab, safety, arrival_ok, group_slots } = scratch;
         let present = s.get_present();
         let player = present.1;
         let (lines_lo, lines_hi) = s.get_lines_range();
@@ -437,36 +436,111 @@ impl HcInfo {
         }
         let axis_lo = *axis_lo;
         let axis_of_line = |axis_of: &[usize], l: i32| axis_of[(l - axis_lo) as usize];
-        if stays.len() < np {
-            stays.resize_with(np, Vec::new);
+        if departures.len() < np {
             departures.resize_with(np, Vec::new);
         }
+        if axis_coords.len() < np {
+            axis_coords.resize_with(np, Vec::new);
+        }
         arrivals.clear();
+        let (_, size_y) = s.get_board_size();
+        let promo_piece = |m: FullMove| -> Piece {
+            s.normalize_promotion(super::action::ExtMove::new(m, NO_PIECE)).map(|e| e.promote_to).unwrap_or(NO_PIECE)
+        };
+        // Royal safety per board: only royal moves, pinned pieces, en passant or a board
+        // already in check can leave the mover's royal attacked, so most results skip the
+        // full check test.
+        // Memoized per board, by (line, turn) (entries stamped with this build).
+        let nt = (lines_lo..=lines_hi).map(|l| s.get_timeline_end(l).0).max().unwrap_or(0) as usize + 1;
+        let need = (lines_hi - lines_lo + 1) as usize * nt;
+        if safety.1.len() < need {
+            safety.1.resize(need, (0, false, false, RoyalSafety { in_check: false, pinned: 0 }));
+        }
+        safety.0 = safety.0.wrapping_add(1);
+        if safety.0 == 0 {
+            safety.1.iter_mut().for_each(|e| e.0 = 0);
+            safety.0 = 1;
+        }
+        let stamp = safety.0;
+        let mut memo = SafetyMemo { s, player, lines_lo, nt, stamp, tab: &mut safety.1 };
         drop(st_scope);
         let gen_scope = crate::misc::prof::scope(1);
+        // Every piece's moves: the physical ones become entries at once (those that leave no
+        // royal of the mover attacked), the jumps are collected.
         for (axis, &l) in playable.iter().enumerate() {
-            stays[axis].clear();
             departures[axis].clear();
             let t = s.get_timeline_end(l).0;
             let p0 = Vec4::new(0, 0, t, l);
-            let b = s.board(l, t, player);
-            for pos in marked_pos(b.friendly(player) & !b.wall()) {
+            let source = s.board(l, t, player);
+            let rs = memo.get(l, t);
+            let own_royals = source.royal() & source.hostile(!player);
+            let locs = &mut axis_coords[axis];
+            locs.clear();
+            locs.push(Entry::Null);
+            for pos in marked_pos(source.friendly(player) & !source.wall()) {
                 let from = Vec4::from_xy(pos, p0);
+                let z = pmask(pos);
                 let mut has_depart = false;
                 ml.clear();
                 s.multiverse().gen_moves(from, player, ml);
                 for &(r, bb) in ml.iter() {
+                    if r != p0 {
+                        if !has_depart {
+                            departures[axis].push(from);
+                            has_depart = true;
+                        }
+                        for sq in marked_pos(bb) {
+                            arrivals.push((r.l(), FullMove::new(from, Vec4::from_xy(sq, r))));
+                        }
+                        continue;
+                    }
+                    let mover = source.kind(pos);
+                    let pawn = source.lpawn() & z != 0;
+                    let king = source.king() & z != 0;
+                    let tested = rs.in_check || (source.royal() | rs.pinned) & z != 0;
+                    // The mover's only royal moving (not castling): only its destination can
+                    // be attacked, with its origin vacated.
+                    let lone_royal = own_royals == z;
                     for sq in marked_pos(bb) {
-                        let to = Vec4::from_xy(sq, r);
-                        let m = FullMove::new(from, to);
-                        if from.tl() != to.tl() {
-                            if !has_depart {
-                                departures[axis].push(from);
-                                has_depart = true;
-                            }
-                            arrivals.push((to.l(), m));
+                        let q = Vec4::from_xy(sq, p0);
+                        let m = FullMove::new(from, q);
+                        let dx = q.x() - from.x();
+                        let castle = king && dx.abs() > 1;
+                        let mut nb = *source;
+                        let mut needs_test = tested;
+                        if pawn && dx != 0 && source.occupied() & pmask(sq) == 0 {
+                            nb.clear_square(ppos(q.x(), from.y()));
+                            nb.transfer(pos, sq);
+                            needs_test = true;
+                        } else if castle {
+                            let rook_x1 = source.first_occupied_x(from.x(), from.y(), dx.signum());
+                            let rook_x2 = from.x() + dx.signum();
+                            nb.transfer(ppos(rook_x1, from.y()), ppos(rook_x2, q.y()));
+                            nb.transfer(pos, sq);
                         } else {
-                            stays[axis].push(m);
+                            nb.transfer(pos, sq);
+                        }
+                        if pawn && (q.y() == 0 || q.y() == size_y - 1) {
+                            let promotion = promo_piece(m);
+                            if promotion != NO_PIECE {
+                                nb.set_piece(sq, if player { to_black(promotion) } else { promotion });
+                            }
+                        }
+                        let safe = if !needs_test {
+                            true
+                        } else if lone_royal && !castle {
+                            !source.is_attacked_through(sq, player, source.occupied() & !z)
+                        } else {
+                            !has_physical_check(&nb, player)
+                        };
+                        if safe {
+                            let victim = if mover == KING_W && dx.abs() > 1 {
+                                NO_PIECE
+                            } else {
+                                let v = source.kind(sq);
+                                if v == NO_PIECE && (mover == PAWN_W || mover == BRAWN_W) && dx != 0 { source.kind(ppos(q.x(), from.y())) } else { v }
+                            };
+                            locs.push(Entry::Physical { m, b: nb, mover, victim });
                         }
                     }
                 }
@@ -498,27 +572,6 @@ impl HcInfo {
             let i = jt[axis_of_line(axis_of, from.l())][from.xy() as usize];
             if i == INVALID { None } else { Some(i) }
         };
-        let (_, size_y) = s.get_board_size();
-        let promo_piece = |m: FullMove| -> Piece {
-            s.normalize_promotion(super::action::ExtMove::new(m, NO_PIECE)).map(|e| e.promote_to).unwrap_or(NO_PIECE)
-        };
-
-        // Royal safety per board: only royal moves, pinned pieces, en passant or a board
-        // already in check can leave the mover's royal attacked, so most results skip the
-        // full check test.
-        // Memoized per board, by (line, turn) (entries stamped with this build).
-        let nt = (lines_lo..=lines_hi).map(|l| s.get_timeline_end(l).0).max().unwrap_or(0) as usize + 1;
-        let need = (lines_hi - lines_lo + 1) as usize * nt;
-        if safety.1.len() < need {
-            safety.1.resize(need, (0, false, false, RoyalSafety { in_check: false, pinned: 0 }));
-        }
-        safety.0 = safety.0.wrapping_add(1);
-        if safety.0 == 0 {
-            safety.1.iter_mut().for_each(|e| e.0 = 0);
-            safety.0 = 1;
-        }
-        let stamp = safety.0;
-        let mut memo = SafetyMemo { s, player, lines_lo, nt, stamp, tab: &mut safety.1 };
         // Whether an arrival leaves the mover's royals unattacked (memoized per arrival:
         // 0 unknown, 1 safe, 2 not).
         arrival_ok.clear();
@@ -548,56 +601,7 @@ impl HcInfo {
             let lo = arrivals.partition_point(|a| a.0 < l);
             let hi = arrivals.partition_point(|a| a.0 <= l);
             let locs = &mut axis_coords[axis];
-            locs.clear();
-            locs.push(Entry::Null);
-            let board_t = s.get_timeline_end(l).0;
-            let rs = memo.get(l, board_t);
-            for &m in &stays[axis] {
-                let (p, q) = (m.from, m.to);
-                let d = q - p;
-                let source = s.board(p.l(), p.t(), player);
-                let mut nb = *source;
-                let z = pmask(p.xy());
-                let mut needs_test = rs.in_check || (source.royal() | rs.pinned) & z != 0;
-                // The mover's only royal moving (not castling): only its destination can be
-                // attacked, with its origin vacated.
-                let lone_step = source.royal() & source.hostile(!player) == z && !(source.king() & z != 0 && d.x().abs() > 1);
-                if source.lpawn() & z != 0 && d.x() != 0 && source.occupied() & pmask(q.xy()) == 0 {
-                    nb.clear_square(ppos(q.x(), p.y()));
-                    nb.transfer(p.xy(), q.xy());
-                    needs_test = true;
-                } else if source.king() & z != 0 && d.x().abs() > 1 {
-                    let rook_x1 = source.first_occupied_x(p.x(), p.y(), d.x().signum());
-                    let rook_x2 = p.x() + d.x().signum();
-                    nb.transfer(ppos(rook_x1, p.y()), ppos(rook_x2, q.y()));
-                    nb.transfer(p.xy(), q.xy());
-                } else {
-                    nb.transfer(p.xy(), q.xy());
-                }
-                if source.lpawn() & z != 0 && (q.y() == 0 || q.y() == size_y - 1) {
-                    let promotion = promo_piece(m);
-                    if promotion != NO_PIECE {
-                        nb.set_piece(q.xy(), if player { to_black(promotion) } else { promotion });
-                    }
-                }
-                let safe = if !needs_test {
-                    true
-                } else if lone_step {
-                    !source.is_attacked_through(q.xy(), player, source.occupied() & !z)
-                } else {
-                    !has_physical_check(&nb, player)
-                };
-                if safe {
-                    let mover = source.kind(p.xy());
-                    let victim = if mover == KING_W && d.x().abs() > 1 {
-                        NO_PIECE
-                    } else {
-                        let v = source.kind(q.xy());
-                        if v == NO_PIECE && (mover == PAWN_W || mover == BRAWN_W) && d.x() != 0 { source.kind(ppos(q.x(), p.y())) } else { v }
-                    };
-                    locs.push(Entry::Physical { m, b: nb, mover, victim });
-                }
-            }
+            let rs = memo.get(l, s.get_timeline_end(l).0);
             for &p in &departures[axis] {
                 let idx = locs.len() as Index;
                 let source = s.board(p.l(), p.t(), player);
