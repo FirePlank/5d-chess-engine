@@ -604,12 +604,13 @@ export class Analysis {
       // MultiPV: `multipv k` numbers the lines (1 the best); without it there is one line.
       const k = info.multipv || 1;
       const prev = this.cache.get(s.node);
+      // Line 1 starts a depth's set of lines; the others join the set of their own depth (the
+      // lines of one depth arrive together, line 1 first).
       if (k === 1) {
-        if (!prev || info.depth >= prev.depth) this.cache.set(s.node, { ...info, lines: [{ ...info }, ...((prev && prev.lines) || []).slice(1)], at: performance.now() });
-      } else if (prev && k <= MAX_LINES) {
-        const lines = prev.lines || [prev];
-        if (!lines[k - 1] || info.depth >= lines[k - 1].depth) lines[k - 1] = { ...info };
-        prev.lines = lines;
+        if (!prev || info.depth >= prev.depth) this.cache.set(s.node, { ...info, lines: [{ ...info }], at: performance.now() });
+      } else if (prev && prev.depth === info.depth && k <= MAX_LINES) {
+        prev.lines = prev.lines || [prev];
+        prev.lines[k - 1] = { ...info };
       }
       this.scheduleRender();
     } else if (m.type === 'done') {
