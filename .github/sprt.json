@@ -1,0 +1,12 @@
+{
+  "name": "no_wasted_spatial",
+  "old": "f55304ea087355d1a09c5595442ca72db30d7548",
+  "games": 9000,
+  "shards": 40,
+  "tc": "tc 10+0.1",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}
