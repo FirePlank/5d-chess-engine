@@ -69,7 +69,7 @@ export class LocalPlay {
     return this.state();
   }
 
-  start({ variant = 'Standard', color = 'random', clock = null, movetime = 2000, book = true }) {
+  start({ variant = 'Standard - Turn Zero', color = 'random', clock = null, movetime = 2000, book = true }) {
     this.engine.stop();
     this.rules.call({ cmd: 'new', position: variant });
     const start = this.view(0).position;

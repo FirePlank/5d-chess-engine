@@ -11,7 +11,7 @@ A Rust engine for [5D Chess With Multiverse Time Travel](https://www.5dchesswith
 - **Search**: Iterative deepening PVS over whole turns with a transposition table, killer and history ordering, late move pruning and reductions and a tactical quiescence search. Turns are enumerated best-first by the summed scores of their per-board moves, with checking moves (including checks across time and timelines) ordered first.
 - **Evaluation**: Linear evaluation over every timeline's latest board (material, timeline advantage, king safety including pieces near a royal from neighbouring timelines, mobility, pawn structure) with weights fitted to game results.
 - **Protocol**: Speaks 5DUCI, so it plugs into any 5DUCI interface or match runner.
-- **Opening book**: Turn Zero and Standard theory from the community guides (`docs/theory/`): the T0 Openings Guide's recommended structures and trap refutations, and the f7-sac guide's defences, in `data/book_theory.txt` (built by `ktools bookgen` from the annotated 5dpgn lines of `data/book_theory_src.txt`). With the 5DUCI option `OwnBook` (off by default) a book position is answered at once with a weighted random theory move.
+- **Opening book**: Turn Zero theory from the community guides (`docs/theory/`), the T0 Openings Guide's recommended structures and trap refutations (Turn Zero only; other variants are never in the book), in `data/book_theory.txt` (built by `ktools bookgen` from the annotated 5dpgn lines of `data/book_theory_src.txt`). With the 5DUCI option `OwnBook` (off by default) a book position is answered at once with a weighted random theory move.
 
 ## Quick Start
 

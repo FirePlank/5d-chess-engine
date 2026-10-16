@@ -150,7 +150,7 @@ async function main() {
     a.stopAutoplay();
     a.loadedKey = null;
     a.input.reset();
-    a.newGame('Standard');
+    a.newGame('Standard - Turn Zero');
     history.replaceState(null, '', '#/analysis');
   });
 

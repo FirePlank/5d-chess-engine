@@ -96,7 +96,7 @@ impl Api {
                 Ok(ok(obj![("meta", l.meta), ("tree", tree), ("mainline", mainline)]))
             }
             "new" => {
-                let pos = resolve_position(j.get("position").str().unwrap_or("Standard"))?;
+                let pos = resolve_position(j.get("position").str().unwrap_or("Standard - Turn Zero"))?;
                 let g = Game::new(&pos)?;
                 let tree = g.tree_json();
                 let variant = record::variant_of(&g.nodes[ROOT].state);

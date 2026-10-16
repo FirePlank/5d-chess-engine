@@ -45,7 +45,7 @@ export class Analysis {
     this.engine.on((m) => this.onEngine(m));
     this.bindSettings();
     $('#engine-toggle').checked = this.engineOn;
-    this.newGame('Standard', { quiet: true });
+    this.newGame('Standard - Turn Zero', { quiet: true });
   }
 
   // ---------------------------------------------------------------- activation
@@ -719,7 +719,7 @@ export class Analysis {
     };
     // New dialog.
     const sel = $('#new-variant');
-    sel.replaceChildren(...this.variants.map((v) => el('option', { value: v.name, text: v.name })));
+    sel.replaceChildren(...this.variants.map((v) => el('option', { value: v.name, text: v.name, selected: v.name === 'Standard - Turn Zero' })));
     $('#variant-list').replaceChildren(...this.variants.map((v) => el('option', { value: v.name })));
     $('#btn-new').onclick = () => { $('#new-error').classList.add('hidden'); $('#dlg-new').showModal(); };
     $('#new-go').onclick = (e) => {

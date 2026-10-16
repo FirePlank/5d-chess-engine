@@ -20,11 +20,12 @@
 # ============================================================================ Turn Zero
 # --- Move 1 (t0_common_openings: "the best first move for both sides is ... Nf3 and Nf6"; the
 # knight blocks the f-file travels and the h4/h5 queen sacs). Against any other first move
-# Black still answers Nf6 for the same reason.
+# Black still answers Nf6 for the same reason. Expert advice adds 1. e3 (a good alternative) and
+# 1. e4 (sharp and risky) as White's other first moves, at lower weights.
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 {play 10} / Nf6 {play 10}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 {know} / Nf6 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 {play 5} / Nf6 {play 10}
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. d4 {know} / Nf6 {play 10}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. e4 {know} / Nf6 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e4 {play 2} / Nf6 {play 10}
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. c4 {know} / Nf6 {play 10}
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. c3 {know} / Nf6 {play 10}
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nc3 {know} / Nf6 {play 10}
@@ -164,36 +165,3 @@
 # to g6 after g4, which weakens White's king (331).
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / d5 3. h3 {play 3}
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / d5 3. Bd3 / c6 4. b3 {know} / Bg4 {play 5} 5. h3 {play 10} / Bh5 {play 10} 6. g4 {know} / Bg6 {play 10}
-
-# ============================================================================ Standard
-# f7_sac_guide_notes: "Black must open with Nf6 to use most defences" (against anything); White
-# opens 1. Nf3, which also stops Black's mirrored T1f2 sac ("White prevents it with Nf3 on
-# T1/T2"); after 1...Nf6 2. d4 d5 "stops T1f7 access", then the London structure of the T0
-# guide (c3/c6, Bf4/Bf5), or the c-pawn structure (c4/c5) that reaches b3/b6 first.
-[Board "Standard"] [Mode "5D"] 1. Nf3 {play 10} / Nf6 {play 10} 2. d4 {play 10} / d5 {play 10} 3. c3 {play 10} / c6 {play 10} 4. Bf4 {play 10} / Bf5 {play 10}
-[Board "Standard"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 {play 5} / c5 {play 10}
-[Board "Standard"] [Mode "5D"] 1. e3 {know} / Nf6 {play 10}
-[Board "Standard"] [Mode "5D"] 1. d4 {know} / Nf6 {play 10}
-[Board "Standard"] [Mode "5D"] 1. e4 {know} / Nf6 {play 10}
-[Board "Standard"] [Mode "5D"] 1. c4 {know} / Nf6 {play 10}
-[Board "Standard"] [Mode "5D"] 1. c3 {know} / Nf6 {play 10}
-[Board "Standard"] [Mode "5D"] 1. Nc3 {know} / Nf6 {play 10}
-[Board "Standard"] [Mode "5D"] 1. d3 {know} / Nf6 {play 10}
-# Black's defences against 1. e3 by White's second move. 2. Bb5 pins the d-pawn: contest b3
-# with ...c6 and cxb5, then the queen to a5/b6/c7 (the guide's "main"), or a5-a4, c5-c4,
-# Nc6-a5, each taking the queen when it comes to b3; ...c6 3. c3 Nd5 4. Qb3 Nxe3 is the
-# counterattack.
-[Board "Standard"] [Mode "5D"] 1. e3 / Nf6 2. Bb5 {know} / c6 {play 10} 3. c3 {know} / cxb5 {play 10} 4. Qb3 {know} / Qa5 {play 10}
-[Board "Standard"] [Mode "5D"] 1. e3 / Nf6 2. Bb5 / c6 3. c3 / cxb5 4. Qb3 / Qb6 {play 5}
-[Board "Standard"] [Mode "5D"] 1. e3 / Nf6 2. Bb5 / c6 3. c3 / cxb5 4. Qb3 / Qc7 {play 5}
-[Board "Standard"] [Mode "5D"] 1. e3 / Nf6 2. Bb5 / c6 3. c3 / Nd5 {play 3} 4. Qb3 {know} / Nxe3 {play 10}
-[Board "Standard"] [Mode "5D"] 1. e3 / Nf6 2. Bb5 / a5 {play 5} 3. c3 {know} / a4 {play 10} 4. Qb3 {know} / axb3 {play 10}
-[Board "Standard"] [Mode "5D"] 1. e3 / Nf6 2. Bb5 / c5 {play 3} 3. c3 {know} / c4 {play 10} 4. Qb3 {know} / cxb3 {play 10}
-[Board "Standard"] [Mode "5D"] 1. e3 / Nf6 2. Bb5 / Nc6 {play 3} 3. c3 {know} / Na5 {play 10} 4. Qb3 {know} / Nxb3 {play 10}
-# 2. g4: 2...g5 then c6 and the queen to a5, or 2...d5 3. g5 Ne4 4. Qf3 Be6.
-[Board "Standard"] [Mode "5D"] 1. e3 / Nf6 2. g4 {know} / g5 {play 5} 3. c3 {know} / c6 {play 10} 4. Qb3 {know} / Qa5 {play 10}
-[Board "Standard"] [Mode "5D"] 1. e3 / Nf6 2. g4 / d5 {play 5} 3. g5 {know} / Ne4 {play 10} 4. Qf3 {know} / Be6 {play 10}
-# Against 1. c3: 2. Qa4 and 3. Qc4 are met by 2...c6 and the queen to a5 (b6, c7).
-[Board "Standard"] [Mode "5D"] 1. c3 / Nf6 2. Qa4 {know} / c6 {play 10} 3. Qc4 {know} / Qa5 {play 10}
-[Board "Standard"] [Mode "5D"] 1. c3 / Nf6 2. Qa4 / c6 3. Qc4 / Qb6 {play 5}
-[Board "Standard"] [Mode "5D"] 1. c3 / Nf6 2. Qa4 / c6 3. Qc4 / Qc7 {play 5}
