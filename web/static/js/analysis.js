@@ -135,6 +135,8 @@ export class Analysis {
     this.meta = meta;
     this.meta.source = source;
     this.cache.clear();
+    // Node ids start over with every game: a "go deeper" on the last one does not carry over.
+    this.deeperNode = null;
     this.gameKey++;
     this.input.attach(this.source);
     this.rootPlayer = this.rules.call({ cmd: 'view', node: 0, draft: [] }).view.player;
