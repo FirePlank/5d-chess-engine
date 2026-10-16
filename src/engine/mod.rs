@@ -1,5 +1,4 @@
 pub mod ab;
-pub mod corr;
 pub mod evalnet;
 pub mod hce;
 pub mod local;

@@ -314,8 +314,6 @@ pub struct AlphaBeta {
     known_check: Option<bool>,
     /// Static evaluations and in-check status of recently seen positions.
     known: KnownCache,
-    /// Static-evaluation correction history.
-    corr: Box<super::corr::CorrHist>,
     /// The score (internal units, side to move) of the last `find_best_move`.
     last_score: i32,
     /// Search threads (`Threads`), this one included.
@@ -576,7 +574,6 @@ impl AlphaBeta {
             terms: Box::default(),
             known_check: None,
             known: KnownCache::new(),
-            corr: Box::default(),
             last_score: 0,
             threads: 1,
             helpers: Vec::new(),
@@ -608,26 +605,6 @@ impl AlphaBeta {
             e.flags |= KNOWN_EVAL;
         });
         v
-    }
-
-    /// Static evaluation with the correction history applied.
-    #[inline]
-    fn eval(&mut self, s: &State) -> i32 {
-        self.static_eval(s) + self.corr.correction(s)
-    }
-
-    /// Feed a node's search result to the correction history: quiet best actions, not in
-    /// check, and only when the bound says which side of the evaluation the truth lies.
-    fn update_corr(&mut self, s: &State, depth: i32, best: i32, bound: Bound, act: &MoveSeq) {
-        if best.abs() >= MATE - 1000 || act.is_empty() || Self::is_tactical(s, act) || self.in_check(s) {
-            return;
-        }
-        let raw = self.static_eval(s);
-        let ev = raw + self.corr.correction(s);
-        if (bound == Bound::Lower && best <= ev) || (bound == Bound::Upper && best >= ev) {
-            return;
-        }
-        self.corr.update(s, depth, best - raw);
     }
 
     /// Whether the side to move is in check (royal captures threatened if it passed).
@@ -983,10 +960,10 @@ impl AlphaBeta {
         // Royal captures are threatened: standing pat is unsound, so search evasions (the
         // static evaluation only matters at the depth limit).
         if in_check && leaf {
-            return self.eval(s);
+            return self.static_eval(s);
         }
         if !in_check {
-            let stand = self.eval(s);
+            let stand = self.static_eval(s);
             if stand >= beta {
                 return stand;
             }
@@ -1137,7 +1114,7 @@ impl AlphaBeta {
             return 0;
         }
         if ply >= MAX_PLY {
-            return self.eval(s);
+            return self.static_eval(s);
         }
         let alpha0 = alpha;
         let key = s.hash();
@@ -1170,12 +1147,12 @@ impl AlphaBeta {
 
         if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| self.in_check(s)) {
             if depth <= RFP_DEPTH {
-                let e = self.eval(s);
+                let e = self.static_eval(s);
                 if e - RFP_MARGIN * depth >= beta {
                     return e;
                 }
             }
-            if depth >= NMP_MIN_DEPTH && !self.seek_mate && Self::has_null_material(s) && self.eval(s) >= beta {
+            if depth >= NMP_MIN_DEPTH && !self.seek_mate && Self::has_null_material(s) && self.static_eval(s) >= beta {
                 let r = NMP_R + depth / NMP_DIV;
                 let mark = s.make_null();
                 let v = -self.negamax(s, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
@@ -1234,7 +1211,6 @@ impl AlphaBeta {
             if alpha >= beta {
                 self.on_cutoff(s, &act, depth, ply);
                 let proven = mate_proven(best, best_proven, false);
-                self.update_corr(s, depth, best, Bound::Lower, &best_action);
                 self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
                 self.proven = proven;
                 return best;
@@ -1347,7 +1323,6 @@ impl AlphaBeta {
                     if alpha >= beta {
                         self.on_cutoff(s, &act, depth, ply);
                         let proven = mate_proven(best, best_proven, false);
-                        self.update_corr(s, depth, best, Bound::Lower, &best_action);
                         self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
                         self.proven = proven;
                         break 'search Some(best);
@@ -1376,11 +1351,10 @@ impl AlphaBeta {
         if searched == 0 {
             // Only the TT action existed but failed validation; fall back to static eval.
             self.proven = false;
-            return self.eval(s);
+            return self.static_eval(s);
         }
         let bound = if best > alpha0 { Bound::Exact } else { Bound::Upper };
         let proven = mate_proven(best, best_proven, all_proven);
-        self.update_corr(s, depth, best, bound, &best_action);
         self.tt_store(key, depth, bound, mate_to_tt(best, ply), proven, &best_action);
         self.proven = proven;
         best
@@ -1517,10 +1491,7 @@ impl Helper {
                 e.thread_id = thread_id;
                 while let Ok(msg) = rx.recv() {
                     match msg {
-                        HelperMsg::NewGame => {
-                            e.history.iter_mut().for_each(|h| *h = 0);
-                            e.corr.clear();
-                        }
+                        HelperMsg::NewGame => e.history.iter_mut().for_each(|h| *h = 0),
                         HelperMsg::Search(job) => {
                             let HelperJob { root, roots, roots_complete, max_depth, start, tt, stop, counters, done } = *job;
                             if stop.load(Ordering::Relaxed) {
@@ -1555,7 +1526,6 @@ impl AlphaBeta {
         for helper in &self.helpers {
             let _ = helper.tx.send(HelperMsg::NewGame);
         }
-        self.corr.clear();
     }
 
     /// Replace the (shared) transposition table, freeing the old one first.
