@@ -62,11 +62,6 @@ const RFP_MARGIN: i32 = 200;
 const NMP_MIN_DEPTH: i32 = 3;
 const NMP_R: i32 = 2;
 const NMP_DIV: i32 = 3;
-/// Checking actions that create a timeline (attacks through time) near the horizon (played
-/// with at most TRAVEL_EXT_DEPTH plies left) are searched a ply deeper, at most
-/// TRAVEL_EXT_MAX times along one line.
-const TRAVEL_EXT_DEPTH: i32 = 2;
-const TRAVEL_EXT_MAX: i32 = 2;
 const DEFAULT_HASH_MB: usize = 64;
 /// Static evaluations are kept within +-EVAL_MAX, well clear of mate scores.
 const EVAL_MAX: i32 = 20000;
@@ -361,8 +356,6 @@ pub struct AlphaBeta {
     /// stale line. Rows keep their actions' storage between nodes.
     pv_rows: Vec<Vec<MoveSeq>>,
     pv_lens: Vec<usize>,
-    /// Travel-check extensions on the line being searched (see `TRAVEL_EXT_MAX`).
-    travel_ext: i32,
 }
 
 // The raw stop and node-count pointers are only dereferenced during a search, while what
@@ -619,16 +612,7 @@ impl AlphaBeta {
             nodes_out: std::ptr::null(),
             pv_rows: vec![Vec::new(); MAX_PLY + 2],
             pv_lens: vec![0; MAX_PLY + 2],
-            travel_ext: 0,
         }
-    }
-
-    /// Whether the action just played at `depth` (to `s`, from a position with timelines
-    /// `lines`) earns a travel-check extension: it is near the horizon, created a timeline
-    /// and gives check, and the line has extensions left.
-    #[inline]
-    fn travel_check_ext(&mut self, s: &State, lines: (i32, i32), depth: i32) -> bool {
-        depth <= TRAVEL_EXT_DEPTH && self.travel_ext < TRAVEL_EXT_MAX && s.get_lines_range() != lines && self.in_check(s)
     }
 
     #[inline]
@@ -1260,20 +1244,15 @@ impl AlphaBeta {
             remembered.extend(self.killers[ply].iter().flatten().filter(|k| tt_action.as_ref() != Some(*k)).cloned());
         }
         for (k, act) in remembered.into_iter().enumerate() {
-            let lines = s.get_lines_range();
             let Some(mark) = Self::make_checked(s, &act) else { continue };
-            let ext = self.travel_check_ext(s, lines, depth) as i32;
-            self.travel_ext += ext;
             // The TT action keeps the node's PV status; killers after it are null-window.
             let v = if k == 0 && tt_action.is_some() {
-                self.known_check = if ext > 0 { Some(true) } else { None };
-                let v = -self.negamax(s, depth - 1 + ext, ply + 1, -beta, -alpha, pv);
+                let v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, pv);
                 s.unmake(mark);
                 v
             } else {
-                self.search_child(s, mark, searched == 0, depth + ext, ply, alpha, beta, pv)
+                self.search_child(s, mark, searched == 0, depth, ply, alpha, beta, pv)
             };
-            self.travel_ext -= ext;
             if self.aborted {
                 return 0;
             }
@@ -1366,19 +1345,12 @@ impl AlphaBeta {
                         skipped = true;
                         break;
                     }
-                    let lines = s.get_lines_range();
                     let mark = Self::make(s, &act);
                     let quiet = sc < 10_000;
                     let mut r = 0;
                     let mut child_check = None;
-                    let ext = self.travel_check_ext(s, lines, depth) as i32;
-                    if ext > 0 {
-                        child_check = Some(true);
-                    }
-                    self.travel_ext += ext;
-                    let cd = depth - 1 + ext;
                     // Checking actions are not reduced: mating lines run through them.
-                    if ext == 0 && depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet {
+                    if depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet {
                         let ic = self.in_check(s);
                         child_check = Some(ic);
                         if !ic {
@@ -1388,20 +1360,19 @@ impl AlphaBeta {
                     let mut v;
                     self.known_check = child_check;
                     if searched == 0 {
-                        v = -self.negamax(s, cd, ply + 1, -beta, -alpha, pv);
+                        v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, pv);
                     } else {
-                        v = -self.negamax(s, cd - r, ply + 1, -alpha - 1, -alpha, false);
+                        v = -self.negamax(s, depth - 1 - r, ply + 1, -alpha - 1, -alpha, false);
                         if !self.aborted && v > alpha && r > 0 {
                             self.known_check = child_check;
-                            v = -self.negamax(s, cd, ply + 1, -alpha - 1, -alpha, false);
+                            v = -self.negamax(s, depth - 1, ply + 1, -alpha - 1, -alpha, false);
                         }
                         if !self.aborted && v > alpha && v < beta && pv {
                             self.known_check = child_check;
-                            v = -self.negamax(s, cd, ply + 1, -beta, -alpha, true);
+                            v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, true);
                         }
                     }
                     s.unmake(mark);
-                    self.travel_ext -= ext;
                     if self.aborted {
                         break 'search Some(0);
                     }
@@ -1955,38 +1926,26 @@ impl AlphaBeta {
             let mut all_proven = roots_complete;
             let mut scores: Vec<i32> = Vec::with_capacity(roots.len());
             for (k, (_, act)) in roots.iter().enumerate() {
-                let lines = work.get_lines_range();
                 let mark = Self::make(&mut work, act);
-                let ext = self.travel_check_ext(&work, lines, depth) as i32;
-                self.travel_ext += ext;
-                let cd = depth - 1 + ext;
                 let v = if k == 0 {
-                    self.known_check = if ext > 0 { Some(true) } else { None };
-                    -self.negamax(&mut work, cd, 1, -beta, -alpha, true)
+                    -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true)
                 } else {
                     // Late root actions are reduced, never pruned.
-                    let child_check = if ext > 0 {
-                        Some(true)
-                    } else if depth >= 3 && k >= ROOT_LMR_MIN_INDEX {
-                        Some(self.in_check(&work))
-                    } else {
-                        None
-                    };
+                    let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(self.in_check(&work)) } else { None };
                     let r = if child_check == Some(false) { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
                     self.known_check = child_check;
-                    let mut v = -self.negamax(&mut work, cd - r, 1, -alpha - 1, -alpha, false);
+                    let mut v = -self.negamax(&mut work, depth - 1 - r, 1, -alpha - 1, -alpha, false);
                     if !self.aborted && v > alpha && r > 0 {
                         self.known_check = child_check;
-                        v = -self.negamax(&mut work, cd, 1, -alpha - 1, -alpha, false);
+                        v = -self.negamax(&mut work, depth - 1, 1, -alpha - 1, -alpha, false);
                     }
                     if !self.aborted && v > alpha {
                         self.known_check = child_check;
-                        v = -self.negamax(&mut work, cd, 1, -beta, -alpha, true);
+                        v = -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true);
                     }
                     v
                 };
                 work.unmake(mark);
-                self.travel_ext -= ext;
                 if self.aborted {
                     break;
                 }
