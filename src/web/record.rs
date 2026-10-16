@@ -9,16 +9,8 @@ use crate::core::state::State;
 use crate::core::variants::{default_variant, position_from_uci, state_from_setup, Sign, VariantSetup};
 use crate::obj;
 
-/// Built-in variants, in menu order.
-pub const VARIANTS: [&str; 7] = [
-    "Standard",
-    "Standard - Turn Zero",
-    "Standard - Reversed Royalty",
-    "Standard - Half Reflected",
-    "Standard - Defended Pawn",
-    "Standard - Two Timelines",
-    "Very Small - Open",
-];
+/// The built-in variants (every official one whose start position is known).
+pub const VARIANTS: [&str; 44] = crate::core::variants::VARIANT_NAMES;
 
 /// The 5DUCI `position` argument for a setup.
 pub fn setup_to_uci(v: &VariantSetup) -> String {

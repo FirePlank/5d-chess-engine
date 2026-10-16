@@ -94,8 +94,11 @@ export class Play {
     this.localStart = null;
     this.localMoves = [];
     this.input.reset();
-    this.board.setFlipped(this.color === 'b');
-    $('#tool-flip').classList.toggle('on', this.board.flipped);
+    // The board is shared with Analysis: only turn it while Play is the page shown.
+    if (this.active) {
+      this.board.setFlipped(this.color === 'b');
+      $('#tool-flip').classList.toggle('on', this.board.flipped);
+    }
     this.board.fitted = false;
     this.show();
   }
@@ -359,12 +362,42 @@ export class Play {
         rows.push(row);
         if (black) row.append(el('div', { class: 'mv empty', text: '…' }));
       }
-      row.append(el('div', { class: 'mv' + (c === this.cur ? ' cur' : ''), dataset: { id: c }, title: n.lan, text: n.san || n.lan }));
+      const mv = el('div', { class: 'mv' + (c === this.cur ? ' cur' : ''), dataset: { id: c }, title: n.lan }, n.san || n.lan);
+      // Opening theory (an action the engine's book plays here): the book badge, as on chess.com.
+      const book = this.bookMove(c);
+      if (book) {
+        const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        icon.setAttribute('class', 'mv-book');
+        const what = book.play ? 'Book move (opening theory)' : 'Book move (known theory, not recommended)';
+        icon.innerHTML = `<title>${what}</title><use href="#i-book"/>`;
+        mv.prepend(icon);
+      }
+      row.append(mv);
       if (black) row = null;
     }
     box.replaceChildren(...rows);
     const cur = box.querySelector('.cur');
     if (cur) cur.scrollIntoView({ block: 'nearest' });
+  }
+
+  /** The opening book's entry for node `id`'s action in its parent position, or null. */
+  bookMove(id) {
+    // Keyed by the start and the actions leading here (node ids repeat from game to game).
+    const path = [];
+    for (let c = id; c; c = this.tree.nodes[c].parent) path.push(this.tree.nodes[c].lan);
+    const key = `${this.localStart}|${path.join('|')}`;
+    this.bookCache = this.bookCache || new Map();
+    if (!this.bookCache.has(key)) {
+      const n = this.tree.nodes[id];
+      let book = null;
+      try {
+        // Theory to play, or known theory the engine does not recommend (as chess.com's book
+        // badge marks any move of its opening database).
+        book = this.rules.call({ cmd: 'book', node: n.parent }).moves.find((m) => m.lan === n.lan) || null;
+      } catch (e) { /* no book for this position */ }
+      this.bookCache.set(key, book);
+    }
+    return this.bookCache.get(key);
   }
 
   tickClocks() {

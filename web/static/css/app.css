@@ -323,6 +323,7 @@ textarea { width: 100%; height: 180px; padding: var(--s2); font: 12.5px/1.5 var(
 .mv:hover { background: var(--hover); color: var(--strong); }
 .mv.cur { background: var(--accent-soft); color: var(--strong); font-weight: 600; }
 .mv.book { color: var(--muted); }
+.mv-book { flex: none; width: 14px; height: 14px; align-self: center; }
 .mv.empty { cursor: default; color: var(--faint); }
 .mv.empty:hover { background: none; }
 .mv-eval { margin-left: auto; flex: none; font-size: 11.5px; color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
@@ -345,6 +346,27 @@ textarea { width: 100%; height: 180px; padding: var(--s2); font: 12.5px/1.5 var(
 .link-btn { display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; padding: var(--s1) var(--s2); border-radius: var(--r-sm); color: var(--muted); font-size: 13px; }
 .link-btn svg { width: 15px; height: 15px; }
 .link-btn:hover { color: var(--strong); background: var(--hover); }
+/* Variant picker (as infinitechess.org's analysis sidebar): a button showing the variant;
+   it opens the groups, and a group its variants. */
+.variant-setup { display: flex; flex-direction: column; gap: 6px; padding: var(--s2) 10px; overflow: visible; position: relative; z-index: 5; }
+.model-label { font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; text-align: center; }
+.variant-selector { position: relative; }
+.variant-display { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; background: var(--inset); border: 1px solid var(--border); border-radius: 6px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04); color: var(--strong); font-size: 14px; cursor: pointer; text-align: left; }
+.variant-display:hover { border-color: var(--border-strong); }
+.variant-display.open { border-color: var(--text); }
+.variant-display .variant-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.selector-arrow { width: 15px; height: 15px; flex: none; color: var(--muted); transition: transform .15s; }
+.variant-display.open .selector-arrow { transform: rotate(180deg); }
+.variant-dropdown { position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 20; display: none; max-height: min(420px, 60vh); overflow-y: auto; background: var(--panel); border: 1px solid var(--border-strong); border-radius: 6px; box-shadow: var(--shadow); }
+.variant-dropdown.open { display: block; }
+.variant-group-item, .variant-list-back, .variant-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; border: 0; background: none; font-size: 14px; text-align: left; cursor: pointer; color: var(--strong); }
+.variant-group-item + .variant-group-item, .variant-item + .variant-item { border-top: 1px solid var(--border); }
+.variant-group-item:hover, .variant-list-back:hover, .variant-item:hover { background: var(--inset); }
+.variant-item.on, .variant-group-item.on .group-name { color: var(--accent); font-weight: 600; }
+.variant-list-back { border-bottom: 1px solid var(--border-strong); position: sticky; top: 0; background: var(--panel); }
+.group-name { flex: none; min-width: 92px; color: var(--strong); }
+.group-desc { flex: 1; min-width: 0; color: var(--muted); font-size: 12.5px; }
+.group-arrow, .back-arrow { width: 14px; height: 14px; flex: none; color: var(--muted); }
 
 /* ------------------------------------------------------------ play panel */
 .play-setup { padding: var(--s4); }
@@ -436,35 +458,110 @@ table.games { width: 100%; border-collapse: collapse; font-size: 13px; }
 @media (max-width: 980px) {
   :root { --side-w: 320px; }
 }
-@media (max-width: 800px) {
-  body { overflow: auto; }
-  #app { height: auto; }
-  .site-header { gap: var(--s2); padding: 0 var(--s1) 0 var(--s3); }
-  .site-logo .tld { display: none; }
-  .build { display: none; }
-  .site-nav a { padding: 0 6px; font-size: 12px; letter-spacing: .02em; }
-  .site-logo { font-size: 19px; }
-  #btn-help { display: none; }
-  .site-actions .icon-btn { width: 30px; }
-  .workspace { flex-direction: column; height: auto; }
-  .board-area { height: 60vh; height: 60svh; flex: none; }
+/* Phones and narrow windows (portrait): an app layout. The board stays at the top, the
+   panels scroll under it, and the move controls sit at the bottom edge; nothing scrolls the
+   page itself, so dragging the board never scrolls it away. */
+@media (max-width: 800px) and (orientation: portrait), (max-width: 560px) {
+  :root { --header-h: 46px; }
+  html, body { height: 100%; overscroll-behavior: none; }
+  #app { height: calc(100% - var(--header-h)); height: calc(100dvh - var(--header-h)); }
+  button, a, .mv, .variant-display, label.switch { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+
+  .site-header { gap: 6px; padding: 0 2px 0 var(--s3); }
+  .site-logo { font-size: 18px; }
+  .site-logo .tld, .build, #btn-help { display: none; }
+  .site-nav { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .site-nav::-webkit-scrollbar { display: none; }
+  .site-nav a { padding: 0 6px; font-size: 11.5px; letter-spacing: .01em; flex: none; }
+  .site-actions { gap: 0; }
+  .site-actions .icon-btn { width: 34px; height: 36px; }
+
+  .workspace { flex-direction: column; height: 100%; }
+  .board-area { flex: none; height: 50%; min-height: 220px; }
   .eval-gauge { display: none !important; }
-  .side { width: 100%; padding: var(--s2) var(--s2) 56px; overflow: visible; }
+  .side { width: 100%; flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--s2) var(--s2) calc(var(--s2) + env(safe-area-inset-bottom)); border-top: 1px solid var(--border); }
+  #side-analysis { padding-bottom: 50px; }
   .side-view { height: auto; }
-  .moves-panel, .play-live { flex: none; }
-  .moves-panel { min-height: 0; }
-  .moves { max-height: 280px; }
-  #side-analysis .controls { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; background: var(--panel); border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom); }
-  .play-live { min-height: 0; }
-  .play-moves { max-height: 200px; }
-  .browser { grid-template-columns: minmax(0, 1fr); height: auto; }
-  .filters { width: 100%; }
-  .filters > * { flex: 1 1 140px; min-width: 0; }
-  .table-wrap { max-height: 70vh; }
-  .files { max-height: 240px; }
-  .board-tools { flex-direction: row; top: auto; bottom: var(--s2); right: var(--s2); }
-  .draft-bar { bottom: 52px; }
+  .moves-panel, .play-live { flex: none; min-height: 0; }
+  .moves { max-height: none; }
+  .play-moves { max-height: none; min-height: 0; }
+  #side-analysis .controls { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; background: var(--panel); border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom); box-shadow: 0 -2px 8px rgba(0, 0, 0, .25); }
+  .ctrl { height: 46px; }
+  .ctrl svg { width: 22px; height: 22px; }
+
+  /* Bigger touch targets in the lists and buttons. */
+  .mv { min-height: 36px; padding-top: 7px; padding-bottom: 7px; }
+  .mv-num { padding-top: 9px; }
+  .link-btn { padding: 10px var(--s3); font-size: 14px; }
+  .side-links { justify-content: center; }
+  .btn { min-height: 38px; }
+  .seg button { min-height: 40px; }
+
+  /* The variant picker as one compact row. */
+  .variant-setup { flex-direction: row; align-items: center; gap: var(--s2); padding: 6px var(--s2); }
+  .model-label { display: none; }
+  .variant-selector { flex: 1; min-width: 0; }
+  .variant-display { padding: 8px 12px; }
+  .variant-group-item, .variant-list-back, .variant-item { padding: 12px; }
+  /* The menu as a sheet above the move controls, rather than under them. */
+  .variant-dropdown { position: fixed; top: auto; left: var(--s2); right: var(--s2); bottom: calc(54px + env(safe-area-inset-bottom)); z-index: 40; max-height: min(70dvh, 520px); box-shadow: 0 -4px 24px rgba(0, 0, 0, .5); }
+  .group-name { min-width: 84px; }
+
+  /* View tools along the top of the board, out of the way of the action bar. */
+  .board-tools { flex-direction: row; top: auto; bottom: var(--s2); right: var(--s2); opacity: .92; }
+  .tool { width: 38px; height: 38px; }
   .coord-chip { display: none; }
+  .draft-bar { top: 26px; bottom: auto; left: var(--s2); right: var(--s2); transform: none; max-width: none; }
+  .draft-actions .btn { min-height: 40px; }
+  .draft-hint:not(.bad) { display: none; }
+  .toast-host { top: auto; bottom: var(--s3); width: calc(100% - 2 * var(--s3)); }
+
+  /* Game browser and rules: their own scroll area under the header. */
+  .browser { grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; height: 100%; overflow-y: auto; padding: var(--s2); }
+  .files { max-height: 34vh; }
+  .files .file-list { overflow-y: auto; }
+  .games-panel { min-height: 60vh; }
+  .filters { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: var(--s1); }
+  .filters > *, .filters .input.num { min-width: 0; width: 100%; max-width: none; }
+  .table-wrap { max-height: none; overflow-x: auto; }
+  table.games th:nth-child(1), table.games td:nth-child(1), table.games th:nth-child(8), table.games td:nth-child(8) { display: none; }
+  table.games { table-layout: auto; }
+  .games th, .games td { padding: 9px 5px; }
+  .games td:nth-child(2), .games .reason { white-space: normal; overflow-wrap: break-word; line-height: 1.3; }
+  .games td:nth-child(2) { min-width: 84px; }
+  .games .reason { max-width: 92px; font-size: 12px; }
+  .rules { padding: 0; }
+  .rules-doc { padding: var(--s2) var(--s4) var(--s5); }
+  .rules-doc h1 { font-size: 22px; }
+
+  /* Dialogs fill the width and scroll inside. */
+  .modal { width: calc(100vw - 2 * var(--s2)); max-height: calc(100dvh - 2 * var(--s3)); overflow-y: auto; }
+  .modal-body { padding: var(--s3); }
+  .modal-actions .btn { flex: 1; }
+  .load-row { flex-wrap: wrap; }
+  .load-row > * { flex: 1 1 100%; }
+}
+
+/* Very small phones (320-360 px): a tighter header. */
+@media (max-width: 360px) {
+  .site-header { padding-left: var(--s2); gap: 2px; }
+  .site-logo { font-size: 16px; }
+  .site-nav a { padding: 0 5px; font-size: 11px; letter-spacing: 0; }
+  #btn-board-theme { display: none; }
+}
+
+/* Phones held sideways: board and panels side by side, with a narrower panel. */
+@media (max-height: 520px) and (orientation: landscape) {
+  :root { --header-h: 40px; --side-w: min(300px, 42vw); }
+  .site-logo .tld, .build, #btn-help { display: none; }
+  .site-nav a { padding: 0 8px; font-size: 12px; }
+  .eval-gauge { display: none !important; }
+  .side { padding: 6px; }
+  .model-label { display: none; }
+  .variant-setup { padding: 6px; }
+  .coord-chip { display: none; }
+  .tool { width: 34px; height: 34px; }
+  .modal { max-height: calc(100dvh - 16px); overflow-y: auto; }
 }
 
 /* ---------------------------------------------------------------- rules page */
@@ -485,4 +582,3 @@ table.games { width: 100%; border-collapse: collapse; font-size: 13px; }
 .rules-table { width: 100%; border-collapse: collapse; margin: var(--s2) 0; font-size: 14px; }
 .rules-table th, .rules-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
 .rules-table th { color: var(--strong); font-weight: 600; }
-@media (max-width: 760px) { .rules { height: auto; overflow: visible; } }

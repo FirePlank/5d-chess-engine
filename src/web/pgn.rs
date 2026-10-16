@@ -1292,15 +1292,7 @@ pub fn action_to_pgn_opts(s: &State, act: &Action, witness: Option<&Action>, opt
     texts.join(" ")
 }
 
-const BUILTIN: [&str; 7] = [
-    "Standard",
-    "Standard - Turn Zero",
-    "Standard - Reversed Royalty",
-    "Standard - Half Reflected",
-    "Standard - Defended Pawn",
-    "Standard - Two Timelines",
-    "Very Small - Open",
-];
+const BUILTIN: [&str; 44] = crate::core::variants::VARIANT_NAMES;
 
 /// Whether two setups have the same boards (promotions aside).
 fn same_boards(a: &VariantSetup, b: &VariantSetup) -> bool {
