@@ -11,6 +11,17 @@ const PIECE_FILES = {
 };
 const GAP_X = 1.7;
 const GAP_Y = 2.4;
+// Boards that an action adds slide in (and boards an undo removes slide out) over this long.
+const ENTER_MS = 240;
+const LEAVE_MS = 180;
+// Larger changes (jumping to another position) just redraw.
+const MAX_ANIMATED = 12;
+// The camera follows on a critically damped spring of this rate (1/s): it eases in and out,
+// settles in about a third of a second, and a new target mid-flight bends its path without a
+// jolt.
+const CAMERA_RATE = 16;
+const easeOut = (p) => 1 - (1 - p) ** 3;
+const easeIn = (p) => p * p * p;
 
 /** Parse a board FEN (rows top to bottom, `*` after unmoved pieces) into a W*H array. */
 export function parseFen(fen, w, h) {
@@ -68,6 +79,11 @@ export class MultiverseView {
     this.flipped = false;
     this.cam = { x: 0, y: 0, s: 40 };
     this.target = null; // camera animation target
+    this.targetMode = 'spring'; // 'spring' (moves to show something) or 'lerp' (wheel zoom)
+    this.vel = { x: 0, y: 0, s: 0 }; // spring velocity; s in log scale
+    this.anims = new Map(); // "l,v" -> {t0, dur, dy, off, alpha}: boards sliding in
+    this.leaving = []; // {b, t0, dur, dy, off, alpha}: boards sliding out
+    this.lastStep = 0;
     this.overlay = { selected: null, targets: [], pv: [], hover: null, readonly: false };
     this.colors = {};
     this.dirty = true;
@@ -79,8 +95,8 @@ export class MultiverseView {
     new ResizeObserver(() => this.resize()).observe(canvas);
     this.bindInput();
     this.resize();
-    const loop = () => {
-      this.step();
+    const loop = (now) => {
+      this.step(now);
       requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
@@ -126,7 +142,12 @@ export class MultiverseView {
   squareCenter(l, v, x, y) {
     const col = this.flipped ? this.bw - 1 - x : x;
     const rw = this.flipped ? y : this.bh - 1 - y;
-    return [this.boardX(v) + col + 0.5, this.boardY(l) + rw + 0.5];
+    return [this.boardX(v) + col + 0.5, this.boardTop(l, v) + rw + 0.5];
+  }
+  /** The top of board (l, v) as drawn: its row, plus its offset while it slides in. */
+  boardTop(l, v) {
+    const a = this.anims.size ? this.anims.get(`${l},${v}`) : null;
+    return this.boardY(l) + (a ? a.off : 0);
   }
   toScreen(wx, wy) { return [(wx - this.cam.x) * this.cam.s + this.w / 2, (wy - this.cam.y) * this.cam.s + this.h / 2]; }
   toWorld(sx, sy) { return [(sx - this.w / 2) / this.cam.s + this.cam.x, (sy - this.h / 2) / this.cam.s + this.cam.y]; }
@@ -200,15 +221,26 @@ export class MultiverseView {
     this.frame(x0 - 1, y0, x1 + 1, y1, animate, 60);
   }
   moveTo(t, animate = true) {
-    if (animate) this.target = t;
-    else { this.cam = { ...t }; this.target = null; }
+    if (animate) {
+      if (this.targetMode !== 'spring') this.vel = { x: 0, y: 0, s: 0 };
+      this.target = t;
+      this.targetMode = 'spring';
+    } else this.stopCamera(t);
     this.redraw();
+  }
+  /** Stop any camera motion (at `at`, if given). */
+  stopCamera(at = null) {
+    if (at) this.cam = { ...at };
+    this.target = null;
+    this.vel = { x: 0, y: 0, s: 0 };
   }
   zoomAt(factor, sx = this.w / 2, sy = this.h / 2) {
     const base = this.target || this.cam;
     const s = Math.max(1.2, Math.min(220, base.s * factor));
     const [wx, wy] = [(sx - this.w / 2) / base.s + base.x, (sy - this.h / 2) / base.s + base.y];
     this.target = { x: wx - (sx - this.w / 2) / s, y: wy - (sy - this.h / 2) / s, s };
+    this.targetMode = 'lerp';
+    this.vel = { x: 0, y: 0, s: 0 };
     this.redraw();
   }
   /**
@@ -238,13 +270,15 @@ export class MultiverseView {
   /** Show a position (a `view` from the rules core). */
   setView(view, { follow = true } = {}) {
     const prev = this.view;
+    const old = this.boards;
     this.view = view;
-    this.boards.clear();
+    this.boards = new Map();
     const [w, h] = view.size;
     for (const [l, t, c, fen] of view.boards) {
       const v = 2 * t + c;
       this.boards.set(`${l},${v}`, { l, t, c, v, squares: parseFen(fen, w, h) });
     }
+    if (prev && prev.size[0] === w && prev.size[1] === h) this.animateBoards(old, prev);
     this.phantom = (view.phantom || []).map(([l, t, c, fen]) => ({ l, t, c, v: 2 * t + c, squares: parseFen(fen, w, h) }));
     this.timelines = new Map(view.timelines.map((tl) => [tl.l, tl]));
     if (!prev || prev.size[0] !== w || prev.size[1] !== h || !this.fitted) {
@@ -253,6 +287,60 @@ export class MultiverseView {
       this.followAction();
     }
     this.redraw();
+  }
+
+  /**
+   * Slide the boards an action added in, and the boards an undo took away out: a board that
+   * continues its timeline drops in from above, the first board of a new timeline comes from
+   * the timeline it branched off.
+   */
+  animateBoards(old, prev) {
+    const added = [...this.boards.keys()].filter((k) => !old.has(k));
+    const removed = [...old.keys()].filter((k) => !this.boards.has(k));
+    if (!added.length && !removed.length) return;
+    if (added.length + removed.length > MAX_ANIMATED) {
+      this.anims.clear();
+      this.leaving = [];
+      return;
+    }
+    const now = performance.now();
+    const rows = (boards) => new Set([...boards.values()].map((b) => b.l));
+    const oldRows = rows(old), newRows = rows(this.boards);
+    // Where a board starts from (or leaves to), relative to its place.
+    const offset = (b, otherRows, branches) => {
+      if (!otherRows.has(b.l)) {
+        const br = (branches || []).find((x) => x[0] === b.l);
+        if (br) return Math.max(-this.py, Math.min(this.py, this.boardY(br[1]) - this.boardY(b.l)));
+      }
+      return -0.5 * this.bh;
+    };
+    this.leaving = this.leaving.filter((a) => !this.boards.has(`${a.b.l},${a.b.v}`));
+    for (const k of added) {
+      const b = this.boards.get(k);
+      this.anims.set(k, { t0: now, dur: ENTER_MS, dy: offset(b, oldRows, this.view.branches), off: 0, alpha: 0 });
+    }
+    for (const k of removed) {
+      this.anims.delete(k);
+      const b = old.get(k);
+      this.leaving.push({ b, t0: now, dur: LEAVE_MS, dy: offset(b, newRows, prev.branches), off: 0, alpha: 1 });
+    }
+    this.tickBoards(now);
+  }
+
+  /** Advance the board animations to `now`. */
+  tickBoards(now) {
+    for (const [k, a] of this.anims) {
+      const p = Math.min(1, (now - a.t0) / a.dur);
+      if (p >= 1) { this.anims.delete(k); continue; }
+      a.off = a.dy * (1 - easeOut(p));
+      a.alpha = Math.min(1, easeOut(p) * 1.4);
+    }
+    this.leaving = this.leaving.filter((a) => {
+      const p = Math.min(1, (now - a.t0) / a.dur);
+      a.off = a.dy * easeIn(p);
+      a.alpha = 1 - easeOut(p);
+      return p < 1;
+    });
   }
 
   /** Keep the boards the last action touched in view. */
@@ -292,7 +380,7 @@ export class MultiverseView {
       this.pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
       if (this.pointers.size === 1) {
         down = { x: e.offsetX, y: e.offsetY, cam: { ...this.cam }, moved: false, button: e.button };
-        this.target = null;
+        this.stopCamera();
       } else if (this.pointers.size === 2) {
         const [a, b] = [...this.pointers.values()];
         pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), cam: { ...this.cam }, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
@@ -393,16 +481,36 @@ export class MultiverseView {
   }
 
   // ---------------------------------------------------------------- drawing
-  step() {
+  step(now = performance.now()) {
+    const dt = Math.min(0.05, Math.max(0, (now - (this.lastStep || now)) / 1000));
+    this.lastStep = now;
     if (this.target) {
-      const t = this.target, c = this.cam;
-      const k = 0.2;
-      const ls = Math.log(c.s) + (Math.log(t.s) - Math.log(c.s)) * k;
-      this.cam = { x: c.x + (t.x - c.x) * k, y: c.y + (t.y - c.y) * k, s: Math.exp(ls) };
-      if (Math.abs(t.x - this.cam.x) * this.cam.s < 0.3 && Math.abs(t.y - this.cam.y) * this.cam.s < 0.3 && Math.abs(t.s - this.cam.s) < 0.01) {
-        this.cam = { ...t };
-        this.target = null;
+      const t = this.target;
+      if (this.targetMode === 'lerp') {
+        const k = 1 - Math.exp(-14 * dt);
+        const c = this.cam;
+        const ls = Math.log(c.s) + (Math.log(t.s) - Math.log(c.s)) * k;
+        this.cam = { x: c.x + (t.x - c.x) * k, y: c.y + (t.y - c.y) * k, s: Math.exp(ls) };
+      } else {
+        // A critically damped spring, in small steps so that it stays stable on slow frames.
+        const w = CAMERA_RATE, vel = this.vel, lt = Math.log(t.s);
+        let { x, y } = this.cam, ls = Math.log(this.cam.s);
+        for (let left = dt; left > 1e-6; left -= 1 / 240) {
+          const h = Math.min(left, 1 / 240);
+          vel.x += (w * w * (t.x - x) - 2 * w * vel.x) * h;
+          vel.y += (w * w * (t.y - y) - 2 * w * vel.y) * h;
+          vel.s += (w * w * (lt - ls) - 2 * w * vel.s) * h;
+          x += vel.x * h; y += vel.y * h; ls += vel.s * h;
+        }
+        this.cam = { x, y, s: Math.exp(ls) };
       }
+      const c = this.cam, v = this.vel;
+      const slow = Math.hypot(v.x, v.y) * c.s < 6 && Math.abs(v.s) < 0.02;
+      if (slow && Math.abs(t.x - c.x) * c.s < 0.3 && Math.abs(t.y - c.y) * c.s < 0.3 && Math.abs(t.s - c.s) < 0.01) this.stopCamera(t);
+      this.dirty = true;
+    }
+    if (this.anims.size || this.leaving.length) {
+      this.tickBoards(now);
       this.dirty = true;
     }
     if (this.dirty) {
@@ -482,14 +590,18 @@ export class MultiverseView {
       const by = this.boardY(b.l);
       if (by > vy1 || by + this.bh < vy0) continue;
       const tl = this.timelines.get(b.l);
-      visible.push([b, tl && !tl.active ? C.inactive : 1, tl, false]);
+      const a = this.anims.size ? this.anims.get(`${b.l},${b.v}`) : null;
+      visible.push([b, (tl && !tl.active ? C.inactive : 1) * (a ? a.alpha : 1), tl, false]);
+    }
+    for (const a of this.leaving) {
+      if (a.b.v >= vMin && a.b.v <= vMax) visible.push([a.b, a.alpha, null, false, a.off]);
     }
     for (const b of this.phantom) {
       if (b.v >= vMin && b.v <= vMax) visible.push([b, 0.35, null, true]);
     }
-    for (const [b, alpha, tl, phantom] of visible) this.drawBoard(b, alpha, s, tl, phantom);
+    for (const [b, alpha, tl, phantom, off] of visible) this.drawBoard(b, alpha, s, tl, phantom, off);
     this.drawHighlights();
-    for (const [b, alpha] of visible) this.drawPieces(b, alpha, s);
+    for (const [b, alpha, , , off] of visible) this.drawPieces(b, alpha, s, off);
     this.drawTargets();
     this.drawArrows(s);
 
@@ -497,9 +609,9 @@ export class MultiverseView {
     this.drawLabels(vMin, vMax, lMin, lMax);
   }
 
-  drawBoard(b, alpha, s, tl, phantom = false) {
+  drawBoard(b, alpha, s, tl, phantom = false, off = null) {
     const { ctx, colors: C, bw, bh } = this;
-    const x0 = this.boardX(b.v), y0 = this.boardY(b.l);
+    const x0 = this.boardX(b.v), y0 = off == null ? this.boardTop(b.l, b.v) : this.boardY(b.l) + off;
     const px1 = 1 / s;
     ctx.globalAlpha = alpha;
     // Frame colour: whose move it is on that board (White light, Black dark).
@@ -536,9 +648,9 @@ export class MultiverseView {
     ctx.globalAlpha = 1;
   }
 
-  drawPieces(b, alpha, s) {
+  drawPieces(b, alpha, s, off = null) {
     const { ctx, bw, bh } = this;
-    const x0 = this.boardX(b.v), y0 = this.boardY(b.l);
+    const x0 = this.boardX(b.v), y0 = off == null ? this.boardTop(b.l, b.v) : this.boardY(b.l) + off;
     ctx.globalAlpha = alpha;
     if (s >= 4) {
       for (let y = 0; y < bh; y++) {
@@ -576,8 +688,11 @@ export class MultiverseView {
     const fill = (l, vv, x, y, color) => {
       if (!this.boards.has(`${l},${vv}`)) return;
       const [x0, y0] = this.squareRect(l, vv, x, y);
+      const a = this.anims.size ? this.anims.get(`${l},${vv}`) : null;
+      ctx.globalAlpha = a ? a.alpha : 1;
       ctx.fillStyle = color;
       ctx.fillRect(x0, y0, 1, 1);
+      ctx.globalAlpha = 1;
     };
     // The last action: origin and destination, on the boards before and after it.
     for (const m of v.last || []) {
