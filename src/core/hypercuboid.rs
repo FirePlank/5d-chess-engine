@@ -134,54 +134,161 @@ struct BuildScratch {
     ml: MoveList,
     /// Departure coordinate of each source square, per axis.
     jump_tab: Vec<[Index; 64]>,
-    /// (build stamp, per-board royal safety table).
-    safety: (u32, Vec<(u32, bool, bool, RoyalSafety)>),
+    /// (build stamp, per-board facts lookups: see `SafetyMemo`).
+    safety: (u32, Vec<(u32, u32, u32)>),
     /// Per arrival (in `arrivals` order): whether its result is safe for the mover.
     arrival_ok: Vec<u8>,
     group_slots: GroupSlots,
 }
 
-/// Royal safety of the mover's boards, memoized by (line, turn) for one build (entries
-/// stamped with it).
+/// What builds learn about one board as seen by one player (the defender), all of it
+/// depending on the board and the defender only, so it is kept per thread by board key and
+/// reused by every later build that looks at the same board: whether one of its royals is
+/// attacked there and which of its pieces are pinned to one, and per square whether a piece
+/// of its own leaving it (`dep_known` / `dep_safe`) or arriving there (`known` / `safe`,
+/// indexed by the arriving piece's royalty: an arrival only puts an own piece on its
+/// square) leaves its royals unattacked.
+struct BoardFacts {
+    board: Board,
+    defender: bool,
+    /// Fill count of the cache when this slot was last filled.
+    fill: u32,
+    in_check: bool,
+    pinned: Option<Bitboard>,
+    dep_known: Bitboard,
+    dep_safe: Bitboard,
+    known: [Bitboard; 2],
+    safe: [Bitboard; 2],
+}
+
+#[derive(Default)]
+struct FactsCache {
+    /// `FACTS_SLOTS` slots, by board key.
+    slots: Vec<Option<BoardFacts>>,
+    fills: u32,
+}
+
+const FACTS_SLOTS: usize = 1024;
+
+thread_local! {
+    static FACTS_CACHE: std::cell::RefCell<FactsCache> = std::cell::RefCell::new(FactsCache::default());
+}
+
+impl FactsCache {
+    /// The facts of board `b` (whose `board_key` is `key`) for `defender`: (slot, facts).
+    #[inline]
+    fn lookup(&mut self, b: &Board, key: u64, defender: bool) -> (usize, &mut BoardFacts) {
+        if self.slots.is_empty() {
+            self.slots.resize_with(FACTS_SLOTS, || None);
+        }
+        let i = key as usize % FACTS_SLOTS;
+        let fills = &mut self.fills;
+        let slot = &mut self.slots[i];
+        match slot {
+            Some(f) if f.defender == defender && f.board == *b => {}
+            _ => {
+                *fills = fills.wrapping_add(1);
+                *slot = Some(BoardFacts {
+                    board: *b,
+                    defender,
+                    fill: *fills,
+                    in_check: has_physical_check(b, defender),
+                    pinned: None,
+                    dep_known: 0,
+                    dep_safe: 0,
+                    known: [0; 2],
+                    safe: [0; 2],
+                });
+            }
+        }
+        (i, slot.as_mut().unwrap())
+    }
+}
+
+/// The facts of the mover's boards, looked up once per build by (line, turn) (entries
+/// stamped with the build).
 struct SafetyMemo<'a> {
     s: &'a State,
     player: bool,
     lines_lo: i32,
     nt: usize,
     stamp: u32,
-    /// (stamp, in-check known, pins known, safety).
-    tab: &'a mut Vec<(u32, bool, bool, RoyalSafety)>,
+    /// (stamp, `FactsCache` slot, its fill count when looked up): a slot refilled since is
+    /// looked up again.
+    tab: &'a mut Vec<(u32, u32, u32)>,
+    facts: &'a mut FactsCache,
 }
 
 impl SafetyMemo<'_> {
+    /// The facts of the mover's board (l, t).
     #[inline]
-    fn slot(&mut self, l: i32, t: i32) -> &mut (u32, bool, bool, RoyalSafety) {
-        let e = &mut self.tab[(l - self.lines_lo) as usize * self.nt + t as usize];
-        if e.0 != self.stamp {
-            *e = (self.stamp, false, false, RoyalSafety { in_check: false, pinned: 0 });
-        }
-        e
-    }
-    /// Whether a royal of the mover is attacked on its board (l, t).
-    #[inline]
-    fn in_check(&mut self, l: i32, t: i32) -> bool {
+    fn facts(&mut self, l: i32, t: i32) -> &mut BoardFacts {
         let (s, player) = (self.s, self.player);
-        let e = self.slot(l, t);
-        if !e.1 {
-            e.1 = true;
-            e.3.in_check = has_physical_check(s.board(l, t, player), player);
+        let e = &mut self.tab[(l - self.lines_lo) as usize * self.nt + t as usize];
+        if e.0 == self.stamp && matches!(&self.facts.slots[e.1 as usize], Some(f) if f.fill == e.2) {
+            return self.facts.slots[e.1 as usize].as_mut().unwrap();
         }
-        e.3.in_check
+        let (i, f) = self.facts.lookup(s.board(l, t, player), s.multiverse().key_of(l, t, player), player);
+        *e = (self.stamp, i as u32, f.fill);
+        f
     }
+    /// Royal safety of the mover's board (l, t).
     #[inline]
     fn get(&mut self, l: i32, t: i32) -> RoyalSafety {
-        let (s, player) = (self.s, self.player);
-        let e = self.slot(l, t);
-        if !e.2 {
-            (e.1, e.2) = (true, true);
-            e.3 = s.board(l, t, player).royal_safety(player);
+        let player = self.player;
+        let f = self.facts(l, t);
+        let pinned = *f.pinned.get_or_insert_with(|| f.board.royal_safety(player).pinned);
+        RoyalSafety { in_check: f.in_check, pinned }
+    }
+    /// Whether the mover's piece on `p` (its timeline's last board) leaving it leaves its
+    /// royals there unattacked.
+    #[inline]
+    fn departure_safe(&mut self, p: Vec4) -> bool {
+        let player = self.player;
+        let rs = self.get(p.l(), p.t());
+        let f = self.facts(p.l(), p.t());
+        let z = pmask(p.xy());
+        // Only a royal, a pinned piece or a board already in check can expose a royal.
+        if !rs.in_check && (f.board.royal() | rs.pinned) & z == 0 {
+            return true;
         }
-        e.3
+        if f.dep_known & z == 0 {
+            let mut nb = f.board;
+            nb.clear_square(p.xy());
+            f.dep_known |= z;
+            if !has_physical_check(&nb, player) {
+                f.dep_safe |= z;
+            }
+        }
+        f.dep_safe & z != 0
+    }
+    /// Whether a piece of the mover arriving with the jump `m` (royal or not) leaves its
+    /// royals unattacked.
+    #[inline]
+    fn arrival_safe(&mut self, m: FullMove, royal: bool) -> bool {
+        let s = self.s;
+        let player = self.player;
+        let q = m.to;
+        let f = self.facts(q.l(), q.t());
+        if !f.in_check && !royal {
+            return true;
+        }
+        let z = pmask(q.xy());
+        let r = royal as usize;
+        if f.known[r] & z == 0 {
+            let ok = if f.in_check {
+                !has_physical_check(&arrival_board(s, m), player)
+            } else {
+                // The target's own royals stay covered (the destination stays occupied):
+                // only the arriving royal can be attacked.
+                !f.board.is_under_attack(q.xy(), player)
+            };
+            f.known[r] |= z;
+            if ok {
+                f.safe[r] |= z;
+            }
+        }
+        f.safe[r] & z != 0
     }
 }
 
@@ -478,7 +585,7 @@ impl HcInfo {
         let nt = (lines_lo..=lines_hi).map(|l| s.get_timeline_end(l).0).max().unwrap_or(0) as usize + 1;
         let need = (lines_hi - lines_lo + 1) as usize * nt;
         if safety.1.len() < need {
-            safety.1.resize(need, (0, false, false, RoyalSafety { in_check: false, pinned: 0 }));
+            safety.1.resize(need, (0, 0, 0));
         }
         safety.0 = safety.0.wrapping_add(1);
         if safety.0 == 0 {
@@ -486,7 +593,8 @@ impl HcInfo {
             safety.0 = 1;
         }
         let stamp = safety.0;
-        let mut memo = SafetyMemo { s, player, lines_lo, nt, stamp, tab: &mut safety.1 };
+        let mut facts = FACTS_CACHE.with(|c| std::mem::take(&mut *c.borrow_mut()));
+        let mut memo = SafetyMemo { s, player, lines_lo, nt, stamp, tab: &mut safety.1, facts: &mut facts };
         drop(st_scope);
         let gen_scope = crate::misc::prof::scope(1);
         // Every piece's moves: the physical ones become entries at once (those that leave no
@@ -603,17 +711,7 @@ impl HcInfo {
         arrival_ok.resize(arrivals.len(), 0);
         let arrival_safe = |k: usize, m: FullMove, royal: bool, arrival_ok: &mut [u8], memo: &mut SafetyMemo| -> bool {
             if arrival_ok[k] == 0 {
-                let q = m.to;
-                let ok = if memo.in_check(q.l(), q.t()) {
-                    !has_physical_check(&arrival_board(s, m), player)
-                } else if royal {
-                    // The target's own royals stay covered (the destination stays occupied):
-                    // only the arriving royal can be attacked.
-                    !s.board(q.l(), q.t(), player).is_under_attack(q.xy(), player)
-                } else {
-                    true
-                };
-                arrival_ok[k] = if ok { 1 } else { 2 };
+                arrival_ok[k] = if memo.arrival_safe(m, royal) { 1 } else { 2 };
             }
             arrival_ok[k] == 1
         };
@@ -627,15 +725,11 @@ impl HcInfo {
             let hi = arrivals.partition_point(|a| a.0 <= l);
             let locs = &mut axis_coords[axis];
             let (end_t, end_c) = s.get_timeline_end(l);
-            let rs = memo.get(l, end_t);
             for &p in &departures[axis] {
                 let idx = locs.len() as Index;
-                let source = s.board(p.l(), p.t(), player);
-                let mut nb = *source;
-                nb.clear_square(p.xy());
-                let z = pmask(p.xy());
-                let needs_test = rs.in_check || (source.royal() | rs.pinned) & z != 0;
-                if !needs_test || !has_physical_check(&nb, player) {
+                if memo.departure_safe(p) {
+                    let mut nb = *s.board(p.l(), p.t(), player);
+                    nb.clear_square(p.xy());
                     locs.push(Entry::Departing { from: p, b: nb });
                     jump_tab[axis][p.xy() as usize] = idx;
                 }
@@ -705,11 +799,12 @@ impl HcInfo {
         if dimension > 0
             && (lines_lo..=lines_hi).any(|l| {
                 let (t, c) = s.get_timeline_end(l);
-                c != player && has_physical_check(s.board(l, t, c), player)
+                c != player && facts.lookup(s.board(l, t, c), s.multiverse().key_of(l, t, c), player).1.in_check
             })
         {
             universe[0].clear();
         }
+        FACTS_CACHE.with(|c| *c.borrow_mut() = facts);
         let mut hc_n_lines = universe.clone();
         let mut non_null = IntegerSet::new();
         if np < dimension {
