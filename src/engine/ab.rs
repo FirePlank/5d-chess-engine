@@ -49,18 +49,6 @@ const ROOT_LMR_MIN_INDEX: usize = 6;
 const ROOT_FUTURE_MATE_PROBE: usize = 16;
 /// Time for that probe without a time plan (with one: a 32nd of the optimum).
 const ROOT_FUTURE_MATE_MS: u64 = 50;
-/// Aspiration windows (Apeiron's scheme): from depth ASP_MIN_DEPTH, after a completed depth
-/// with a non-mate score `prev`, the root is searched in [prev - w, prev + w], w starting at
-/// ASP_WINDOW; a fail low or high multiplies w by ASP_FAIL_MULT and moves that bound to
-/// prev -+ w (always around `prev`); once w passes ASP_MAX_WINDOW or after ASP_MAX_TRIES
-/// tries, one full-window search. ASP_WINDOW puts about 75-80% of depth-to-depth score
-/// changes inside the first window (bench positions, depth 4 on); the maximum is Apeiron's
-/// 1000/60 of it.
-const ASP_MIN_DEPTH: i32 = 2;
-const ASP_WINDOW: i32 = 1500;
-const ASP_FAIL_MULT: i32 = 4;
-const ASP_MAX_WINDOW: i32 = ASP_WINDOW * 1000 / 60;
-const ASP_MAX_TRIES: i32 = 4;
 
 /// Late move reduction for the `index`-th action at `depth`: 1 + ln(depth) ln(index) / 3.
 #[inline]
@@ -2061,101 +2049,42 @@ impl AlphaBeta {
             let prev_best = best.clone();
             // seekMate bar: 3000 + 100000 / depth^2 (Stockfish's form, in our units).
             self.seek_mate = depth > 1 && best_score.abs() >= 3000 + 100_000 / (depth * depth);
-            // Aspiration window around the last completed depth's score (see ASP_WINDOW).
-            let prev_score = best_score;
-            let aspire = depth >= ASP_MIN_DEPTH && completed_depth > 0 && prev_score.abs() < MATE - 1000;
-            let mut window = ASP_WINDOW;
-            let (mut lo, mut hi) = if aspire { (prev_score - window, prev_score + window) } else { (-INF, INF) };
-            let mut tries = 0;
-            // The action and line of the last fail high: kept if the re-search is interrupted
-            // before it has a best of its own.
-            let mut fail_high: Option<(MoveSeq, Vec<MoveSeq>)> = None;
-            let mut iter_best: Option<(i32, MoveSeq, bool)>;
-            let mut iter_pv: Vec<MoveSeq>;
-            let mut all_proven;
-            let mut scores: Vec<i32>;
-            loop {
-                let mut alpha = lo;
-                let beta = hi;
-                iter_best = None;
-                iter_pv = Vec::new();
-                all_proven = roots_complete;
-                scores = Vec::with_capacity(roots.len());
-                let mut top = -INF;
-                for (k, (_, act)) in roots.iter().enumerate() {
-                    let mark = Self::make(&mut work, act);
-                    let v = if k == 0 {
-                        -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true)
-                    } else {
-                        // Late root actions are reduced, never pruned.
-                        let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(self.in_check(&work)) } else { None };
-                        let r = if child_check == Some(false) { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
-                        self.known_check = child_check;
-                        let mut v = -self.negamax(&mut work, depth - 1 - r, 1, -alpha - 1, -alpha, false);
-                        if !self.aborted && v > alpha && r > 0 {
-                            self.known_check = child_check;
-                            v = -self.negamax(&mut work, depth - 1, 1, -alpha - 1, -alpha, false);
-                        }
-                        if !self.aborted && v > alpha {
-                            self.known_check = child_check;
-                            v = -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true);
-                        }
-                        v
-                    };
-                    work.unmake(mark);
-                    if self.aborted {
-                        break;
-                    }
-                    scores.push(v);
-                    all_proven &= self.proven;
-                    top = top.max(v);
-                    if v > alpha {
-                        alpha = v;
-                        iter_best = Some((v, act.clone(), self.proven));
-                        iter_pv = self.root_pv(act);
-                        if v >= beta {
-                            break; // Fail high.
-                        }
-                    }
-                }
-                tries += 1;
-                if self.aborted || (lo == -INF && hi == INF) {
-                    break;
-                }
-                if top <= lo {
-                    window *= ASP_FAIL_MULT;
-                    lo = (prev_score - window).max(-INF);
-                    // Nothing reached the last depth's score: an earlier fail high is stale.
-                    fail_high = None;
-                } else if top >= hi {
-                    window *= ASP_FAIL_MULT;
-                    hi = (prev_score + window).min(INF);
-                    // The action that failed high is searched first again.
-                    let (_, act, _) = iter_best.take().expect("a fail high has a best action");
-                    if let Some(i) = roots.iter().position(|r| r.1 == act) {
-                        roots[..=i].rotate_right(1);
-                    }
-                    fail_high = Some((act, std::mem::take(&mut iter_pv)));
+            let mut alpha = -INF;
+            let beta = INF;
+            let mut iter_best: Option<(i32, MoveSeq, bool)> = None;
+            let mut iter_pv: Vec<MoveSeq> = Vec::new();
+            let mut all_proven = roots_complete;
+            let mut scores: Vec<i32> = Vec::with_capacity(roots.len());
+            for (k, (_, act)) in roots.iter().enumerate() {
+                let mark = Self::make(&mut work, act);
+                let v = if k == 0 {
+                    -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true)
                 } else {
+                    // Late root actions are reduced, never pruned.
+                    let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(self.in_check(&work)) } else { None };
+                    let r = if child_check == Some(false) { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
+                    self.known_check = child_check;
+                    let mut v = -self.negamax(&mut work, depth - 1 - r, 1, -alpha - 1, -alpha, false);
+                    if !self.aborted && v > alpha && r > 0 {
+                        self.known_check = child_check;
+                        v = -self.negamax(&mut work, depth - 1, 1, -alpha - 1, -alpha, false);
+                    }
+                    if !self.aborted && v > alpha {
+                        self.known_check = child_check;
+                        v = -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true);
+                    }
+                    v
+                };
+                work.unmake(mark);
+                if self.aborted {
                     break;
                 }
-                if window > ASP_MAX_WINDOW || tries >= ASP_MAX_TRIES {
-                    (lo, hi) = (-INF, INF);
-                }
-            }
-            if self.aborted {
-                // An interrupted try's fail high is only a bound.
-                if iter_best.as_ref().is_some_and(|b| b.0 >= hi) {
-                    let (_, act, _) = iter_best.take().expect("checked");
-                    fail_high = Some((act, std::mem::take(&mut iter_pv)));
-                }
-                // With no best of its own, the interrupted re-search keeps the action that failed
-                // high; its score (a bound) is not taken: the last completed depth's stands.
-                if let Some((act, pv)) = fail_high.take().filter(|_| iter_best.is_none()) {
-                    if best_pv.first() != Some(&act) {
-                        best_pv = pv;
-                    }
-                    best = act;
+                scores.push(v);
+                all_proven &= self.proven;
+                if v > alpha {
+                    alpha = v;
+                    iter_best = Some((v, act.clone(), self.proven));
+                    iter_pv = self.root_pv(act);
                 }
             }
             // A partially searched iteration still improves on the previous best, except that a
