@@ -118,6 +118,7 @@
             <p class="setting-note" id="set-note"></p>
           </div>
           <div class="ceval-lines" id="engine-lines"></div>
+          <div class="book-hint hidden" id="book-hint"></div>
         </div>
 
         <div class="panel moves-panel">
@@ -171,6 +172,10 @@
                 <button type="button" data-base="900" data-inc="10">15+10</button>
                 <button type="button" data-base="0" data-inc="0" data-movetime="3000">Untimed</button>
               </div>
+            </div>
+            <div class="field book-row" title="In positions of the opening theory Kairos knows (the T0 Openings Guide and the f7-sac guide), play a theory move at once instead of searching">
+              <label class="switch"><input type="checkbox" id="play-book" checked aria-label="Opening book"><span></span></label>
+              <span>Opening book</span>
             </div>
             <button class="btn primary block" type="submit" id="play-start">Start game</button>
             <p class="fine">One player at a time; others can watch the game live.</p>

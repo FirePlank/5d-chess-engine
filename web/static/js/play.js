@@ -53,6 +53,9 @@ export class Play {
       if (tcSaved) b.classList.toggle('on', b.textContent === tcSaved);
       b.onclick = () => { $$('#play-tc button').forEach((x) => x.classList.toggle('on', x === b)); store('play.tc', b.textContent); };
     });
+    // The opening book (book positions answered from theory at once): on unless turned off.
+    $('#play-book').checked = store('play.book') !== false;
+    $('#play-book').onchange = () => store('play.book', $('#play-book').checked);
     $('#play-form').onsubmit = (e) => { e.preventDefault(); this.start(); };
     $('#play-variant').onchange = () => { store('play.variant', $('#play-variant').value); this.preview(); };
     $('#play-resign').onclick = async () => {
@@ -165,6 +168,7 @@ export class Play {
       color: this.color === 'r' ? 'random' : this.color,
       clock: base ? { base: base * 1000, inc: inc * 1000 } : null,
       movetime: +(tc.dataset.movetime || 2000),
+      book: $('#play-book').checked,
     };
     this.wantSetup = false;
     this.post('start', body).then(() => {
@@ -305,7 +309,7 @@ export class Play {
       else status = 'Kairos is thinking…';
       $('#play-status').textContent = status;
       $('#play-status').classList.toggle('yours', !g.over && mine && g.toMove === human);
-      if (!g.thinking) $('#play-thinking').textContent = g.over ? '' : (g.clock ? `${g.clock.base / 60000}+${g.clock.inc / 1000}` : `untimed · ${g.movetime / 1000} s per action`) + ` · ${g.variant}`;
+      if (!g.thinking) $('#play-thinking').textContent = g.over ? '' : (g.clock ? `${g.clock.base / 60000}+${g.clock.inc / 1000}` : `untimed · ${g.movetime / 1000} s per action`) + ` · ${g.variant}` + (g.book === false ? ' · no book' : '');
       $('#play-resign').classList.toggle('hidden', !mine || !!g.over);
       $('#play-new').classList.toggle('hidden', !mine || !g.over);
       this.tickClocks();

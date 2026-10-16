@@ -222,6 +222,33 @@ export class Analysis {
     this.renderNav();
     this.renderGraph();
     this.renderEngine();
+    this.renderBook();
+  }
+
+  /**
+   * The opening book's actions for this position, as a hint (the engine still searches):
+   * theory moves to play, and struck through, known moves that are not recommended.
+   */
+  renderBook() {
+    const box = $('#book-hint');
+    let moves = [];
+    try { moves = this.rules.call({ cmd: 'book', node: this.cur }).moves; } catch (e) { moves = []; }
+    box.classList.toggle('hidden', !moves.length);
+    box.replaceChildren(...(moves.length ? [el('span', { class: 'book-label', text: 'Book' })] : []), ...moves.map((m) => {
+      const title = m.play ? `Opening theory (weight ${m.weight})` : 'Known theory, not recommended';
+      const span = el('span', { class: 'book-move' + (m.play ? '' : ' know'), title, text: m.pgn });
+      span.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        try {
+          const r = this.rules.call({ cmd: 'play', node: this.cur, lan: m.lan });
+          this.tree = r.tree;
+          this.goto(r.node);
+        } catch (err) {
+          toast(err.message, { error: true });
+        }
+      });
+      return span;
+    }));
   }
 
   onView(v, draft) {

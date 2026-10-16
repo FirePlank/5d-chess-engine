@@ -771,6 +771,24 @@ fn main() {
             writeln!(out, "hcverify positions {} (complete sets {}) actions {} mismatches {} with repeated actions {}", positions, complete, actions, bad, repeating)
                 .unwrap();
         }
+        "bookgen" => {
+            // bookgen [source] : the opening book file (data/book_theory.txt) from its annotated
+            // 5dpgn source.
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or("data/book_theory_src.txt");
+            let src = std::fs::read_to_string(path).expect("book source");
+            match kairos::engine::book::generate(&src) {
+                Ok(text) => {
+                    write!(out, "{}", text).unwrap();
+                    let b = kairos::engine::book::Book::parse(&text).expect("generated book parses");
+                    let (p, m) = b.size();
+                    eprintln!("book: {} positions, {} actions", p, m);
+                }
+                Err(e) => {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
         "pgn2g" => {
             // pgn2g [all] <file.5dpgn>... : the "G" line of each game's main-line end ("all":
             // of every position along the main line).
@@ -1005,6 +1023,7 @@ fn main() {
                  bench [file]            perft oracle\n  \
                  abbench [file] [depth]  alpha-beta node oracle (AB_NODES caps nodes per position)\n  \
                  puzzles [file] [ms]     time to find each mate in data/puzzles.g
+                   bookgen [src]           build data/book_theory.txt from its source
                    blunders <games.jsonl> [n] | materank <games.jsonl> [n] | depthstat <games.jsonl> [ms] | rootgen [file]
                    overrunpos <file.g>... [threads=1,4] [ms=100,1000] [clock=2000+100,30000+300]   worst time overrun
                    firstact [file.g] [cap ms]   time to the first legal action by enumeration strategy"
