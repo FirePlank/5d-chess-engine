@@ -4,13 +4,13 @@
 # bound, and saves games + Final Summary under games/sprt. Record the verdict afterwards with
 # scripts/sprt_done.sh.
 #   scripts/sprt_run.sh <name> <base-sha> <patch-file|-> <games> [tc] [elo0] [elo1]
-#   tc: "movetime 100" | "nodes 20000" | "depth 4"
+#   tc: "tc 10+0.1" (default) | "movetime 100" | "nodes 20000" | "depth 4"
 #   Env: SHARDS (default 40), NEW_ARGS / OLD_ARGS (extra engine args, default none),
 #        BASE (self | cpp:<engine>, e.g. cpp:zero-capture-check-pw), MIN_GAMES, RUN_ID,
 #        OLD_SHA (build the old engine from this commit instead of <base-sha>, e.g. to
 #        measure main against an earlier version; use with patch "-").
 set -euo pipefail
-NAME=$1 BASE_SHA=$2 PATCH=$3 GAMES=$4 TC=${5:-movetime 100} E0=${6:-0} E1=${7:-5}
+NAME=$1 BASE_SHA=$2 PATCH=$3 GAMES=$4 TC=${5:-tc 10+0.1} E0=${6:-0} E1=${7:-5}
 R=$(git rev-parse --show-toplevel); W="$R/../5d-sprt-branch"
 [ "$PATCH" = "-" ] || PATCH=$(realpath "$PATCH")
 mkdir -p "$R/games/sprt"
@@ -86,9 +86,23 @@ while :; do
   fi
   tick=$((tick + 1)); sleep 10
 done
+# A run whose setup failed (build error, null test, bad config) played no games: stop here
+# instead of waiting for shard artifacts that will never exist.
+SETUP=$(ghr gh api "repos/$REPO/actions/runs/$ID/jobs?per_page=100" -q '[.jobs[] | select(.name | startswith("play") | not)] | map(.conclusion) | join(",")')
+if grep -qE 'failure|timed_out|startup_failure' <<< "$SETUP"; then
+  echo "ERROR: run $ID setup failed ($SETUP):" >&2
+  gh run view "$ID" --log-failed 2> /dev/null | grep -E '##\[error\]' | head -5 >&2
+  exit 2
+fi
 T="$R/games/sprt/.remote_${NAME}_$$"; rm -rf "$T"
+tries=0
 until timeout 600 gh run download "$ID" -p "shard-*" -D "$T"; do
-  echo "shard download failed; retrying in 30s" >&2; rm -rf "$T"; sleep 30
+  rm -rf "$T"; tries=$((tries + 1))
+  if [ $tries -ge 10 ]; then
+    echo "ERROR: no shard artifacts for run $ID after $tries attempts" >&2
+    exit 2
+  fi
+  echo "shard download failed; retrying in 30s" >&2; sleep 30
 done
 python "$R/scripts/sprt_merge.py" --label "$NAME" --old "${OLD_SHA:-$BASE_SHA}" --elo0 "$E0" --elo1 "$E1" \
   --out "$R/games/sprt/games_${NAME}.jsonl" "$T"/shard-*/shard_*.jsonl \
