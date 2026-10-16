@@ -83,16 +83,16 @@ fn threaded_searches_report_only_proven_mates() {
 #[test]
 fn reported_scale() {
     // +100 reported is about a 75% expected score, +200 about 90%, +400 about 99%.
-    assert_eq!(report_cp(275), 100);
-    assert_eq!(report_cp(-550), -200);
-    assert_eq!(internal_cp(100), 275);
-    assert_eq!(wdl(275), (750, 0, 250));
-    assert_eq!(wdl(550).0, 900);
-    assert_eq!(wdl(1100).0, 988);
+    assert_eq!(report_cp(3000), 100);
+    assert_eq!(report_cp(-6000), -200);
+    assert_eq!(internal_cp(100), 3000);
+    assert_eq!(wdl(3000), (752, 0, 248));
+    assert_eq!(wdl(6000).0, 902);
+    assert_eq!(wdl(12000).0, 988);
     assert_eq!(wdl(0), (500, 0, 500));
     assert_eq!(score_text(MATE - 5, true), "mate 3 wdl 1000 0 0");
     assert_eq!(score_text(-(MATE - 4), true), "mate -2 wdl 0 0 1000");
     assert_eq!(score_text(MATE - 5, false), format!("cp {} wdl 1000 0 0", report_cp(MATE - 1000)));
     assert_eq!(score_text(-(MATE - 4), false), format!("cp {} wdl 0 0 1000", report_cp(-(MATE - 1000))));
-    assert_eq!(score_text(142, false), "cp 52 wdl 638 0 362");
+    assert_eq!(score_text(142, false), "cp 5 wdl 513 0 487");
 }

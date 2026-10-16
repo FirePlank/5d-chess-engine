@@ -6,12 +6,13 @@ pub mod time;
 pub mod uci;
 
 /// Reported scores. Internally a pawn is about 142 and a queen 1250, and an evaluation `s`
-/// stands for an expected score of 1 / (1 + exp(-WDL_K * s)) (the logistic the evaluation is
-/// tuned against). `info ... score cp X` reports X = s * 100 / REPORT_SCALE, so that +100 is
-/// about a 75% expected score, +200 about 90% and +400 about 99%.
-pub const REPORT_SCALE: i32 = 275;
-/// Slope of the evaluation's win-probability logistic, per internal unit.
-pub const WDL_K: f64 = 0.004;
+/// stands for an expected score of about 1 / (1 + exp(-WDL_K * s)): the logistic fitted to game
+/// results for search scores (static evaluations are flatter still, about 1/4300). `info ...
+/// score cp X` reports X = s * 100 / REPORT_SCALE, so that +100 is about a 75% expected score,
+/// +200 about 90% and +400 about 99%.
+pub const REPORT_SCALE: i32 = 3000;
+/// Slope of the win-probability logistic of search scores, per internal unit.
+pub const WDL_K: f64 = 1.0 / 2700.0;
 
 /// Internal score to the reported (normalized) centipawn scale.
 pub fn report_cp(internal: i32) -> i32 {

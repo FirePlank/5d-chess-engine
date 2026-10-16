@@ -57,13 +57,13 @@ export function confirmDialog(title, { text = '', ok = 'OK', danger = false } = 
 }
 
 /**
- * Scores are on the engine's reported scale ("score cp X": internal units * 100 / 275, see
+ * Scores are on the engine's reported scale ("score cp X": internal units * 100 / 3000, see
  * kairos::engine::REPORT_SCALE), where +100 is about a 75% expected score, +200 about 90%
  * and +400 about 99%. Numbers show cp / 100; the bar and the graph use the engine's "wdl"
- * when it sent one, else the same logistic: p = 1 / (1 + exp(-0.004 * 2.75 * cp)).
+ * when it sent one, else the same logistic: p = 1 / (1 + exp(-(30 / 2700) * cp)).
  */
-export const REPORT_SCALE = 275;
-export const WDL_K = 0.004;
+export const REPORT_SCALE = 3000;
+export const WDL_K = 1 / 2700;
 
 /** Engine score (White's view): "+2.3", "-0.4", "0.0"; mates "#3" / "#-2". */
 export function fmtScore(s) {
