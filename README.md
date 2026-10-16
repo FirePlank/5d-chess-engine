@@ -65,6 +65,8 @@ Then open <http://127.0.0.1:8080/>. On its first start the server builds the bro
 - **Play**: play Kairos on any built-in variant, as either side, with a clock or a fixed think time. The server runs the engine; one person plays at a time, everyone else watches the live game and can queue for the next one. Finished games are appended to `games/web/played.jsonl`.
 - **Games**: browse the record files under `games/` (JSONL and 5dpgn) with filters for variant, result, ending and length, and open any game in the viewer.
 
+The analysis engine in the browser is multi-threaded (Lazy SMP helpers in Web Workers on shared memory, `web/static/kairos-mt.wasm` built for `wasm32-wasip1-threads`; `rustup target add wasm32-wasip1-threads`) whenever the page is cross-origin isolated, as kairos-web serves it; otherwise it runs on one thread. Threads and hash size are set in the engine settings (gear) on the Analysis page.
+
 Options: `--port 8080`, `--host 0.0.0.0` (listen on every interface), `--games <dir>` (repeatable; default `games/`), `--hash <MB>` (engine hash for play), `--archive <file>`, `--no-wasm-build`.
 
 The site is plain HTML/CSS/ES modules in `web/static`, with no build step. Without the server (any static file host that sends `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`), the viewer and analysis work; play and the game browser need `kairos-web`.

@@ -52,3 +52,20 @@ pub unsafe extern "C" fn kw_call(ptr: *const u8, len: usize) -> *const u8 {
         o.as_ptr()
     })
 }
+
+/// The threads build (wasm32-wasip1-threads): set up the main thread as a WASI reactor's
+/// `_initialize` would (its pthread state, then static constructors); a cdylib has no
+/// `_initialize`, and without this, thread locals with destructors hang. Call it once on the
+/// main instance before any other export; thread instances set themselves up.
+#[cfg(target_feature = "atomics")]
+#[unsafe(no_mangle)]
+pub extern "C" fn kw_init() {
+    unsafe extern "C" {
+        fn __wasi_init_tp();
+        fn __wasm_call_ctors();
+    }
+    unsafe {
+        __wasi_init_tp();
+        __wasm_call_ctors();
+    }
+}

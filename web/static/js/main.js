@@ -1,17 +1,22 @@
 // App shell: routing between Analysis, Play and Games, theme, shared board and engine.
 import { MultiverseView } from './board.js';
 import { MoveInput } from './input.js';
-import { Engine } from './kairos.js';
+import { Engine, defaultEngineSettings } from './kairos.js';
 import { Analysis } from './analysis.js';
 import { Play } from './play.js';
 import { Games } from './games.js';
 import { $, $$, toast, store } from './util.js';
 
+/** Saved analysis-engine settings over the defaults. */
+export function engineSettings() {
+  return { ...defaultEngineSettings(), ...(store('engineSettings') || {}) };
+}
+
 const app = {
   route: null,
   board: null,
   input: null,
-  engine: new Engine({ hashMb: 64 }),
+  engine: new Engine(engineSettings()),
   server: null,
 };
 
