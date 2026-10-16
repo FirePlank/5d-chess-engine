@@ -33,8 +33,7 @@ const LMP: [usize; 5] = [0, 20, 32, 44, 56];
 const PV_CAP_MULT: usize = 3;
 /// Root actions considered.
 const ROOT_CAP: usize = 1000;
-/// Actions generated (and sorted by action score) at a time at interior nodes: the first
-/// batch holds one action and each next one twice as many, up to this.
+/// Actions generated (and sorted by action score) at a time at interior nodes.
 const BATCH: usize = 12;
 const QDEPTH: i32 = 3;
 const QCAP: usize = 4;
@@ -1097,13 +1096,10 @@ impl AlphaBeta {
         let mut exhausted = false;
         // An action was left unsearched (the action cap, or a TT action that failed validation).
         let mut skipped = false;
-        let mut batch_size = 1;
         let outcome: Option<i32> = 'search: {
             while searched < cap && !exhausted {
                 let mut batch: Vec<(i32, MoveSeq)> = Vec::with_capacity(BATCH);
-                let size = batch_size;
-                batch_size = (2 * batch_size).min(BATCH);
-                while batch.len() < size {
+                while batch.len() < BATCH {
                     if self.check_abort() {
                         break 'search Some(0);
                     }
