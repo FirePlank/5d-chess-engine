@@ -3,7 +3,10 @@
 //! the engine, one human player at a time.
 //!
 //! kairos-web [--port 8080] [--host 127.0.0.1] [--root <repo>] [--games <dir>]...
-//!            [--hash 256] [--no-wasm-build]
+//!            [--hash 2048] [--threads <cores - 1>] [--no-wasm-build]
+//!
+//! The play engine searches with `--threads` threads into a `--hash` MB table, kept across
+//! actions, and ponders (searches the position) while the human thinks.
 //!
 //! On start it builds web/static/kairos.wasm (`cargo build --target wasm32-wasip1` of web/wasm)
 //! when it is missing or older than the crate sources.
@@ -550,6 +553,7 @@ struct Play {
     game_id: AtomicU64,
     engine: Arc<(Mutex<Option<EngineJob>>, Condvar)>,
     hash_mb: usize,
+    threads: usize,
     archive: Option<PathBuf>,
 }
 
@@ -557,6 +561,8 @@ struct EngineJob {
     game_id: u64,
     state: State,
     limits: Limits,
+    /// Search the human's position until stopped, only to fill the table for the reply.
+    ponder: bool,
 }
 
 fn new_token() -> String {
@@ -616,13 +622,14 @@ fn parse_info(line: &str) -> Json {
 }
 
 impl Play {
-    fn new(hash_mb: usize, archive: Option<PathBuf>) -> Arc<Play> {
+    fn new(hash_mb: usize, threads: usize, archive: Option<PathBuf>) -> Arc<Play> {
         let play = Arc::new(Play {
             st: Mutex::new(PlayState { session: None, queue: VecDeque::new(), free_since: None, subscribers: Vec::new(), version: 0 }),
             stop: Arc::new(AtomicBool::new(false)),
             game_id: AtomicU64::new(0),
             engine: Arc::new((Mutex::new(None), Condvar::new())),
             hash_mb,
+            threads,
             archive,
         });
         let p = play.clone();
@@ -638,6 +645,7 @@ impl Play {
     fn engine_loop(self: Arc<Self>) {
         let mut eng = AlphaBeta::new();
         eng.set_option("Hash", &OptionValue::Int(self.hash_mb as i64));
+        eng.set_option("Threads", &OptionValue::Int(self.threads as i64));
         let (lock, cv) = &*self.engine;
         loop {
             let job = {
@@ -645,9 +653,16 @@ impl Play {
                 while g.is_none() {
                     g = cv.wait(g).unwrap();
                 }
+                // Under the lock: a job posted after this one stops it (`post_job`).
+                self.stop.store(false, Ordering::SeqCst);
                 g.take().unwrap()
             };
-            self.stop.store(false, Ordering::SeqCst);
+            if job.ponder {
+                // Think on the human's time: the table (kept across actions) fills for the
+                // reply. Stopped when the human moves or the game ends; the result is unused.
+                eng.find_best_move(&job.state, &job.limits, &self.stop, &mut |_| {});
+                continue;
+            }
             let mut last_score: Option<i32> = None;
             let mut last_emit = Instant::now() - Duration::from_secs(1);
             let gid = job.game_id;
@@ -793,9 +808,28 @@ impl Play {
         }
     }
 
+    /// Hand the engine a job, stopping its current search (a ponder) at once.
+    fn post_job(&self, job: EngineJob) {
+        let (lock, cv) = &*self.engine;
+        let mut g = lock.lock().unwrap();
+        self.stop.store(true, Ordering::SeqCst);
+        *g = Some(job);
+        cv.notify_one();
+    }
+
+    /// Stop pondering (and drop a ponder job not started yet).
+    fn stop_ponder(&self) {
+        let (lock, _) = &*self.engine;
+        let mut g = lock.lock().unwrap();
+        if g.as_ref().is_some_and(|j| j.ponder) {
+            *g = None;
+        }
+        self.stop.store(true, Ordering::SeqCst);
+    }
+
     fn end_session(&self, st: &mut PlayState, why: &str) {
         if let Some(s) = st.session.take() {
-            self.stop.store(true, Ordering::SeqCst);
+            self.stop_ponder();
             self.game_id.fetch_add(1, Ordering::SeqCst);
             if s.over.is_none() && !s.history.is_empty() {
                 let r = if s.human_black { "1-0" } else { "0-1" };
@@ -812,6 +846,7 @@ impl Play {
             self.stop.store(true, Ordering::SeqCst);
             self.game_id.fetch_add(1, Ordering::SeqCst);
         }
+        self.stop_ponder();
         s.thinking = false;
         self.archive_game(s, result, reason);
     }
@@ -871,10 +906,9 @@ impl Play {
                 }
                 None => Limits { movetime: Some(s.movetime), ..Limits::default() },
             };
-            let job = EngineJob { game_id: gid, state: s.state.clone(), limits };
-            let (lock, cv) = &*self.engine;
-            *lock.lock().unwrap() = Some(job);
-            cv.notify_one();
+            self.post_job(EngineJob { game_id: gid, state: s.state.clone(), limits, ponder: false });
+        } else {
+            self.post_job(EngineJob { game_id: gid, state: s.state.clone(), limits: Limits::default(), ponder: true });
         }
     }
 
@@ -1235,13 +1269,16 @@ fn ensure_wasm(root: &Path) -> Result<(), String> {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        eprintln!("kairos-web [--port 8080] [--host 127.0.0.1] [--root <repo>] [--games <dir>]... [--hash 256] [--archive <file>] [--no-wasm-build]");
+        eprintln!("kairos-web [--port 8080] [--host 127.0.0.1] [--root <repo>] [--games <dir>]... [--hash 2048] [--threads N] [--archive <file>] [--no-wasm-build]");
         return;
     }
     let root = PathBuf::from(arg(&args, "--root").unwrap_or_else(|| env!("CARGO_MANIFEST_DIR").to_string()));
     let port: u16 = arg(&args, "--port").and_then(|p| p.parse().ok()).unwrap_or(8080);
     let host = arg(&args, "--host").unwrap_or_else(|| "127.0.0.1".into());
-    let hash: usize = arg(&args, "--hash").and_then(|p| p.parse().ok()).unwrap_or(256);
+    let hash: usize = arg(&args, "--hash").and_then(|p| p.parse().ok()).unwrap_or(2048);
+    // One core is left to the server and the browser.
+    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2);
+    let threads: usize = arg(&args, "--threads").and_then(|p| p.parse().ok()).unwrap_or(cores.saturating_sub(1)).max(1);
     let mut dirs: Vec<PathBuf> = args.iter().enumerate().filter(|(_, a)| *a == "--games").filter_map(|(i, _)| args.get(i + 1)).map(PathBuf::from).collect();
     if dirs.is_empty() && root.join("games").is_dir() {
         dirs.push(root.join("games"));
@@ -1255,13 +1292,14 @@ fn main() {
     let server = Arc::new(Server {
         static_dir: root.join("web/static"),
         games: Games { dirs: dirs.clone(), index: Mutex::new(HashMap::new()), variants: Mutex::new(HashMap::new()) },
-        play: Play::new(hash, archive),
+        play: Play::new(hash, threads, archive),
     });
     let listener = TcpListener::bind((host.as_str(), port)).unwrap_or_else(|e| {
         eprintln!("cannot listen on {}:{}: {}", host, port, e);
         std::process::exit(1);
     });
     eprintln!("Kairos web: http://{}:{}/", if host == "0.0.0.0" { "localhost" } else { &host }, port);
+    eprintln!("  engine: {} threads, {} MB hash, pondering", threads, hash);
     for d in &dirs {
         eprintln!("  games: {}", d.display());
     }
