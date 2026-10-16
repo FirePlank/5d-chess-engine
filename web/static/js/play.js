@@ -26,6 +26,15 @@ const TC_PRESETS = [
 ];
 const TC_DEFAULT = { id: 'tournament', custom: { base: 5, inc: 0, delay: 0, tl: 3 } };
 
+/** "5+0 · 3s/TL": a clock (ms) in short, for the line under the moves. */
+function clockShort(c) {
+  const num = (ms) => +(ms / 1000).toFixed(1);
+  const parts = [`${+(c.base / 60000).toFixed(2)}+${num(c.inc || 0)}`];
+  if (c.delay) parts.push(`${num(c.delay)}s delay`);
+  if (c.delayPerTimeline) parts.push(`${num(c.delayPerTimeline)}s/TL`);
+  return parts.join(' · ');
+}
+
 /** "5+0 · 3 s delay per active timeline" for a clock (ms, as the game reports it). */
 function clockText(c) {
   const num = (ms) => +(ms / 1000).toFixed(1);
@@ -378,8 +387,12 @@ export class Play {
       $('#play-status').textContent = status;
       $('#play-status').classList.toggle('yours', !g.over && mine && g.toMove === human);
       if (!g.thinking) {
-        const delay = g.clock && g.turnDelay ? ` · ${g.activeTimelines} active timeline${g.activeTimelines === 1 ? '' : 's'}, ${+(g.turnDelay / 1000).toFixed(1)} s delay this turn` : '';
-        $('#play-thinking').textContent = g.over ? '' : (g.clock ? clockText(g.clock) : `untimed · ${g.movetime / 1000} s per action`) + ` · ${g.variant}` + (g.book === false ? ' · no book' : '') + delay;
+        // Short: the time control, the variant without its group, and no book if off. The
+        // full time control is the tooltip; the turn's delay shows on the running clock.
+        const variant = g.variant.includes(' - ') ? g.variant.split(' - ').slice(1).join(' - ') : g.variant;
+        const line = $('#play-thinking');
+        line.textContent = g.over ? '' : [g.clock ? clockShort(g.clock) : `${g.movetime / 1000}s/move`, variant, g.book === false ? 'no book' : ''].filter(Boolean).join(' · ');
+        line.title = g.clock ? `${clockText(g.clock)} · ${g.variant}` : g.variant;
       }
       $('#play-resign').classList.toggle('hidden', !mine || !!g.over);
       $('#play-new').classList.toggle('hidden', !mine || !g.over);
@@ -492,7 +505,7 @@ export class Play {
       const ms = left ? left[idx(side)] : null;
       const mine = running === idx(side);
       $(`#clock-${pos}-time`).textContent = left ? fmtClock(ms) : '∞';
-      $(`#clock-${pos}-delay`).textContent = mine && delayLeft > 0 ? `delay ${(delayLeft / 1000).toFixed(1)} s` : '';
+      $(`#clock-${pos}-delay`).textContent = mine && delayLeft > 0 ? `${g.activeTimelines} TL · ${(delayLeft / 1000).toFixed(1)}s` : '';
       $(`#clock-${pos}-delay`).title = mine && delay ? `This turn's delay: ${+(delay / 1000).toFixed(1)} s (${g.activeTimelines} active timeline${g.activeTimelines === 1 ? '' : 's'})` : '';
       box.classList.toggle('running', mine && delayLeft <= 0);
       box.classList.toggle('delaying', mine && delayLeft > 0);
