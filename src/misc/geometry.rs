@@ -87,6 +87,13 @@ impl Slice {
             Err(i) => self.fixed.insert(i, (n, values)),
         }
     }
+    /// Restrict axis `n` to `values` (intersecting an earlier choice for it).
+    pub fn restrict_axis(&mut self, n: usize, values: IntegerSet) {
+        match self.fixed.binary_search_by_key(&n, |e| e.0) {
+            Ok(i) => self.fixed[i].1.and_assign(&values),
+            Err(i) => self.fixed.insert(i, (n, values)),
+        }
+    }
     pub fn contains(&self, p: &Point) -> bool {
         self.fixed.iter().all(|(n, c)| c.contains(p[*n]))
     }

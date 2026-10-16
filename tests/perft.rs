@@ -7,7 +7,10 @@ fn positions() -> Vec<String> {
 #[test]
 fn startpos() {
     let s = parse_g_line(std::fs::read_to_string("data/startpos.g").unwrap().lines().next().unwrap()).unwrap();
-    for (d, n) in [(1, 20), (2, 440), (3, 33186)] {
+    // Depth 3 leaves out the 1780 actions that waste a move (33186 with them): after a black
+    // knight branched to T0, white actions that branch and also move a board their branch
+    // leaves out of the present.
+    for (d, n) in [(1, 20), (2, 440), (3, 31406)] {
         assert_eq!(perft(&s, d, 0), n, "startpos perft({})", d);
     }
 }

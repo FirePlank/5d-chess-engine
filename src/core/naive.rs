@@ -30,6 +30,19 @@ pub fn is_legal_action(s: &State, mvs: &[FullMove]) -> bool {
     c.first_check(c.get_present().1).is_none()
 }
 
+/// Whether the action `mvs` (playable in `s`) plays a wasted move (see
+/// `hypercuboid::plays_wasted_move`), found by playing it on a copy.
+pub fn wastes_moves(s: &State, mvs: &[FullMove]) -> bool {
+    let player = s.get_present().1;
+    let mut c = s.clone();
+    let mut branching = Vec::with_capacity(mvs.len());
+    for &m in mvs {
+        branching.push(c.get_timeline_end(m.to.l()) != (m.to.t(), player));
+        c.apply_move::<true>(m);
+    }
+    super::hypercuboid::plays_wasted_move(&c, mvs, |i| branching[i])
+}
+
 /// All legal actions, moves in canonical order (non-branching by timeline, then branching).
 pub fn naive_actions(s: &State, limit: usize) -> Vec<MoveSeq> {
     naive_actions_budget(s, limit, u64::MAX).unwrap_or_default()
