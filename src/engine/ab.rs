@@ -977,9 +977,11 @@ impl AlphaBeta {
             let height = s.get_board_size().1;
             let (amin, amax) = s.get_active_range();
             let mut gain = 0;
+            // Captures waiting on the side to move's boards ahead of the present count too:
+            // nobody else can move there, so they stay available until the present arrives.
             for l in amin..=amax {
                 let (t, c) = s.get_timeline_end(l);
-                if (t, c) == present {
+                if c == present.1 {
                     gain += super::local::capture_gain(s.board(l, t, c), c, height, &self.local_vals);
                 }
             }
