@@ -785,7 +785,12 @@ export class MultiverseView {
     const width = Math.max(0.09, Math.min(0.16, 2.6 / s));
     for (const m of v.last || []) this.arrow(m.from, m.to, m.c, C.arMove, width);
     for (const m of v.draft || []) this.arrow(m.from, m.to, v.player, C.arDraft, width);
-    for (const m of o.pv || []) this.arrow(m.from, m.to, m.c, C.arPv, width);
+    // Engine lines: the best one on top, weaker ones fainter beneath it.
+    for (const m of [...(o.pv || [])].reverse()) {
+      this.ctx.globalAlpha = m.alpha ?? 1;
+      this.arrow(m.from, m.to, m.c, C.arPv, width);
+    }
+    this.ctx.globalAlpha = 1;
     for (const ch of v.checks || []) this.arrow(ch.from, ch.to, ch.c, C.arCheck, width * 0.85);
   }
 

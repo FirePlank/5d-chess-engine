@@ -7,6 +7,8 @@ import { $, $$, el, toast, fmtScore, fmtNodes, winChance, recordScore, parseLan,
 const THROTTLE_MS = 70;
 /** "Go deeper" searches the current position to this depth. */
 const MAX_DEPTH = 64;
+// Most engine lines (MultiPV) the Lines setting offers.
+const MAX_LINES = 5;
 
 export class Analysis {
   constructor(app) {
@@ -23,6 +25,8 @@ export class Analysis {
     // Analysis searches each position to a fixed depth (engine settings), and the current
     // position deeper on request ("+").
     this.depth = Math.max(1, Math.min(MAX_DEPTH, +(store('engineSettings') || {}).depth || 15));
+    // MultiPV: how many engine lines to show (the engine searches that many best actions).
+    this.lines = Math.max(1, Math.min(MAX_LINES, +(store('engineSettings') || {}).lines || 1));
     this.deeperNode = null;
     this.autoplay = null;
     this.lastEmit = 0;
@@ -568,7 +572,7 @@ export class Analysis {
     const depth = this.targetDepth();
     // Already searched to the target depth: show that result without searching again.
     const cached = this.cache.get(node);
-    if (cached && cached.depth >= depth) {
+    if (cached && cached.depth >= depth && (this.lines === 1 || (cached.lines || []).filter(Boolean).length >= this.lines)) {
       this.engine.stop();
       this.searching = { node, key, blackToMove, finished: true };
       this.renderEngine();
@@ -578,7 +582,8 @@ export class Analysis {
     // The movetime only bounds the search (and lets a stop interrupt it); the depth ends it.
     // `resume`: when the engine's last search was this position (go deeper, a raised depth, a
     // stopped search revisited), it continues from the depth reached instead of from 1.
-    this.engine.search({ position: v.position, depth, movetime: 86_400_000, resume: true }).then((id) => {
+    const multi = this.lines > 1 ? { multiPV: this.lines } : {};
+    this.engine.search({ position: v.position, depth, movetime: 86_400_000, resume: true, ...multi }).then((id) => {
       if (this.searching && this.searching.node === node) this.searching.id = id;
     }).catch((e) => {
       toast('Engine failed to start: ' + e.message, { error: true });
@@ -596,8 +601,16 @@ export class Analysis {
       // Info lines come once per completed depth; keep the deepest one per position, so a
       // revisited position shows its best result until the new search gets deeper.
       if (info.depth == null || (info.cp == null && info.mate == null) || !info.pv) return;
+      // MultiPV: `multipv k` numbers the lines (1 the best); without it there is one line.
+      const k = info.multipv || 1;
       const prev = this.cache.get(s.node);
-      if (!prev || info.depth >= prev.depth) this.cache.set(s.node, { ...info, at: performance.now() });
+      if (k === 1) {
+        if (!prev || info.depth >= prev.depth) this.cache.set(s.node, { ...info, lines: [{ ...info }, ...((prev && prev.lines) || []).slice(1)], at: performance.now() });
+      } else if (prev && k <= MAX_LINES) {
+        const lines = prev.lines || [prev];
+        if (!lines[k - 1] || info.depth >= lines[k - 1].depth) lines[k - 1] = { ...info };
+        prev.lines = lines;
+      }
       this.scheduleRender();
     } else if (m.type === 'done') {
       const c = this.cache.get(s.node);
@@ -675,28 +688,34 @@ export class Analysis {
       $('#eval-bar-black').style.height = `${50 - w * 50}%`;
       bar.classList.toggle('flipped', this.board.flipped);
     } else bar.classList.add('hidden');
-    // PV.
+    // Lines (MultiPV): the best first, each with its score and clickable actions.
     const lines = $('#engine-lines');
-    if (this.engineOn && info && info.pv) {
-      if (this.pvKey !== this.cur + '|' + info.pv) {
-        this.pvKey = this.cur + '|' + info.pv;
-        let acts = [];
-        try { acts = this.rules.call({ cmd: 'line_san', node: this.cur, line: info.pv }).actions; } catch (e) { acts = []; }
+    const shown = this.engineOn && info && info.pv ? (info.lines || [info]).slice(0, this.lines).filter((l) => l && l.pv) : [];
+    if (shown.length) {
+      const key = this.cur + '|' + shown.map((l) => l.pv).join('|');
+      if (this.pvKey !== key) {
+        this.pvKey = key;
         const base = this.node(this.cur);
-        const moves = el('div', { class: 'line-moves' });
-        acts.forEach((a, i) => {
-          const { num, black } = this.moveNumber({ ply: base.ply + 1 + i });
-          const span = el('span', { class: 'line-move', title: a.lan }, (i === 0 || !black) ? el('span', { class: 'num', text: black ? `${num}…` : `${num}.` }) : null, a.san);
-          span.addEventListener('pointerdown', (e) => { e.preventDefault(); this.playPv(info.pv, i + 1); });
-          moves.append(span);
+        lines.replaceChildren(...shown.map((line) => {
+          let acts = [];
+          try { acts = this.rules.call({ cmd: 'line_san', node: this.cur, line: line.pv }).actions; } catch (e) { acts = []; }
+          const moves = el('div', { class: 'line-moves' });
+          acts.forEach((a, i) => {
+            const { num, black } = this.moveNumber({ ply: base.ply + 1 + i });
+            const span = el('span', { class: 'line-move', title: a.lan }, (i === 0 || !black) ? el('span', { class: 'num', text: black ? `${num}…` : `${num}.` }) : null, a.san);
+            span.addEventListener('pointerdown', (e) => { e.preventDefault(); this.playPv(line.pv, i + 1); });
+            moves.append(span);
+          });
+          return el('div', { class: 'engine-line' }, el('span', { class: 'line-eval', text: fmtScore(line) }), moves);
+        }));
+        // Arrows for each line's first action, weaker lines fainter.
+        const player = this.view ? this.view.player : 0;
+        this.board.setOverlay({
+          pv: shown.flatMap((line, r) => (line.pv.split('submit')[0] || '').trim().split(/\s+/).map(parseLan).filter(Boolean)
+            .map((m) => ({ ...m, c: player, alpha: r === 0 ? 1 : Math.max(0.25, 0.7 - 0.15 * (r - 1)) }))),
         });
-        lines.replaceChildren(el('div', { class: 'engine-line' }, el('span', { class: 'line-eval', text: fmtScore(info) }), moves));
-        // Arrows for the first action of the PV.
-        const first = (info.pv.split('submit')[0] || '').trim().split(/\s+/).map(parseLan).filter(Boolean);
-        this.board.setOverlay({ pv: first.map((m) => ({ ...m, c: this.view ? this.view.player : 0 })) });
       } else {
-        const ev = lines.querySelector('.line-eval');
-        if (ev) ev.textContent = fmtScore(info);
+        lines.querySelectorAll('.line-eval').forEach((ev, i) => { if (shown[i]) ev.textContent = fmtScore(shown[i]); });
       }
     } else {
       lines.replaceChildren();
@@ -724,7 +743,9 @@ export class Analysis {
   /** Depth, threads and hash for the in-browser engine (saved; threads and hash restart it). */
   bindSettings() {
     const btn = $('#engine-settings-btn'), panel = $('#engine-settings');
-    const threads = $('#set-threads'), hash = $('#set-hash'), depth = $('#set-depth');
+    const threads = $('#set-threads'), hash = $('#set-hash'), depth = $('#set-depth'), lines = $('#set-lines');
+    lines.max = String(MAX_LINES);
+    lines.value = String(this.lines);
     depth.max = String(MAX_DEPTH);
     depth.value = String(this.depth);
     const cores = navigator.hardwareConcurrency || 2;
@@ -735,6 +756,7 @@ export class Analysis {
     const show = () => {
       $('#set-threads-v').textContent = threads.value;
       $('#set-depth-v').textContent = depth.value;
+      $('#set-lines-v').textContent = lines.value;
       $('#set-note').textContent = threadsSupported
         ? `${cores} logical cores here; leave one free for the page. Beyond about 8 threads the search gets no faster.`
         : 'This page is not cross-origin isolated, so the engine runs on one thread.';
@@ -745,15 +767,19 @@ export class Analysis {
       btn.setAttribute('aria-expanded', String(open));
     };
     const apply = () => {
-      const s = { threads: +threads.value, hashMb: +hash.value, depth: +depth.value };
+      const s = { threads: +threads.value, hashMb: +hash.value, depth: +depth.value, lines: +lines.value };
       store('engineSettings', s);
       this.depth = s.depth;
+      this.lines = s.lines;
+      this.pvKey = null;
       this.engine.configure(s);
       this.renderEngine();
       if (this.engineOn) this.restartEngine();
     };
     threads.oninput = show;
     depth.oninput = show;
+    lines.oninput = show;
+    lines.onchange = apply;
     threads.onchange = apply;
     depth.onchange = apply;
     hash.onchange = apply;

@@ -38,7 +38,7 @@ export const threadsSupported = typeof SharedArrayBuffer !== 'undefined' && !!se
  */
 export function defaultEngineSettings() {
   const cores = navigator.hardwareConcurrency || 2;
-  return { threads: threadsSupported ? Math.max(1, Math.min(8, cores - 1)) : 1, hashMb: 64, depth: 15 };
+  return { threads: threadsSupported ? Math.max(1, Math.min(8, cores - 1)) : 1, hashMb: 64, depth: 15, lines: 1 };
 }
 
 /** Rules and game tree (one game at a time). Calls throw on `ok: false`. */
@@ -76,7 +76,7 @@ export function parseInfo(line, blackToMove) {
   const info = {};
   for (let i = 0; i < t.length; i++) {
     const k = t[i];
-    if (['depth', 'nodes', 'nps', 'time', 'roots', 'seldepth'].includes(k)) { info[k] = Number(t[++i]); }
+    if (['depth', 'nodes', 'nps', 'time', 'roots', 'seldepth', 'multipv'].includes(k)) { info[k] = Number(t[++i]); }
     else if (k === 'score') {
       const kind = t[++i], v = Number(t[++i]);
       if (kind === 'mate') info.mate = blackToMove ? -v : v;
@@ -157,12 +157,12 @@ export class Engine {
    * `timeLeft`/`increment` (ms) and `movetime: null`. `book`: answer a book position from the
    * opening book at once (the engine's `OwnBook`; Play only).
    */
-  async search({ position, movetime = 86_400_000, depth, newGame = false, resume = false, timeLeft, increment, delay, delayPerTimeline, book = false }) {
+  async search({ position, movetime = 86_400_000, depth, newGame = false, resume = false, timeLeft, increment, delay, delayPerTimeline, book = false, multiPV }) {
     await this.start();
     this.stop();
     const id = ++this.reqId;
     this.busy = true;
-    this.worker.postMessage({ type: 'search', id, position, movetime, depth, newGame, resume, timeLeft, increment, delay, delayPerTimeline, book });
+    this.worker.postMessage({ type: 'search', id, position, movetime, depth, newGame, resume, timeLeft, increment, delay, delayPerTimeline, book, multiPV });
     return id;
   }
 
