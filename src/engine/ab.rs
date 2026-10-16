@@ -37,18 +37,6 @@ const ROOT_CAP: usize = 1000;
 const BATCH: usize = 12;
 const QDEPTH: i32 = 3;
 const QCAP: usize = 10;
-/// While every action searched so far gets mated, the defender's remaining actions are searched
-/// instead of pruned (Stockfish's and Apeiron's `!is_loss(best)` guard), so a mate score comes
-/// from every defence: up to this many actions at a node, and this many evasions in quiescence.
-/// A node that hits the bound keeps an unproven mate.
-const MATE_DEFEND_CAP: usize = 4000;
-const QMATE_DEFEND_CAP: usize = 2000;
-
-/// Every action searched so far gets mated.
-#[inline]
-fn losing(best: i32) -> bool {
-    best <= -(MATE - 1000)
-}
 const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
@@ -808,15 +796,6 @@ impl AlphaBeta {
     }
 
     /// Whether `without_future` leaves out any point of `ss` (a move on an optional board).
-    /// Some move of `act` leaves or lands on a timeline whose board the side to move doesn't
-    /// have to play (actions without one are in the `without_future` space).
-    fn touches_optional(s: &State, act: &MoveSeq) -> bool {
-        let present = s.get_present();
-        let (amin, amax) = s.get_active_range();
-        let optional = |l: i32| !(l >= amin && l <= amax && s.get_timeline_end(l) == present);
-        act.iter().any(|m| optional(m.from.l()) || optional(m.to.l()))
-    }
-
     fn trims_future(s: &State, info: &HcInfo, ss: &SearchSpace) -> bool {
         let present = s.get_present();
         let (amin, amax) = s.get_active_range();
@@ -911,7 +890,7 @@ impl AlphaBeta {
             evasions.branch_pending = fba < info.dimension();
         }
         let aborted = 'search: {
-            while tried < QCAP || (losing(best) && tried < QMATE_DEFEND_CAP) {
+            while tried < QCAP {
                 if self.check_abort() {
                     break 'search true;
                 }
@@ -1109,10 +1088,8 @@ impl AlphaBeta {
         let mut exhausted = false;
         // An action was left unsearched (the action cap, or a TT action that failed validation).
         let mut skipped = false;
-        // Searching the actions with moves on optional boards too (every defence counts).
-        let mut departures_pass = false;
         let outcome: Option<i32> = 'search: {
-            while (searched < cap || (losing(best) && searched < MATE_DEFEND_CAP)) && !exhausted {
+            while searched < cap && !exhausted {
                 let mut batch: Vec<(i32, MoveSeq)> = Vec::with_capacity(BATCH);
                 while batch.len() < BATCH {
                     if self.check_abort() {
@@ -1133,27 +1110,11 @@ impl AlphaBeta {
                                     continue;
                                 }
                             }
-                            // Mated so far: the actions with moves on optional boards (a piece
-                            // travelling back, a royal escaping onto an optional board) are
-                            // searched too, so a mate holds against every legal action.
-                            if !departures_pass && losing(best) && searched < MATE_DEFEND_CAP {
-                                if let Some(f) = full.take() {
-                                    if Self::trims_future(s, &nb.info, &f) {
-                                        departures_pass = true;
-                                        nb.cursor.restart(&nb.info, f);
-                                        continue;
-                                    }
-                                }
-                            }
                             exhausted = true;
                             break;
                         }
                         Ok(Some(act)) => {
                             generated += 1;
-                            // The second pass repeats the actions already searched.
-                            if departures_pass && !Self::touches_optional(s, &act) {
-                                continue;
-                            }
                             if pre_tried.contains(&act) {
                                 continue;
                             }
@@ -1169,7 +1130,7 @@ impl AlphaBeta {
                 }
                 batch.sort_by(|a, b| b.0.cmp(&a.0));
                 for (sc, act) in batch {
-                    if (searched >= cap && !losing(best)) || searched >= MATE_DEFEND_CAP {
+                    if searched >= cap {
                         skipped = true;
                         break;
                     }
@@ -1233,7 +1194,7 @@ impl AlphaBeta {
             && best < -MATE + 1000
             && exhausted
             && !skipped
-            && (departures_pass || !full.as_ref().is_some_and(|f| Self::trims_future(s, &nb.info, f)));
+            && !full.as_ref().is_some_and(|f| Self::trims_future(s, &nb.info, f));
         self.bufs.push(nb);
         if let Some(v) = outcome {
             // (A cutoff has set `proven`; an abort returns 0.)
