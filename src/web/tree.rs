@@ -4,7 +4,7 @@
 use super::json::Json;
 use super::pgn;
 use crate::core::action::{Action, ExtMove, FullMove};
-use crate::core::hypercuboid::HcInfo;
+use crate::core::hypercuboid::{self, HcInfo};
 use crate::core::piece::NO_PIECE;
 use crate::core::state::{MateType, State};
 use crate::core::vec4::Vec4;
@@ -116,13 +116,28 @@ fn move_json(m: &ExtMove) -> Json {
 }
 
 /// Whether the side to move has a legal action.
-pub fn has_legal_action(s: &State) -> bool {
+/// How long the status check may look for a legal action. Finding one (or proving there is
+/// none) can take minutes with many boards to play.
+pub const STATUS_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Whether the side to move has a legal action; None if the search ran out of `budget`.
+pub fn has_legal_action(s: &State, budget: std::time::Duration) -> Option<bool> {
     let (w, ss) = HcInfo::build_hc(s);
-    w.search(s, ss).next().is_some()
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let _guard = hypercuboid::interrupt_on(&stop, Some(std::time::Instant::now() + budget));
+    if w.search(s, ss).next().is_some() {
+        Some(true)
+    } else if hypercuboid::interrupted() {
+        None
+    } else {
+        Some(false)
+    }
 }
 
+/// The status of `s`. A check that runs out of time counts as Playing: mate, stalemate and
+/// exile are only declared once no legal action is proven.
 pub fn status_of(s: &State) -> Status {
-    if has_legal_action(s) {
+    if has_legal_action(s, STATUS_BUDGET) != Some(false) {
         Status::Playing
     } else if s.get_mate_type() == MateType::Checkmate {
         Status::Checkmate
