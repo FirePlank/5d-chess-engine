@@ -69,6 +69,14 @@ fn lmr(depth: i32, index: usize) -> i32 {
 }
 /// Ordering bonus of a checking semimove (above every capture).
 const CHECK_BONUS: i32 = 30_000;
+/// Capture history: its share (1/CAPT_DIV) of a capture's ordering score; the bonus of a
+/// cutoff, min(base * depth - sub, cap), and 5/4 of it as the malus of a capture searched
+/// without one; entries stay within +-HISTORY_GRAVITY.
+const CAPT_DIV: i32 = 16;
+const HISTORY_BONUS_BASE: i32 = 300;
+const HISTORY_BONUS_SUB: i32 = 250;
+const HISTORY_BONUS_CAP: i32 = 1536;
+const HISTORY_GRAVITY: i32 = 16384;
 /// Reverse futility pruning: at non-PV nodes up to this depth, return the static eval when
 /// it beats beta by RFP_MARGIN per ply.
 const RFP_DEPTH: i32 = 2;
@@ -325,6 +333,8 @@ pub struct AlphaBeta {
     /// Shared with the helper threads.
     tt: Arc<TtTable>,
     history: Vec<i32>,
+    /// Capture history by moving piece, board-local destination and captured piece.
+    capt_history: Vec<i16>,
     killers: Vec<[Option<MoveSeq>; 2]>,
     /// Per ply: the last evasion that failed high in quiescence (tried before building).
     qkillers: Vec<Option<MoveSeq>>,
@@ -426,6 +436,12 @@ fn mate_proven(best: i32, best_proven: bool, all_proven: bool) -> bool {
     }
 }
 
+/// History bonus of a cutoff at `depth`.
+#[inline]
+fn history_bonus(depth: i32) -> i32 {
+    (HISTORY_BONUS_BASE * depth - HISTORY_BONUS_SUB).min(HISTORY_BONUS_CAP)
+}
+
 /// Static piece values for capture ordering (MVV-LVA).
 #[inline]
 fn piece_value(pc: Piece) -> i32 {
@@ -494,6 +510,32 @@ fn history_index_of(mover: Piece, m: &FullMove) -> usize {
 
 fn history_index(s: &State, m: &FullMove) -> usize {
     history_index_of(mover_victim(s, m).0, m)
+}
+
+/// Piece slot (1..=12; 0 for none) for the capture history.
+#[inline]
+fn piece_slot(pc: Piece) -> usize {
+    match to_white(piece_name(pc)) {
+        PAWN_W => 1,
+        BRAWN_W => 2,
+        KNIGHT_W => 3,
+        BISHOP_W => 4,
+        ROOK_W => 5,
+        QUEEN_W => 6,
+        PRINCESS_W => 7,
+        UNICORN_W => 8,
+        DRAGON_W => 9,
+        COMMON_KING_W => 10,
+        KING_W => 11,
+        ROYAL_QUEEN_W => 12,
+        _ => 0,
+    }
+}
+
+/// Capture-history index: moving piece, board-local destination, captured piece.
+#[inline]
+fn capt_index(mover: Piece, m: &FullMove, victim: Piece) -> usize {
+    (((piece_slot(mover) << 6) | m.to.xy() as usize) << 4) | piece_slot(victim)
 }
 
 /// Whether a semimove gives check: anything on its result board attacking an enemy royal
@@ -608,6 +650,7 @@ impl AlphaBeta {
             hce,
             tt,
             history: vec![0; 1 << 16],
+            capt_history: vec![0; 1 << 14],
             killers: vec![[None, None]; MAX_PLY + 1],
             qkillers: vec![None; MAX_PLY + 1],
             nodes: 0,
@@ -700,7 +743,8 @@ impl AlphaBeta {
     }
 
     /// Ordering score of one HC coordinate.
-    /// Ordering score of one HC coordinate; `history` overrides the history table's value.
+    /// Ordering score of one HC coordinate; `history` overrides the history table's value (the
+    /// capture history's for a capture).
     fn coord_score(&self, s: &State, info: &HcInfo, n: usize, i: Index, checks: &mut Option<CheckDetector>, history: Option<i32>) -> i32 {
         match info.entry(n, i) {
             Entry::Null => -5,
@@ -711,7 +755,8 @@ impl AlphaBeta {
                 // piece sink on their board, so best-first combinations avoid them.
                 let mut sc = -10 * exchange_loss(b, m.to.xy(), s.get_present().1, piece_value(mover));
                 if victim != NO_PIECE {
-                    sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
+                    let ch = history.unwrap_or_else(|| self.capt_history[capt_index(mover, m, victim)] as i32);
+                    sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10 + ch / CAPT_DIV;
                 } else {
                     sc += history.unwrap_or_else(|| self.history[history_index_of(mover, m)]).clamp(-5000, 5000);
                 }
@@ -766,13 +811,18 @@ impl AlphaBeta {
             sc.clear();
             if n == fba && branch == BranchOrder::Defer {
                 // Only the null coordinate is scored (all a branch axis restricted to it
-                // needs); the history values the others will need are recorded as of now.
+                // needs); the (capture) history values the others will need are recorded as of now.
                 let hist = &mut scratch.branch_history;
                 hist.clear();
                 hist.resize(u[n].max().map(|i| i as usize + 1).unwrap_or(0), 0);
                 for i in u[n].iter() {
                     if let Some((m, mover)) = info.branch_arrival(i) {
-                        hist[i as usize] = self.history[history_index_of(mover, &m)];
+                        let victim = mover_victim(s, &m).1;
+                        hist[i as usize] = if victim != NO_PIECE {
+                            self.capt_history[capt_index(mover, &m, victim)] as i32
+                        } else {
+                            self.history[history_index_of(mover, &m)]
+                        };
                     }
                 }
                 sc.push(self.coord_score(s, info, n, 0, &mut detector, None));
@@ -940,7 +990,7 @@ impl AlphaBeta {
         for m in act {
             let (mover, victim) = mover_victim(s, m);
             if victim != NO_PIECE {
-                sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
+                sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10 + self.capt_history[capt_index(mover, m, victim)] as i32 / CAPT_DIV;
             } else {
                 sc += self.history[history_index_of(mover, m)].clamp(-5000, 5000) / 4;
             }
@@ -1376,6 +1426,8 @@ impl AlphaBeta {
                 self.proven = proven;
                 return best;
             }
+            // A capture searched without a cutoff.
+            self.capt_update(s, &act, -history_bonus(depth) * 5 / 4);
             pre_tried.push(act);
         }
 
@@ -1496,6 +1548,8 @@ impl AlphaBeta {
                         self.proven = proven;
                         break 'search Some(best);
                     }
+                    // A capture searched without a cutoff.
+                    self.capt_update(s, &act, -history_bonus(depth) * 5 / 4);
                 }
             }
             None
@@ -1536,6 +1590,7 @@ impl AlphaBeta {
 
     fn on_cutoff(&mut self, s: &State, act: &MoveSeq, depth: i32, ply: usize) {
         if Self::is_tactical(s, act) {
+            self.capt_update(s, act, history_bonus(depth));
             return;
         }
         for m in act {
@@ -1550,6 +1605,18 @@ impl AlphaBeta {
         if ply <= MAX_PLY && self.killers[ply][0].as_ref() != Some(act) {
             self.killers[ply][1] = self.killers[ply][0].take();
             self.killers[ply][0] = Some(act.clone());
+        }
+    }
+
+    /// Gravity update of the capture history of `act`'s captures.
+    fn capt_update(&mut self, s: &State, act: &MoveSeq, adj: i32) {
+        for m in act {
+            let (mover, victim) = mover_victim(s, m);
+            if victim != NO_PIECE {
+                let e = &mut self.capt_history[capt_index(mover, m, victim)];
+                let cur = *e as i32;
+                *e = (cur + adj - ((cur * adj.abs()) >> 14)).clamp(-HISTORY_GRAVITY, HISTORY_GRAVITY) as i16;
+            }
         }
     }
 
@@ -1737,7 +1804,7 @@ impl Helper {
                 e.thread_id = thread_id;
                 while let Ok(msg) = rx.recv() {
                     match msg {
-                        HelperMsg::NewGame => e.history.iter_mut().for_each(|h| *h = 0),
+                        HelperMsg::NewGame => e.clear_history(),
                         HelperMsg::Search(job) => {
                             let HelperJob { root, roots, roots_complete, max_depth, resumed_depth, start, tt, stop, counters, done } = *job;
                             if stop.load(Ordering::Relaxed) {
@@ -1765,12 +1832,16 @@ impl Helper {
 }
 
 impl AlphaBeta {
+    /// Forget the move-ordering statistics (a new game).
+    fn clear_history(&mut self) {
+        self.history.iter_mut().for_each(|h| *h = 0);
+        self.capt_history.iter_mut().for_each(|h| *h = 0);
+    }
+
     pub fn new_game(&mut self) {
         let n = self.tt.len();
         self.set_tt(|| TtTable::with_len(n));
-        for h in self.history.iter_mut() {
-            *h = 0;
-        }
+        self.clear_history();
         for helper in &self.helpers {
             let _ = helper.tx.send(HelperMsg::NewGame);
         }
