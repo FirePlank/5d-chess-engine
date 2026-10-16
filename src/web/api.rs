@@ -37,7 +37,7 @@ fn moves_of(j: &Json) -> Result<Vec<ExtMove>, String> {
 /// A start position from a variant name, `startpos` or a 5DUCI position argument.
 pub fn resolve_position(p: &str) -> Result<String, String> {
     let p = p.trim();
-    if let Some(v) = record::variant_position(p) {
+    if let Some(v) = record::as_position(p) {
         return Ok(v);
     }
     position_from_uci(p)?;

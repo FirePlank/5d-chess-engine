@@ -69,6 +69,29 @@ fn uci_and_ktools_lines() {
 }
 
 #[test]
+fn position_shorthands() {
+    // A bare board FEN: one board on L0 at T1, sized from the FEN.
+    let l = record::load("k7/p*n6/K7/8/8/8/6P*B/8", None).unwrap();
+    assert_eq!(l.game.start, "size 8x8 odd fen [k7/p*n6/K7/8/8/8/6P*B/8:0:1:w]");
+    assert_eq!(l.game.mainline().len(), 1);
+    let l = record::load("nbrk/3p*/P*3/KRBN b", None).unwrap();
+    assert_eq!(l.game.start, "size 4x4 odd fen [nbrk/3p*/P*3/KRBN:0:1:b]");
+    assert!(l.game.nodes[0].state.get_present().1);
+    // Board tags without a size prefix, and variant names.
+    let l = record::load("[k7/p*n6/K7/8/8/8/6P*B/8:0:1:w]", None).unwrap();
+    assert_eq!(l.game.mainline().len(), 1);
+    assert_eq!(record::load("Standard - Two Timelines", None).unwrap().meta.get("variant").str(), Some("Standard - Two Timelines"));
+    // As the start position of a bare move list or a headerless 5dpgn.
+    let pgn = std::fs::read_to_string("tests/data/pgn/expert_m7.5dpgn").unwrap();
+    assert_eq!(record::load(&pgn, Some("k7/p*n6/K7/8/8/8/6P*B/8")).unwrap().game.mainline().len(), 14);
+    assert!(record::load("(0T1)h2g1 submit", Some("k7/p*n6/K7/8/8/8/6P*B/8")).is_ok());
+    // Not positions.
+    assert!(record::as_position("k7/p*n6/K7 x").is_none());
+    assert!(record::as_position("k7/p*n6/K9").is_none());
+    assert!(record::as_position("1. e3 / Nf6").is_none());
+}
+
+#[test]
 fn expert_pgn_matches_its_uci_line() {
     let pgn = std::fs::read_to_string("tests/data/pgn/expert_m7.5dpgn").unwrap();
     let pos = "size 8x8 odd fen [k7/p*n6/K7/8/8/8/6P*B/8:0:1:w]";

@@ -100,7 +100,7 @@ export class Analysis {
     this.show({ follow: false });
     this.board.fit(false, true);
     this.restartEngine();
-    if (!quiet) toast(`Loaded ${r.meta.actions} actions`);
+    if (!quiet) toast(r.meta.actions ? `Loaded ${r.meta.actions} actions` : 'Loaded the position');
     for (const w of r.meta.warnings || []) toast(w, { error: true, ms: 6000 });
   }
 
@@ -647,6 +647,35 @@ export class Analysis {
       try { await navigator.clipboard.writeText($('#export-text').value); toast('Copied'); }
       catch (e) { $('#export-text').select(); document.execCommand('copy'); toast('Copied'); }
     };
+    // Ctrl+V anywhere on the analysis page loads a game or position from the clipboard;
+    // Ctrl+C (with no text selected) copies the position and moves as a 5DUCI line.
+    const typing = (e) => e.target.closest && e.target.closest('input, textarea, select, dialog');
+    document.addEventListener('paste', (e) => {
+      if (this.app.route !== 'analysis' || typing(e) || document.querySelector('dialog[open]')) return;
+      const text = (e.clipboardData && e.clipboardData.getData('text')) || '';
+      if (!text.trim()) return;
+      e.preventDefault();
+      try {
+        this.loadedKey = null;
+        this.load(text);
+        if (location.hash !== '#/analysis') history.replaceState(null, '', '#/analysis');
+      } catch (err) {
+        console.warn('paste:', err.message);
+        toast('The clipboard holds no game or position Kairos can read', { error: true, ms: 4000 });
+      }
+    });
+    document.addEventListener('copy', (e) => {
+      if (this.app.route !== 'analysis' || typing(e) || String(getSelection()).length) return;
+      try {
+        // Up to the position shown (not the rest of the line).
+        const pos = this.rules.call({ cmd: 'view', node: this.cur, draft: [] }).view.position;
+        e.clipboardData.setData('text/plain', 'position ' + pos);
+        e.preventDefault();
+        toast('Copied the position (5DUCI)');
+      } catch (err) {
+        toast(err.message, { error: true });
+      }
+    });
     // Drop a file on the board.
     const area = $('#board-area');
     area.addEventListener('dragover', (e) => { e.preventDefault(); });
