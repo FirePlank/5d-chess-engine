@@ -1,0 +1,12 @@
+{
+  "name": "batch_ramp",
+  "old": "94f52abc17ddefac15060077e875ea1eb4b8c8ea",
+  "games": 12000,
+  "shards": 40,
+  "tc": "tc 10+0.1",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}
