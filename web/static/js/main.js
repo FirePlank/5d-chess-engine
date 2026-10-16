@@ -10,7 +10,10 @@ import { $, $$, toast, store } from './util.js';
 
 /** Saved analysis-engine settings over the defaults. */
 export function engineSettings() {
-  return { ...defaultEngineSettings(), ...(store('engineSettings') || {}) };
+  const s = { ...defaultEngineSettings(), ...(store('engineSettings') || {}) };
+  // Never more threads than logical cores (a setting saved on another machine, say).
+  s.threads = Math.max(1, Math.min(s.threads | 0, navigator.hardwareConcurrency || 2));
+  return s;
 }
 
 const app = {

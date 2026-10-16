@@ -601,7 +601,7 @@ export class Analysis {
     depth.max = String(MAX_DEPTH);
     depth.value = String(this.depth);
     const cores = navigator.hardwareConcurrency || 2;
-    threads.max = String(threadsSupported ? Math.max(1, Math.min(32, cores)) : 1);
+    threads.max = String(threadsSupported ? Math.max(1, Math.min(16, cores)) : 1);
     const cur = { threads: this.engine.threads, hashMb: this.engine.hashMb };
     threads.value = String(cur.threads);
     hash.value = String(cur.hashMb);
@@ -609,7 +609,7 @@ export class Analysis {
       $('#set-threads-v').textContent = threads.value;
       $('#set-depth-v').textContent = depth.value;
       $('#set-note').textContent = threadsSupported
-        ? `${cores} logical cores here; leave one free for the page.`
+        ? `${cores} logical cores here; leave one free for the page. Beyond about 8 threads the search gets no faster.`
         : 'This page is not cross-origin isolated, so the engine runs on one thread.';
     };
     show();
