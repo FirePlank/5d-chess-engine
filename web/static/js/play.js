@@ -36,6 +36,8 @@ export class Play {
       this.local = new LocalPlay(this.app.engine, { onState: (s) => this.onState(s), onThinking: (i) => this.onThinking(i) });
       await this.local.init();
     }
+    // One player at a time is the server's rule (one engine); here everyone plays their own.
+    $('#play-fine').classList.toggle('hidden', !this.app.server);
     const variants = this.rules.call({ cmd: 'variants' }).variants;
     const saved = store('play.variant.t0') || 'Standard - Turn Zero';
     $('#play-variant').replaceChildren(...variants.map((v) => el('option', { value: v.name, text: v.name, selected: v.name === saved })));
