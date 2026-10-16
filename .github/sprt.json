@@ -1,0 +1,12 @@
+{
+  "name": "batch6",
+  "old": "bb1bc280afac3b72b39e242f60374b667913f314",
+  "games": 12000,
+  "shards": 40,
+  "tc": "tc 10+0.1",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}

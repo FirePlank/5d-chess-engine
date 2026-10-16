@@ -34,7 +34,7 @@ const PV_CAP_MULT: usize = 3;
 /// Root actions considered.
 const ROOT_CAP: usize = 1000;
 /// Actions generated (and sorted by action score) at a time at interior nodes.
-const BATCH: usize = 12;
+const BATCH: usize = 6;
 const QDEPTH: i32 = 3;
 const QCAP: usize = 4;
 const LMR_MIN_DEPTH: i32 = 3;
