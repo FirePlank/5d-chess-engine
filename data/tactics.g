@@ -46,6 +46,26 @@ G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NB
 G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w] moves (0T1)e2e3 submit (0T1)g8f6 submit (0T2)f1b5 submit (0T2)a7a5 submit (0T3)c2c3 submit (0T3)a5a4 submit (0T4)d1b3 submit
 # f7 defence Std: knight takes the queen on b3 best (0T4)a5b3 ; (0T4)Na5xb3
 G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w] moves (0T1)e2e3 submit (0T1)g8f6 submit (0T2)f1b5 submit (0T2)b8c6 submit (0T3)c2c3 submit (0T3)c6a5 submit (0T4)d1b3 submit
+# f7 defence Std: 1...Nf6 against 1. e3 best (0T1)g8f6 ; (0T1)Ng8f6
+G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w] moves (0T1)e2e3 submit
+# f7 defence Std: 1...Nf6 against 1. c3 best (0T1)g8f6 ; (0T1)Ng8f6
+G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w] moves (0T1)c2c3 submit
+# f7 defence Std: 1...Nf6 against 1. e4 best (0T1)g8f6 ; (0T1)Ng8f6
+G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w] moves (0T1)e2e4 submit
+# f7 defence Std: Q to a5/b6/c7 after 4. Qb3 (Bb5 line) best (0T4)d8a5 | (0T4)d8b6 | (0T4)d8c7 ; (0T4)Qd8a5 | (0T4)Qd8b6 | (0T4)Qd8c7
+G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w] moves (0T1)e2e3 submit (0T1)g8f6 submit (0T2)f1b5 submit (0T2)c7c6 submit (0T3)c2c3 submit (0T3)c6b5 submit (0T4)d1b3 submit
+# f7 defence Std: Q to a5/b6/c7 after 4. Qb3 (g4 line) best (0T4)d8a5 | (0T4)d8b6 | (0T4)d8c7 ; (0T4)Qd8a5 | (0T4)Qd8b6 | (0T4)Qd8c7
+G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w] moves (0T1)e2e3 submit (0T1)g8f6 submit (0T2)g2g4 submit (0T2)g7g5 submit (0T3)c2c3 submit (0T3)c7c6 submit (0T4)d1b3 submit
+# f7 defence Std: 2...c6 against 2. Qa4 best (0T2)c7c6 ; (0T2)c7c6
+G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w] moves (0T1)c2c3 submit (0T1)g8f6 submit (0T2)d1a4 submit
+# f7 defence Std: Q to a5/b6/c7 after 3. Qc4 best (0T3)d8a5 | (0T3)d8b6 | (0T3)d8c7 ; (0T3)Qd8a5 | (0T3)Qd8b6 | (0T3)Qd8c7
+G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w] moves (0T1)c2c3 submit (0T1)g8f6 submit (0T2)d1a4 submit (0T2)c7c6 submit (0T3)a4c4 submit
+# f7 defence Std: 3...d5 against 3. a3 best (0T3)d7d5 ; (0T3)d7d5
+G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w] moves (0T1)c2c3 submit (0T1)g8f6 submit (0T2)d1a4 submit (0T2)c7c6 submit (0T3)a2a3 submit
+# f7 defence Std: 4...Be6 against 4. Qf3 best (0T4)c8e6 ; (0T4)Bc8e6
+G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w] moves (0T1)e2e3 submit (0T1)g8f6 submit (0T2)g2g4 submit (0T2)d7d5 submit (0T3)g4g5 submit (0T3)f6e4 submit (0T4)d1f3 submit
+# f7 defence Std: classic game, 2...f5 against 2. Qf3 best (0T2)f7f5 ; (0T2)f7f5
+G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w] moves (0T1)e2e3 submit (0T1)e7e6 submit (0T2)d1f3 submit
 # classic f-sac: 7. Bf1>>x(0T1)f7+ best (0T7)f1(0T1)f7 ; (0T7)Bf1>>x(0T1)f7+~ (>L1)
 G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w] moves (0T1)e2e3 submit (0T1)e7e6 submit (0T2)d1f3 submit (0T2)d8f6 submit (0T3)f3f6 submit (0T3)g7f6 submit (0T4)f2f4 submit (0T4)b8c6 submit (0T5)c2c3 submit (0T5)f8c5 submit (0T6)d2d4 submit (0T6)c5b6 submit
 # classic f-sac: 8. Nh3 best (1T2)g1h3 ; (1T2)Ng1h3

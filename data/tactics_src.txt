@@ -44,6 +44,24 @@ f2 sac T0 Black: Qh4* after e3 and Qf3 | (-1T3)Qh4+ | [Board "Standard - Turn Ze
 # Nxb3": the queen coming to b3 is taken.
 f7 defence Std: a-pawn takes the queen on b3 | (0T4)axb3 | [Board "Standard"] [Mode "5D"] 1. e3 / Nf6 2. Bb5 / a5 3. c3 / a4 4. Qb3
 f7 defence Std: knight takes the queen on b3 | (0T4)Nxb3 | [Board "Standard"] [Mode "5D"] 1. e3 / Nf6 2. Bb5 / Nc6 3. c3 / Na5 4. Qb3
+# Prophylaxis before the sac (the engine must defend before White travels). "Against anything:
+# 1...Nf6 (forces the queen route via b3)": the knight on T2f6 blocks the f-file routes to T1f7.
+f7 defence Std: 1...Nf6 against 1. e3 | (0T1)Nf6 | [Board "Standard"] [Mode "5D"] 1. e3
+f7 defence Std: 1...Nf6 against 1. c3 | (0T1)Nf6 | [Board "Standard"] [Mode "5D"] 1. c3
+f7 defence Std: 1...Nf6 against 1. e4 | (0T1)Nf6 | [Board "Standard"] [Mode "5D"] 1. e4
+# "Main: 2...c6 3. c3 cxb5 4. Qb3 Qa5/Qb6/Qc7" (against 2. Bb5), "against 2. g4: 2...g5 3. c3 c6
+# 4. Qb3 Qa5/Qb6/Qc7", "against 1. c3: vs 2. Qa4 & 3. Qc4: 2...c6 3. Qc4 Qa5/Qb6/Qc7": the queen
+# covers the attacking timeline's b3/c4 diagonal.
+f7 defence Std: Q to a5/b6/c7 after 4. Qb3 (Bb5 line) | (0T4)Qa5 or (0T4)Qb6 or (0T4)Qc7 | [Board "Standard"] [Mode "5D"] 1. e3 / Nf6 2. Bb5 / c6 3. c3 / cxb5 4. Qb3
+f7 defence Std: Q to a5/b6/c7 after 4. Qb3 (g4 line) | (0T4)Qa5 or (0T4)Qb6 or (0T4)Qc7 | [Board "Standard"] [Mode "5D"] 1. e3 / Nf6 2. g4 / g5 3. c3 / c6 4. Qb3
+f7 defence Std: 2...c6 against 2. Qa4 | (0T2)c6 | [Board "Standard"] [Mode "5D"] 1. c3 / Nf6 2. Qa4
+f7 defence Std: Q to a5/b6/c7 after 3. Qc4 | (0T3)Qa5 or (0T3)Qb6 or (0T3)Qc7 | [Board "Standard"] [Mode "5D"] 1. c3 / Nf6 2. Qa4 / c6 3. Qc4
+# "vs 3. a3: 3...d5 4. Qb3 Qa5/Qb6/Qc7": d5 shuts the c4 square.
+f7 defence Std: 3...d5 against 3. a3 | (0T3)d5 | [Board "Standard"] [Mode "5D"] 1. c3 / Nf6 2. Qa4 / c6 3. a3
+# "2...d5 3. g5 Ne4 4. Qf3 Be6".
+f7 defence Std: 4...Be6 against 4. Qf3 | (0T4)Be6 | [Board "Standard"] [Mode "5D"] 1. e3 / Nf6 2. g4 / d5 3. g5 / Ne4 4. Qf3
+# The classic f-sac game before the sac: "1...e6 2...f5 blocks T1f7" (2...Qf6 let White in).
+f7 defence Std: classic game, 2...f5 against 2. Qf3 | (0T2)f5 | [Board "Standard"] [Mode "5D"] 1. e3 / e6 2. Qf3
 
 # ---------------------------------------------------------------- the classic f-sac game (Standard)
 # 1. e3 e6 2. Qf3 Qf6 3. Qxf6 gxf6 4. f4 Nc6 5. c3 Bc5 6. d4 Bb6 7. Bf1>>x(0T1)f7+ Kxf7 8. Nh3 Nf6
