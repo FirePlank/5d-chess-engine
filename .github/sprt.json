@@ -1,0 +1,12 @@
+{
+  "name": "timeline_focus",
+  "old": "29c1be278cd8168fe2358d73a26c2c1dcd6b1a07",
+  "games": 9000,
+  "shards": 40,
+  "tc": "tc 10+0.1",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}

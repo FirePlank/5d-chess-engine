@@ -63,6 +63,22 @@ const NMP_MIN_DEPTH: i32 = 3;
 const NMP_R: i32 = 2;
 const NMP_DIV: i32 = 3;
 const DEFAULT_HASH_MB: usize = 64;
+/// Hot/cold board focus at the root (`focus`), with at least FOCUS_MIN_BOARDS boards to
+/// play: up to FOCUS_MAX_HOT boards (at least FOCUS_MIN_HOT) are hot, the others keep their
+/// FOCUS_K best moves, and ROOT_FOCUS_CAP actions are considered, plus the ROOT_FOCUS_EXTRA
+/// best ones of the whole space.
+const FOCUS_MIN_BOARDS: usize = 3;
+const FOCUS_MIN_HOT: usize = 1;
+const FOCUS_MAX_HOT: usize = 2;
+const FOCUS_K: usize = 2;
+const ROOT_FOCUS_CAP: usize = 100;
+const ROOT_FOCUS_EXTRA: usize = 150;
+/// A piece of the side to move that stands to lose more than this makes its board hot.
+const FOCUS_HANG: i32 = 100;
+/// Coordinate scores from here up are checks, once what captures and promotions add is taken
+/// off (quiet moves score at most the history clamp, checks at least CHECK_BONUS less a
+/// queen's exchange loss).
+const TACTICAL_SCORE: i32 = CHECK_BONUS / 3;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -784,6 +800,197 @@ impl AlphaBeta {
         out
     }
 
+    /// Why a board to play is hot (`hot_boards`), as bits: a royal of the side to move is
+    /// attacked on it or across it, a good capture or a promotion, a check, a jump that captures
+    /// or checks from or onto it, the last action captured or jumped there or created it, a
+    /// piece of the side to move hangs on it.
+    pub const HOT_CHECKED: u8 = 1;
+    pub const HOT_CAPTURE: u8 = 2;
+    pub const HOT_CHECK: u8 = 4;
+    pub const HOT_JUMP: u8 = 8;
+    pub const HOT_CHANGED: u8 = 16;
+    pub const HOT_HANGING: u8 = 32;
+    /// Set on the boards that are kept hot.
+    pub const HOT_KEPT: u8 = 64;
+
+    /// The boards to play where most is going on (hot) and the others (cold), with several
+    /// boards to play, the node ordered by `orders` and `scores`: (`HOT_*` reasons by axis,
+    /// with HOT_KEPT on the hot boards, and the cold axes); `None` with fewer.
+    fn hot_boards(&mut self, s: &State, info: &HcInfo, orders: &AxisOrders, scores: &[Vec<i32>]) -> Option<(Vec<u8>, Vec<usize>)> {
+        let present = s.get_present();
+        let player = present.1;
+        let (amin, amax) = s.get_active_range();
+        let mandatory: Vec<(i32, usize)> =
+            (amin..=amax).filter(|&l| s.get_timeline_end(l) == present).filter_map(|l| Some((l, info.line_to_axis(l)?))).collect();
+        if mandatory.len() < FOCUS_MIN_BOARDS {
+            return None;
+        }
+        let u = info.get_universe();
+        let fba = info.first_branch_axis();
+        let height = s.get_board_size().1;
+        let mut hot = vec![0u8; fba];
+        // A semimove's reasons: a capture that wins material (the victim is worth more than the
+        // moved piece, or the moved piece can't be taken back), a promotion, a check (from its
+        // ordering score: `coord_score` adds CHECK_BONUS to what quiet moves and captures
+        // score, which stays far below TACTICAL_SCORE without it).
+        let reasons = |m: &FullMove, b: &Board, mover: Piece, victim: Piece, sc: i32| -> u8 {
+            let promotes = (mover == PAWN_W || mover == BRAWN_W) && (m.to.y() == 0 || m.to.y() == height - 1);
+            let mut base = if promotes { 9000 } else { 0 };
+            let mut r = if promotes { Self::HOT_CAPTURE } else { 0 };
+            if victim != NO_PIECE {
+                base += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
+                let retaken = b.attacks_to(m.to.xy()) & b.hostile(player) != 0;
+                if piece_value(victim) > if retaken { piece_value(mover) } else { 0 } {
+                    r |= Self::HOT_CAPTURE;
+                }
+            }
+            if sc - base >= TACTICAL_SCORE {
+                r |= Self::HOT_CHECK;
+            }
+            r
+        };
+        for n in 0..fba {
+            let sc = &scores[n];
+            for i in u[n].iter() {
+                match info.entry(n, i) {
+                    Entry::Physical { m, b, mover, victim } => hot[n] |= reasons(m, b, *mover, *victim, sc[i as usize]),
+                    Entry::Arriving { m, b, fa, mover, victim, .. } => {
+                        let r = reasons(m, b, *mover, *victim, sc[i as usize]);
+                        if r != 0 {
+                            hot[n] |= Self::HOT_JUMP | (r & Self::HOT_CHECK);
+                            hot[*fa as usize] |= Self::HOT_JUMP | (r & Self::HOT_CHECK);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // Branching jumps (not built yet): captures, and checks on the board they create.
+        if fba < info.dimension() {
+            for i in 1..info.axis_len(fba) as Index {
+                let Some((m, _)) = info.branch_arrival(i) else { continue };
+                let Some(fa) = info.line_to_axis(m.from.l()) else { continue };
+                if hot[fa] & (Self::HOT_JUMP | Self::HOT_CHECK) == Self::HOT_JUMP | Self::HOT_CHECK {
+                    continue;
+                }
+                let target = s.board(m.to.l(), m.to.t(), player);
+                let mut nb = *target;
+                nb.place_from(m.to.xy(), s.board(m.from.l(), m.from.t(), player), m.from.xy());
+                if has_physical_check(&nb, !player) {
+                    hot[fa] |= Self::HOT_JUMP | Self::HOT_CHECK;
+                } else if target.kind(m.to.xy()) != NO_PIECE {
+                    hot[fa] |= Self::HOT_JUMP;
+                }
+            }
+        }
+        // Royals of the side to move under attack: the boards of the attack and between.
+        if self.in_check(s) {
+            let cp = CheckPosition::for_phantom(s);
+            for m in cp.checks(!player, true) {
+                for l in m.from.l().min(m.to.l())..=m.from.l().max(m.to.l()) {
+                    if let Some(n) = info.line_to_axis(l).filter(|&n| n < fba) {
+                        hot[n] |= Self::HOT_CHECKED;
+                    }
+                }
+            }
+        }
+        for &(l, n) in &mandatory {
+            let b = s.board(l, present.0, player);
+            let own = b.hostile(!player);
+            if s.get_timeline_start(l) == present
+                || s.multiverse().previous_board(l, present.0, player).is_none_or(|p| {
+                    own.count_ones() < p.hostile(!player).count_ones() || b.hostile(player).count_ones() != p.hostile(player).count_ones()
+                })
+            {
+                hot[n] |= Self::HOT_CHANGED;
+            }
+            if marked_pos(own & !b.royal()).any(|sq| exchange_loss(b, sq, player, piece_value(b.kind(sq))) > FOCUS_HANG) {
+                hot[n] |= Self::HOT_HANGING;
+            }
+        }
+        // The hot boards: every one a royal is attacked on or across, then the others by how
+        // much is going on, up to FOCUS_MAX_HOT, and at least FOCUS_MIN_HOT (the ones with the
+        // best moves).
+        let heat = |r: u8| -> i32 {
+            [(Self::HOT_CAPTURE, 8), (Self::HOT_CHECK, 6), (Self::HOT_HANGING, 6), (Self::HOT_JUMP, 3), (Self::HOT_CHANGED, 2)]
+                .iter()
+                .map(|&(b, w)| if r & b != 0 { w } else { 0 })
+                .sum()
+        };
+        let best = |n: usize| orders.lists[n].iter().find(|&&i| i != 0).map(|&i| scores[n][i as usize]).unwrap_or(i32::MIN);
+        let mut rank: Vec<(bool, i32, i32, usize)> =
+            mandatory.iter().map(|&(_, n)| (hot[n] & Self::HOT_CHECKED != 0, heat(hot[n]), best(n), n)).collect();
+        rank.sort_unstable_by(|a, b| b.cmp(a));
+        let mut cold = Vec::new();
+        for (j, &(checked, h, _, n)) in rank.iter().enumerate() {
+            if checked || j < FOCUS_MIN_HOT || (h > 0 && j < FOCUS_MAX_HOT) {
+                hot[n] |= Self::HOT_KEPT;
+            } else {
+                cold.push(n);
+            }
+        }
+        Some((hot, cold))
+    }
+
+    /// Hot/cold board focus of `ss` (see `hot_boards`): a cold board plays its best move (or
+    /// receives a jump from a hot board), or, on one cold board at a time, one of its next
+    /// `k - 1` moves (its pieces only jump when the jump captures or checks, which makes it
+    /// hot). `None` when no board is cold (or nothing would be left).
+    fn focus(&mut self, s: &State, info: &HcInfo, orders: &AxisOrders, scores: &[Vec<i32>], ss: &SearchSpace) -> Option<SearchSpace> {
+        let k = FOCUS_K;
+        let (hot, cold) = self.hot_boards(s, info, orders, scores)?;
+        if cold.is_empty() {
+            return None;
+        }
+        // Per cold board: its best move (with the jumps it keeps), and its next k - 1 moves.
+        use crate::misc::integer_set::IntegerSet;
+        let mut keep: Vec<(usize, IntegerSet, IntegerSet)> = Vec::with_capacity(cold.len());
+        for &n in &cold {
+            let (mut base, mut alt) = (IntegerSet::new(), IntegerSet::new());
+            let mut kept = 0;
+            for &i in &orders.lists[n] {
+                match info.entry(n, i) {
+                    Entry::Physical { .. } => {
+                        kept += 1;
+                        if kept == 1 {
+                            base.insert(i);
+                        } else if kept <= k {
+                            alt.insert(i);
+                        }
+                    }
+                    Entry::Arriving { fa, .. } if hot[*fa as usize] & Self::HOT_KEPT != 0 => base.insert(i),
+                    _ => {}
+                }
+            }
+            keep.push((n, base, alt));
+        }
+        // The hot boards' actions with the cold boards' best moves first; then those with one
+        // cold board playing one of its next moves (one cold board at a time, so that the
+        // actions grow linearly with the cold boards).
+        let mut out = SearchSpace::default();
+        for (c, &(_, _, ref alt)) in keep.iter().enumerate() {
+            if alt.is_empty() {
+                continue;
+            }
+            for hc in &ss.hcs {
+                let mut h = hc.clone();
+                for (j, (n, base, _)) in keep.iter().enumerate() {
+                    h[*n].and_assign(if j == c { alt } else { base });
+                }
+                out.hcs.push(h);
+            }
+        }
+        for hc in &ss.hcs {
+            let mut h = hc.clone();
+            for (n, base, _) in &keep {
+                h[*n].and_assign(base);
+            }
+            out.hcs.push(h);
+        }
+        out.hcs.retain(|h| !h.is_empty());
+        if out.hcs.is_empty() { None } else { Some(out) }
+    }
+
     /// Order the node's coordinates into `cursor` and start it on `ss`.
     /// Order the node's coordinates into `cursor` and start it on `ss`; with `defer`, the
     /// branch axes are ordered once the cursor needs them (`next_with` and `branch_order`).
@@ -822,6 +1029,21 @@ impl AlphaBeta {
             }
         }
         sc
+    }
+
+    /// `HOT_*` reasons of each board to play at the root of `s` (empty with too few boards for
+    /// the focus; diagnostics).
+    pub fn hot_reasons(&mut self, s: &State) -> Vec<u8> {
+        let (info, ss) = HcInfo::build_hc(s);
+        let mut agen = BestFirstCursor::default();
+        self.start_actions(s, &info, &mut agen, &mut OrderScratch::default(), ss, false);
+        let (orders, scores) = agen.ordering_mut();
+        let present = s.get_present();
+        let (amin, amax) = s.get_active_range();
+        match self.hot_boards(s, &info, orders, scores) {
+            Some((hot, _)) => (amin..=amax).filter(|&l| s.get_timeline_end(l) == present).filter_map(|l| info.line_to_axis(l)).map(|n| hot[n]).collect(),
+            None => Vec::new(),
+        }
     }
 
     /// The first `cap` actions of `s` in the order an interior node would try them (diagnostics).
@@ -1597,24 +1819,50 @@ impl AlphaBeta {
         // Root actions (all of them, up to the root cap), ordered heuristically.
         let (hc, ss) = HcInfo::build_hc(root);
         let mut agen = BestFirstCursor::default();
-        self.start_actions(root, &hc, &mut agen, &mut OrderScratch::default(), Self::without_future(root, &hc, &ss), false);
-        let mut full = Some(ss);
+        let first = Self::without_future(root, &hc, &ss);
+        // Spaces to fall back on, last first, while no legal action has been found.
+        let mut fallback = vec![ss];
+        let focus_from = (Self::mandatory_boards(root) >= FOCUS_MIN_BOARDS).then(|| first.clone());
+        self.start_actions(root, &hc, &mut agen, &mut OrderScratch::default(), first, false);
+        if let Some(from) = focus_from {
+            let (orders, scores) = agen.ordering_mut();
+            if let Some(f) = self.focus(root, &hc, orders, scores, &from) {
+                fallback.push(from);
+                agen.restart(&hc, f);
+            }
+        }
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
         // Enumerating every root action can take seconds with many timelines: spend at most
         // a quarter of the budget on it (always keeping at least one action), and stop at once
         // when told to.
         let gen_deadline = plan.as_ref().map(|p| start + Duration::from_millis(p.optimum / 4));
         let mut complete = false;
-        while roots.len() < ROOT_CAP {
+        let root_cap = if fallback.len() > 1 { ROOT_FOCUS_CAP } else { ROOT_CAP };
+        while roots.len() < root_cap {
             if !roots.is_empty() && (gen_deadline.map(|d| Instant::now() >= d).unwrap_or(false) || stop.load(Ordering::Relaxed)) {
                 break;
             }
             match agen.next(&hc, root) {
                 Some(a) => roots.push((self.action_score(root, &a, 0), a)),
-                None if roots.is_empty() && full.is_some() => agen.restart(&hc, full.take().unwrap()),
+                None if roots.is_empty() && !fallback.is_empty() => agen.restart(&hc, fallback.pop().unwrap()),
                 None => {
-                    complete = true;
+                    // (The cold boards' other moves are not in a focused space.)
+                    complete = fallback.len() <= 1;
                     break;
+                }
+            }
+        }
+        if fallback.len() > 1 && !roots.is_empty() {
+            // A focused root also gets the best actions of the whole space (checking ones
+            // first: mates often need a quiet move on a cold board).
+            agen.restart(&hc, fallback[1].clone());
+            for _ in 0..ROOT_FOCUS_EXTRA {
+                if gen_deadline.is_some_and(|d| Instant::now() >= d) || stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                let Some(a) = agen.next(&hc, root) else { break };
+                if !roots.iter().any(|r| r.1 == a) {
+                    roots.push((self.action_score(root, &a, 0), a));
                 }
             }
         }
@@ -1622,7 +1870,7 @@ impl AlphaBeta {
             return None;
         }
         // Every legal root action is searched (for proving that the root is mated).
-        let roots_complete = complete && !full.as_ref().is_some_and(|f| Self::trims_future(root, &hc, f));
+        let roots_complete = complete && !fallback.first().is_some_and(|f| Self::trims_future(root, &hc, f));
         // A forced action on the clock is played at once.
         if complete && roots.len() == 1 && plan.as_ref().is_some_and(|p| p.clock) {
             return Some(Action::from_moveseq(&roots[0].1, root));
