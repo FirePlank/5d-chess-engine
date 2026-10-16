@@ -1300,7 +1300,10 @@ impl HcInfo {
         !maybe.is_empty()
     }
 
-    pub fn find_checks(&self, st: &State, p: &Point, hc: &Hc, buf: &mut CheckBuf) -> Option<Slice> {
+    /// The first check the opponent has after point `p` (the scan `find_checks` builds its
+    /// slice from), with the position it was found in; `buf` is lent to that position (get it
+    /// back with `into_buf`) and left in place when there is none.
+    fn first_check_after<'a>(&'a self, st: &'a State, p: &Point, buf: &mut CheckBuf) -> Option<(FullMove, CheckPosition<'a>)> {
         let (_, c) = st.get_present();
         let (mut lo, mut hi) = st.get_lines_range();
         if let (Some(&(first, _)), Some(&(last, _))) = (self.line_axes.first(), self.line_axes.last()) {
@@ -1325,10 +1328,37 @@ impl HcInfo {
             MayCheck::Lines => newstate.first_check_in(!c, &self.env_checks.borrow().maybe),
             _ => newstate.first_check(!c, false),
         };
-        let Some(check) = first else {
-            *buf = newstate.into_buf();
-            return None;
-        };
+        match first {
+            Some(check) => Some((check, newstate)),
+            None => {
+                *buf = newstate.into_buf();
+                None
+            }
+        }
+    }
+
+    /// Whether the point `p` of a context with one playable board, every branch axis null, is
+    /// a legal action: `find_problem(..).is_none()` without building the slice.
+    pub fn lone_point_legal(&self, st: &State, p: &Point, buf: &mut CheckBuf) -> bool {
+        debug_assert!(self.new_axis == 1 && p[1..].iter().all(|&i| i == 0));
+        // Without a branch the jumps are in order. Every timeline ending on the mover's turn is
+        // playable, so moving the one playable board (the one at the present) moves the
+        // present, and leaving it unmoved does not.
+        if self.entry(0, p[0]).is_null() {
+            return false;
+        }
+        match self.first_check_after(st, p, buf) {
+            Some((_, newstate)) => {
+                *buf = newstate.into_buf();
+                false
+            }
+            None => true,
+        }
+    }
+
+    pub fn find_checks(&self, st: &State, p: &Point, hc: &Hc, buf: &mut CheckBuf) -> Option<Slice> {
+        let c = st.get_present().1;
+        let (check, newstate) = self.first_check_after(st, p, buf)?;
         let (path, sliding_type) = get_move_path(&newstate, check, !c);
         let is_next = |t1: i32, t2: i32| if c { t1 + 1 == t2 } else { t1 == t2 };
         let sliding_bb = |nb: &Board| -> Bitboard {
@@ -1535,10 +1565,23 @@ pub struct NeedBranch;
 /// after the top action the next ones deviate on whichever axis loses least, instead of
 /// varying the last axis first. Problems are removed from the popped hypercuboid only.
 /// Subspaces of the initial search space keep their precedence (later ones first).
+///
+/// With one playable board, the actions without a branch (the first class) are each one move
+/// of that board: they are walked in its order, each tested on its own, which is the order
+/// the hypercuboids would give.
 pub struct BestFirstCursor {
     heap: BfHeap,
     sc: PointScratch,
     checks: CheckBuf,
+    lone: Option<LoneWalk>,
+}
+
+/// The first class of a context with one playable board: the coordinates of its axis 0 still
+/// to test, from position `pos` of the axis order on.
+struct LoneWalk {
+    hc: Hc,
+    pos: usize,
+    point: Point,
 }
 
 struct BfHeap {
@@ -1645,6 +1688,7 @@ impl Default for BestFirstCursor {
             },
             sc: PointScratch::default(),
             checks: CheckBuf::default(),
+            lone: None,
         }
     }
 }
@@ -1668,8 +1712,22 @@ impl BestFirstCursor {
         self.heap.seq = 0;
         self.heap.universe.clone_from(info.get_universe());
         self.heap.first_branch = info.first_branch_axis();
-        let n = ss.hcs.len();
-        for (k, hc) in ss.hcs.into_iter().enumerate() {
+        let mut hcs = ss.hcs;
+        // The first class is the last hypercuboid; with one playable board and every branch
+        // axis null there, its points are the coordinates of axis 0 (see `next_with`).
+        self.lone = None;
+        if info.first_branch_axis() == 1 && matches!(self.heap.order, HcOrdering::Precomputed(_)) {
+            if let Some(hc) = hcs.last() {
+                if !hc[0].is_empty() && (1..hc.dimension()).all(|n| hc[n].single() == Some(0)) {
+                    let hc = hcs.pop().unwrap();
+                    let dim = hc.dimension();
+                    self.lone = Some(LoneWalk { hc, pos: 0, point: vec![0; dim] });
+                }
+            }
+        }
+        // (The classes count from the first, as if it were still there.)
+        let n = hcs.len() + self.lone.is_some() as usize;
+        for (k, hc) in hcs.into_iter().enumerate() {
             self.heap.push_initial(hc, (n - 1 - k) as i32);
         }
     }
@@ -1681,6 +1739,25 @@ impl BestFirstCursor {
     /// `next`, ordering pending branch axes with `fill` once needed; stops with `NeedBranch`
     /// (and no progress) when the next hypercuboid needs the branch entries `info` deferred.
     pub fn next_with(&mut self, info: &HcInfo, s: &State, fill: &mut BranchFill) -> Result<Option<MoveSeq>, NeedBranch> {
+        if let Some(walk) = &mut self.lone {
+            // Each live non-jump coordinate in axis order: the point a hypercuboid of this class
+            // takes next (a problem only removes coordinates whose points all fail, a found
+            // action only its own).
+            let HcOrdering::Precomputed(o) = &self.heap.order else { unreachable!() };
+            let order = o.axis(0);
+            while walk.pos < order.len() {
+                let i = order[walk.pos];
+                walk.pos += 1;
+                if !walk.hc[0].contains(i) || !matches!(info.entry(0, i), Entry::Physical { .. } | Entry::Null) {
+                    continue;
+                }
+                walk.point[0] = i;
+                if info.lone_point_legal(s, &walk.point, &mut self.checks) {
+                    return Ok(Some(info.to_action(&walk.point)));
+                }
+            }
+            self.lone = None;
+        }
         while let Some(BfItem { key, mut hc }) = self.heap.heap.pop() {
             if info.needs_branch(&hc) {
                 self.heap.heap.push(BfItem { key, hc });

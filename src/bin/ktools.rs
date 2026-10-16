@@ -674,6 +674,42 @@ fn main() {
                 out.flush().unwrap();
             }
         }
+        "hcverify" => {
+            // hcverify [cap] [seeds] : every action generator the engine uses (best-first under
+            // the engine ordering and under random orderings, and the evasion cursor) must
+            // produce exactly the hypercuboid search's set of legal actions, and none exactly
+            // when it has none. Positions with more than `cap` actions are compared on the
+            // first `cap` distinct actions of each generator (each must be legal). Generators
+            // that repeat an action are counted separately.
+            let cap: usize = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(5000);
+            let seeds: u64 = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(2);
+            let (mut positions, mut complete, mut actions, mut bad, mut repeating) = (0u64, 0u64, 0u64, 0u64, 0u64);
+            for line in stdin.lock().lines() {
+                let line = line.unwrap();
+                if !line.starts_with("G ") {
+                    continue;
+                }
+                let s = parse_g_line(&line).unwrap();
+                positions += 1;
+                match hcverify(&s, cap, seeds) {
+                    Ok((n, full, repeats)) => {
+                        actions += n as u64;
+                        complete += full as u64;
+                        if let Some(r) = repeats {
+                            repeating += 1;
+                            writeln!(out, "REPEATS {}\n  {}", r, line).unwrap();
+                        }
+                    }
+                    Err(e) => {
+                        bad += 1;
+                        writeln!(out, "MISMATCH {}\n  {}", e, line).unwrap();
+                        out.flush().unwrap();
+                    }
+                }
+            }
+            writeln!(out, "hcverify positions {} (complete sets {}) actions {} mismatches {} with repeated actions {}", positions, complete, actions, bad, repeating)
+                .unwrap();
+        }
         "bench" => bench(args.get(2).map(|s| s.as_str()).unwrap_or("data/bench.g"), &mut out),
         _ => {
             eprintln!(
@@ -1094,4 +1130,108 @@ fn netdata(args: &[String], out: &mut impl Write) {
     }
     std::fs::write(out_path, &bytes).expect("write records");
     writeln!(out, "{} records ({} inputs + 4) from {} games -> {}", n, NI, lines.len(), out_path).unwrap();
+}
+
+/// One position of `ktools hcverify`: (reference action count, whether it is complete, the
+/// first generator that repeated an action).
+fn hcverify(s: &State, cap: usize, seeds: u64) -> Result<(usize, bool, Option<String>), String> {
+    use kairos::core::hypercuboid::{BestFirstCursor, HcCursor};
+    use kairos::core::naive::is_legal_action;
+    use kairos::engine::ab::AlphaBeta;
+    use kairos::misc::ordering::AxisOrders;
+    use std::collections::BTreeSet;
+    let (w, ss) = HcInfo::build_hc(s);
+    let mut reference: BTreeSet<String> = BTreeSet::new();
+    for a in w.search(s, ss.clone()) {
+        reference.insert(seq_string(&a));
+        if reference.len() > cap {
+            break;
+        }
+    }
+    let full = reference.len() <= cap;
+    let mut repeats: Option<String> = None;
+    let mut compare = |name: &str, acts: &[MoveSeq]| -> Result<(), String> {
+        let got: BTreeSet<String> = acts.iter().map(seq_string).collect();
+        if got.len() != acts.len() && repeats.is_none() {
+            let mut seen = BTreeSet::new();
+            let dups: Vec<String> = acts.iter().map(seq_string).filter(|a| !seen.insert(a.clone())).take(3).collect();
+            repeats = Some(format!("{}: {} actions but {} distinct (repeated {:?})", name, acts.len(), got.len(), dups));
+        }
+        if full {
+            if got != reference {
+                let extra: Vec<&String> = got.difference(&reference).take(3).collect();
+                let missing: Vec<&String> = reference.difference(&got).take(3).collect();
+                return Err(format!("{}: {} actions vs hc {} (extra {:?} missing {:?})", name, got.len(), reference.len(), extra, missing));
+            }
+        } else {
+            if got.len() < cap {
+                return Err(format!("{}: only {} actions, hc has more than {}", name, got.len(), cap));
+            }
+            if let Some(a) = acts.iter().take(cap).find(|a| !is_legal_action(s, a)) {
+                return Err(format!("{}: illegal action {}", name, seq_string(a)));
+            }
+        }
+        Ok(())
+    };
+    // Mate status: no action exactly when the hypercuboid search has none.
+    let mate = s.get_mate_type();
+    if reference.is_empty() != matches!(mate, MateType::Checkmate | MateType::Stalemate) {
+        return Err(format!("mate type {} but hc has {} actions", mate_name(mate), reference.len()));
+    }
+    // Generators are run to the end (allowing for repeats) or to `cap` distinct actions.
+    let limit = 4 * reference.len().min(cap) + 16;
+    let take = |next: &mut dyn FnMut() -> Option<MoveSeq>| -> Vec<MoveSeq> {
+        let mut acts = Vec::new();
+        let mut seen = BTreeSet::new();
+        while acts.len() < limit && seen.len() < cap {
+            match next() {
+                Some(a) => {
+                    seen.insert(seq_string(&a));
+                    acts.push(a);
+                }
+                None => break,
+            }
+        }
+        acts
+    };
+    // The engine's interior-node enumeration.
+    let engine = AlphaBeta::new();
+    compare("best-first (engine order)", &engine.node_order(s, limit))?;
+    // Best-first under random scores (orders sorted by them, as the cursor requires).
+    let mut st = (s.hash() | 1).wrapping_mul(0x9E3779B97F4A7C15);
+    let mut rnd = move || {
+        st ^= st << 13;
+        st ^= st >> 7;
+        st ^= st << 17;
+        st
+    };
+    for seed in 0..seeds {
+        let (w2, ss2) = HcInfo::build_hc(s);
+        let u = w2.get_universe();
+        let mut cur = BestFirstCursor::default();
+        {
+            let (orders, scores) = cur.ordering_mut();
+            let mut lists = Vec::new();
+            scores.clear();
+            for n in 0..u.dimension() {
+                let len = u[n].max().map(|i| i as usize + 1).unwrap_or(0);
+                // Few distinct values, so ties are common.
+                let sc: Vec<i32> = (0..len).map(|_| (rnd() % 7) as i32 - 3).collect();
+                let mut v: Vec<u32> = u[n].iter().collect();
+                v.sort_by_key(|&i| (std::cmp::Reverse(sc[i as usize]), i));
+                lists.push(v);
+                scores.push(sc);
+            }
+            *orders = AxisOrders::new(lists);
+        }
+        cur.restart(&w2, ss2);
+        let acts = take(&mut || cur.next(&w2, s));
+        compare(&format!("best-first (random order {})", seed), &acts)?;
+    }
+    // The evasion cursor under the engine ordering.
+    let (w3, ss3) = HcInfo::build_hc(s);
+    let mut cur = HcCursor::new(ss3, engine.ordering(s, &w3));
+    let acts = take(&mut || cur.next(&w3, s));
+    compare("depth-first (engine order)", &acts)?;
+    Ok((reference.len(), full, repeats))
 }
