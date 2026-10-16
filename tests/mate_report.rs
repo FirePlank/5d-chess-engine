@@ -58,6 +58,29 @@ fn true_mates_are_reported() {
 }
 
 #[test]
+fn threaded_searches_report_only_proven_mates() {
+    // Lazy SMP: helper threads share the table (and its proofs) with the reporting thread.
+    setup();
+    let mut e = AlphaBeta::new();
+    e.set_option("Threads", &kairos::engine::OptionValue::Int(4));
+    let stop = AtomicBool::new(false);
+    let mut run = |g: &str, depth: u32| {
+        let s = parse_g_line(g).unwrap();
+        let mut lines = Vec::new();
+        e.find_best_move(&s, &Limits { depth: Some(depth), ..Default::default() }, &stop, &mut |l| lines.push(l));
+        lines
+    };
+    for l in run("G 1 size 8x8 odd fen [k7/p*n6/K7/8/8/8/6P*B/8:0:1:w]", 13) {
+        let (kind, n) = score(&l);
+        assert!(kind != "mate" || n >= 7, "false mate reported: {}", l);
+    }
+    let lines = run("G 1 size 8x8 odd fen [k7/8/1K6/8/8/8/8/7R:0:1:w]", 3);
+    assert!(lines.iter().all(|l| score(l) == ("mate".into(), 1)), "{:?}", lines);
+    let lines = run("G 1 size 8x8 odd fen [k*7/p*n6/K*7/8/8/8/6B/8:0:1:w]", 6);
+    assert_eq!(score(lines.last().unwrap()), ("mate".into(), 2), "{:?}", lines);
+}
+
+#[test]
 fn reported_scale() {
     // +100 reported is about a 75% expected score, +200 about 90%, +400 about 99%.
     assert_eq!(report_cp(275), 100);
