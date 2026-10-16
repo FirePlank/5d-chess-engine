@@ -1,6 +1,7 @@
 //! Eval net: a small MLP over per-side handcrafted features that adds a capped correction
 //! (residual) to the handcrafted evaluation. Inputs are from the side to move's view: its
-//! own features, the opponent's, then a few global terms (including the handcrafted score).
+//! own features, the opponent's, its own extra terms (`hce::ex`), the opponent's, then a few
+//! global terms (including the handcrafted score).
 //!
 //! Weights live in `data/evalnet.bin`, written by `scripts/evalnet/train.py` from
 //! `ktools netdata` records.
@@ -9,13 +10,15 @@ use crate::core::state::State;
 use std::sync::OnceLock;
 
 pub use super::hce::si;
-use super::hce::Sides;
+use super::hce::{ex, Sides};
 
 /// Features per side.
 pub const NS: usize = si::COUNT;
+/// Extra terms per side.
+pub const NE: usize = ex::COUNT;
 /// Global features.
 pub const NG: usize = 5;
-pub const NI: usize = 2 * NS + NG;
+pub const NI: usize = 2 * NS + 2 * NE + NG;
 
 /// Global feature indices (after both sides' blocks).
 pub mod gi {
@@ -41,8 +44,16 @@ pub fn inputs_from(sd: &Sides, s: &State, base_stm: i32) -> [f32; NI] {
         x[i] = sd.side[stm][i] as f32;
         x[NS + i] = sd.side[1 - stm][i] as f32;
     }
+    for i in 0..NE {
+        // The f7 sac table's terms are added after the net (`hce::split_sac`); it never sees them.
+        if (ex::SAC_LINE..=ex::SAC_OPEN).contains(&i) {
+            continue;
+        }
+        x[2 * NS + i] = sd.extra[stm][i] as f32;
+        x[2 * NS + NE + i] = sd.extra[1 - stm][i] as f32;
+    }
     let full = 6 * sd.active.max(1);
-    let g = &mut x[2 * NS..];
+    let g = &mut x[2 * NS + 2 * NE..];
     g[gi::ACTIVE] = sd.active as f32;
     g[gi::INACTIVE] = sd.inactive as f32;
     g[gi::HEAVY] = (8 * sd.heavy.min(full) / full) as f32;

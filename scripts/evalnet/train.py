@@ -16,7 +16,7 @@ import struct
 import numpy as np
 import torch
 
-NI = 113
+NI = 177
 
 
 def load(specs):
