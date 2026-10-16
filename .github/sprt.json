@@ -1,0 +1,12 @@
+{
+  "name": "net_tc10",
+  "old": "406688dc627c17968fa06ee760b40fc4f8eb3c6f",
+  "games": 12000,
+  "shards": 40,
+  "tc": "tc 10+0.1",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}
