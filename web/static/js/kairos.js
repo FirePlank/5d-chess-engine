@@ -150,12 +150,12 @@ export class Engine {
   }
 
   /** Start a search; a running one is stopped first. Returns the request id. */
-  async search({ position, movetime = 86_400_000, depth, newGame = false }) {
+  async search({ position, movetime = 86_400_000, depth, newGame = false, resume = false }) {
     await this.start();
     this.stop();
     const id = ++this.reqId;
     this.busy = true;
-    this.worker.postMessage({ type: 'search', id, position, movetime, depth, newGame });
+    this.worker.postMessage({ type: 'search', id, position, movetime, depth, newGame, resume });
     return id;
   }
 

@@ -3,7 +3,7 @@
 // in:  {type:'init', module, clock?, hashMb, threads, memory}  (memory: the limits of the
 //        shared memory the module imports; with threads > 1 a pool of threads - 1 thread
 //        workers is started on it)
-//      {type:'search', id, position, movetime, depth?, newGame?}
+//      {type:'search', id, position, movetime, depth?, newGame?, resume?}
 // out: {type:'ready', threads} | {type:'info', id, line} | {type:'done', id, bestmove}
 //      {type:'error', id?, message}
 import { instantiate, startClock, clockStopped } from './wasi.js';
@@ -65,6 +65,7 @@ self.onmessage = async (e) => {
         movetime: msg.movetime,
         depth: msg.depth,
         newGame: msg.newGame,
+        resume: msg.resume,
       });
       if (r.ok) self.postMessage({ type: 'done', id: msg.id, bestmove: r.bestmove });
       else self.postMessage({ type: 'error', id: msg.id, message: r.error });

@@ -448,7 +448,9 @@ export class Analysis {
     }
     this.searching = { node, key, blackToMove, started: performance.now() };
     // The movetime only bounds the search (and lets a stop interrupt it); the depth ends it.
-    this.engine.search({ position: v.position, depth, movetime: 86_400_000 }).then((id) => {
+    // `resume`: when the engine's last search was this position (go deeper, a raised depth, a
+    // stopped search revisited), it continues from the depth reached instead of from 1.
+    this.engine.search({ position: v.position, depth, movetime: 86_400_000, resume: true }).then((id) => {
       if (this.searching && this.searching.node === node) this.searching.id = id;
     }).catch((e) => {
       toast('Engine failed to start: ' + e.message, { error: true });

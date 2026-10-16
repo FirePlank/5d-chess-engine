@@ -245,6 +245,7 @@ impl Api {
             nodes: j.get("nodes").int().map(|d| d as u64),
             time_left: None,
             increment: None,
+            resume: j.get("resume").bool() == Some(true),
         };
         let hash = self.hash_mb;
         let options = &self.options;
