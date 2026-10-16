@@ -16,6 +16,39 @@ fn out(line: &str) {
     let _ = lock.flush();
 }
 
+/// The limits of a `go` command (its arguments in `toks`) for the side to move (`black`):
+/// `movetime`, `depth`, `nodes`; a clock: `wtime/btime`, `winc/binc`, and a delay clock's
+/// `wdelay/bdelay` (fixed per action) and `wtldelay/btldelay` (per active timeline), all ms.
+/// The 5D tournament clock (5 min, 3 s delay per active timeline) is
+/// `go wtime 300000 btime 300000 wtldelay 3000 btldelay 3000`. Unknown tokens are skipped.
+pub fn parse_go(toks: &[&str], black: bool) -> Limits {
+    let mut limits = Limits::default();
+    let mut k = 0;
+    while k < toks.len() {
+        let v = toks.get(k + 1).and_then(|x| x.parse::<u64>().ok());
+        match toks[k] {
+            "movetime" => limits.movetime = v,
+            "depth" => limits.depth = v.map(|d| d as u32),
+            "nodes" => limits.nodes = v,
+            "wtime" if !black => limits.time_left = v,
+            "btime" if black => limits.time_left = v,
+            "winc" if !black => limits.increment = v,
+            "binc" if black => limits.increment = v,
+            "wdelay" if !black => limits.delay = v,
+            "bdelay" if black => limits.delay = v,
+            "wtldelay" if !black => limits.delay_per_timeline = v,
+            "btldelay" if black => limits.delay_per_timeline = v,
+            "wtime" | "btime" | "winc" | "binc" | "wdelay" | "bdelay" | "wtldelay" | "btldelay" => {}
+            _ => {
+                k += 1;
+                continue;
+            }
+        }
+        k += 2;
+    }
+    limits
+}
+
 pub fn run(engine: AlphaBeta) {
     let engine = Arc::new(Mutex::new(engine));
     let stop = Arc::new(AtomicBool::new(false));
@@ -88,27 +121,8 @@ pub fn run(engine: AlphaBeta) {
                     out("nobestmove");
                     continue;
                 };
-                let mut limits = Limits::default();
                 let toks: Vec<&str> = it.collect();
-                let mut k = 0;
-                let player_black = s.get_present().1;
-                while k < toks.len() {
-                    let v = toks.get(k + 1).and_then(|x| x.parse::<u64>().ok());
-                    match toks[k] {
-                        "movetime" => limits.movetime = v,
-                        "depth" => limits.depth = v.map(|d| d as u32),
-                        "nodes" => limits.nodes = v,
-                        "wtime" if !player_black => limits.time_left = v,
-                        "btime" if player_black => limits.time_left = v,
-                        "winc" if !player_black => limits.increment = v,
-                        "binc" if player_black => limits.increment = v,
-                        _ => {
-                            k += 1;
-                            continue;
-                        }
-                    }
-                    k += 2;
-                }
+                let limits = parse_go(&toks, s.get_present().1);
                 stop.store(false, Ordering::SeqCst);
                 busy.store(true, Ordering::SeqCst);
                 let (engine, stop, busy) = (engine.clone(), stop.clone(), busy.clone());
@@ -174,5 +188,21 @@ pub fn run(engine: AlphaBeta) {
     stop.store(true, Ordering::SeqCst);
     if let Some(w) = worker.take() {
         let _ = w.join();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_go;
+
+    #[test]
+    fn go_delay_params() {
+        let toks: Vec<&str> = "wtime 300000 btime 290000 winc 0 binc 0 wdelay 500 bdelay 700 wtldelay 3000 btldelay 2000".split(' ').collect();
+        let w = parse_go(&toks, false);
+        assert_eq!((w.time_left, w.increment, w.delay, w.delay_per_timeline), (Some(300000), Some(0), Some(500), Some(3000)));
+        let b = parse_go(&toks, true);
+        assert_eq!((b.time_left, b.increment, b.delay, b.delay_per_timeline), (Some(290000), Some(0), Some(700), Some(2000)));
+        let m = parse_go(&["movetime", "100", "foo", "nodes", "5"], false);
+        assert_eq!((m.movetime, m.nodes, m.delay), (Some(100), Some(5), None));
     }
 }

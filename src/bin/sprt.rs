@@ -4,11 +4,17 @@
 //! with the kairos rules core, and stops on a pentanomial GSPRT decision (fastchess math).
 //!
 //! sprt --new "<cmd>" --base "<cmd>" [--book book.g | --book-plies 6]
-//!      [--movetime 100 | --tc 10+0.1 | --nodes N | --depth D]
+//!      [--movetime 100 | --tc 10+0.1[/dD][/tT] | --nodes N | --depth D]
 //!      [--concurrency 8] [--max-games 20000] [--min-games 0] [--elo0 0] [--elo1 5]
 //!      [--alpha 0.05] [--beta 0.05] [--model normalized|logistic] [--max-actions 160]
 //!      [--games-out games.jsonl] [--seed 1] [--compact]
 //!      [--new-option Name=Value]... [--base-option Name=Value]...
+//!
+//! `--tc base+inc` is a clock in seconds; `/dD` adds a delay of D s per action and `/tT` a
+//! delay of T s per active timeline (at the start of the action); both may be given. A
+//! delay clock waits `D + T * timelines` before the base runs down, and unused delay is lost:
+//! the 5D tournament clock is `--tc 300+0/t3`. Engines get `go wtime btime winc binc` plus
+//! `wdelay bdelay` (D, ms) and `wtldelay btldelay` (T, ms) when nonzero.
 //!
 //! Without `--book`, every pair opens from a generated opening: a random 8x8 built-in variant
 //! and `--book-plies` actions chosen by a shallow search with noise, the same for both games.
@@ -341,10 +347,73 @@ struct Config {
     new_options: Vec<String>,
     base_options: Vec<String>,
     go: String,
-    /// Clock games (`--tc base+inc`, seconds): base and increment in ms.
-    clock: Option<(u64, u64)>,
+    /// Clock games (`--tc base+inc[/dD][/tT]`, seconds).
+    clock: Option<Clock>,
     timeout: Duration,
     max_actions: usize,
+}
+
+/// A game clock, in ms: base and increment, and a delay per action and per active timeline.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Clock {
+    base: u64,
+    inc: u64,
+    delay: u64,
+    tl_delay: u64,
+}
+
+impl Clock {
+    /// `base[+inc][/dD][/tT]` in seconds, e.g. `10+0.1`, `300+0/t3`, `60/d1/t0.5`.
+    fn parse(tc: &str) -> Result<Clock, String> {
+        let ms = |x: &str| x.parse::<f64>().map(|v| (v * 1000.0).round() as u64).map_err(|_| format!("--tc {}: bad number {:?}", tc, x));
+        let mut parts = tc.split('/');
+        let main = parts.next().unwrap_or("");
+        let (b, i) = main.split_once('+').unwrap_or((main, "0"));
+        let mut c = Clock { base: ms(b)?, inc: ms(i)?, ..Clock::default() };
+        for p in parts {
+            match p.split_at(p.len().min(1)) {
+                ("d", v) => c.delay = ms(v)?,
+                ("t", v) => c.tl_delay = ms(v)?,
+                _ => return Err(format!("--tc {}: expected /dD or /tT, got /{}", tc, p)),
+            }
+        }
+        Ok(c)
+    }
+
+    /// The delay of an action from `s`: fixed plus per active timeline.
+    fn delay_at(&self, s: &State) -> u64 {
+        self.delay + self.tl_delay * s.active_timelines() as u64
+    }
+
+    /// The clock after an action that took `used` ms with `delay`: the time past the delay
+    /// comes off it and the increment is added; `None` when it ran out.
+    fn charge(&self, left: u64, used: u64, delay: u64) -> Option<u64> {
+        let charged = used.saturating_sub(delay);
+        (charged <= left).then(|| left - charged + self.inc)
+    }
+
+    /// The `go` command, `w`/`b` being the clocks of white and black.
+    fn go(&self, w: u64, b: u64) -> String {
+        let mut go = format!("go wtime {} btime {} winc {} binc {}", w, b, self.inc, self.inc);
+        if self.delay > 0 {
+            go += &format!(" wdelay {} bdelay {}", self.delay, self.delay);
+        }
+        if self.tl_delay > 0 {
+            go += &format!(" wtldelay {} btldelay {}", self.tl_delay, self.tl_delay);
+        }
+        go
+    }
+
+    fn label(&self) -> String {
+        let mut t = format!("tc {}+{} ms", self.base, self.inc);
+        if self.delay > 0 {
+            t += &format!(" delay {} ms", self.delay);
+        }
+        if self.tl_delay > 0 {
+            t += &format!(" delay {} ms/timeline", self.tl_delay);
+        }
+        t
+    }
 }
 
 struct Opening {
@@ -531,7 +600,7 @@ fn play_game(cfg: &Config, procs: &mut [Option<Proc>; 2], op: &Opening, new_firs
     }
     let first_player = s.get_present().1;
     // Remaining clock (ms) of NEW and BASE in clock games.
-    let mut clock = [cfg.clock.map(|c| c.0).unwrap_or(0); 2];
+    let mut clock = [cfg.clock.map(|c| c.base).unwrap_or(0); 2];
     let mut n = 0usize;
     let mut evals: Vec<Option<i32>> = Vec::new();
     let finish = |res_for_mover_new: GameResult, reason: String, n: usize, history: &str, evals: &[Option<i32>]| GameRecord {
@@ -563,24 +632,26 @@ fn play_game(cfg: &Config, procs: &mut [Option<Proc>; 2], op: &Opening, new_firs
         let proc = procs[side].as_mut().unwrap();
         proc.send(&format!("position {} moves {}", op.position, history))?;
         proc.last_score = None;
+        // The delay of this action: from the active timelines at its start.
+        let delay = cfg.clock.map_or(0, |c| c.delay_at(&s));
         let t0 = Instant::now();
         match cfg.clock {
-            Some((_, inc)) => {
+            Some(c) => {
                 // `player` is the side to move (false = white); each engine keeps its own clock.
                 let (w, b) = if player { (clock[1 - side], clock[side]) } else { (clock[side], clock[1 - side]) };
-                proc.send(&format!("go wtime {} btime {} winc {} binc {}", w, b, inc, inc))?;
+                proc.send(&c.go(w, b))?;
             }
             None => proc.send(&cfg.go)?,
         }
         // A clock game allows one second of grace past the flag before the engine is dropped.
-        let timeout = cfg.clock.map(|_| Duration::from_millis(clock[side] + 1000)).unwrap_or(cfg.timeout);
+        let timeout = cfg.clock.map(|_| Duration::from_millis(clock[side] + delay + 1000)).unwrap_or(cfg.timeout);
         let reply = proc.wait_for("bestmove", timeout)?;
-        if let Some((_, inc)) = cfg.clock {
+        if let Some(c) = cfg.clock {
             let used = t0.elapsed().as_millis() as u64;
-            if used > clock[side] {
-                return Ok(finish(new_result(false), "time forfeit".into(), n, &history, &evals));
+            match c.charge(clock[side], used, delay) {
+                Some(left) => clock[side] = left,
+                None => return Ok(finish(new_result(false), "time forfeit".into(), n, &history, &evals)),
             }
-            clock[side] = clock[side] - used + inc;
         }
         evals.push(proc.last_score);
         if reply.starts_with("nobestmove") {
@@ -643,14 +714,10 @@ fn main() {
     let normalized = arg(&args, "--model").map(|m| m != "logistic").unwrap_or(true);
     let max_actions: usize = arg(&args, "--max-actions").and_then(|v| v.parse().ok()).unwrap_or(160);
     let seed: u64 = arg(&args, "--seed").and_then(|v| v.parse().ok()).unwrap_or(1);
-    // --tc base+inc in seconds, e.g. 10+0.1.
-    let clock = arg(&args, "--tc").map(|tc| {
-        let (b, i) = tc.split_once('+').unwrap_or((tc.as_str(), "0"));
-        let ms = |x: &str| (x.parse::<f64>().expect("--tc base+inc") * 1000.0).round() as u64;
-        (ms(b), ms(i))
-    });
-    let (go, budget_ms) = if let Some((b, i)) = clock {
-        (format!("tc {}+{} ms", b, i), b + i)
+    // --tc base+inc[/dD][/tT] in seconds, e.g. 10+0.1 or 300+0/t3 (see the top).
+    let clock = arg(&args, "--tc").map(|tc| Clock::parse(&tc).unwrap_or_else(|e| panic!("{}", e)));
+    let (go, budget_ms) = if let Some(c) = clock {
+        (c.label(), c.base + c.inc)
     } else if let Some(n) = arg(&args, "--nodes") {
         (format!("go nodes {}", n), 30000u64)
     } else if let Some(d) = arg(&args, "--depth") {
@@ -910,4 +977,43 @@ fn main() {
     );
     println!("Termination reasons: {:?}", sh.reasons);
     println!("Elapsed: {:.0}s", start.elapsed().as_secs_f64());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tc_forms() {
+        assert_eq!(Clock::parse("10+0.1").unwrap(), Clock { base: 10000, inc: 100, ..Clock::default() });
+        assert_eq!(Clock::parse("60").unwrap(), Clock { base: 60000, ..Clock::default() });
+        assert_eq!(Clock::parse("300+0/t3").unwrap(), Clock { base: 300000, tl_delay: 3000, ..Clock::default() });
+        assert_eq!(Clock::parse("60/d1/t0.5").unwrap(), Clock { base: 60000, delay: 1000, tl_delay: 500, ..Clock::default() });
+        assert!(Clock::parse("60+0/x1").is_err());
+        assert_eq!(Clock::parse("10+0.1").unwrap().go(1, 2), "go wtime 1 btime 2 winc 100 binc 100");
+        assert_eq!(
+            Clock::parse("20/d1/t0.5").unwrap().go(1, 2),
+            "go wtime 1 btime 2 winc 0 binc 0 wdelay 1000 bdelay 1000 wtldelay 500 btldelay 500"
+        );
+    }
+
+    #[test]
+    fn delay_clock_charges() {
+        let c = Clock::parse("20+0/d0.2/t0.5").unwrap();
+        // The start position has one active timeline: 200 + 500 ms of delay.
+        let s = kairos::core::variants::startpos();
+        assert_eq!(s.active_timelines(), 1);
+        let d = c.delay_at(&s);
+        assert_eq!(d, 700);
+        // Within the delay nothing is charged (and nothing is banked).
+        assert_eq!(c.charge(5000, 650, d), Some(5000));
+        assert_eq!(c.charge(0, 700, d), Some(0));
+        // Past the delay only the excess is charged; past the clock too, the flag falls.
+        assert_eq!(c.charge(5000, 1700, d), Some(4000));
+        assert_eq!(c.charge(999, 1700, d), None);
+        // Increment clocks are unchanged.
+        let i = Clock::parse("10+0.1").unwrap();
+        assert_eq!(i.charge(5000, 300, 0), Some(4800));
+        assert_eq!(i.charge(200, 300, 0), None);
+    }
 }

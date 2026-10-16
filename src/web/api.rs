@@ -269,6 +269,9 @@ impl Api {
 
     /// Run the engine on a 5DUCI position (`position` plus optional `moves`). With `book`
     /// true, a book position is answered from the opening book without a search (`OwnBook`).
+    /// Limits (ms): `depth`, `movetime`, `nodes`; a clock: `timeLeft` and `increment`, and a
+    /// delay clock's `delay` (fixed per action) and `delayPerTimeline` (per active timeline of
+    /// the position; 5D tournament clock: `timeLeft` 300000, `delayPerTimeline` 3000).
     fn search(&mut self, j: &Json, info: &mut dyn FnMut(&str)) -> Result<Json, String> {
         let s = Self::uci_state(j.get("position").str().ok_or("missing position")?)?;
         let limits = Limits {
