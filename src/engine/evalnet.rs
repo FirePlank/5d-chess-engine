@@ -194,6 +194,12 @@ impl Net {
 
 static NET: OnceLock<Option<Net>> = OnceLock::new();
 
+/// Use the net in `bytes` (`data/evalnet.bin` format) instead of the embedded one, for tests
+/// and tools; only takes effect before the first evaluation. Returns whether it did.
+pub fn install(bytes: &[u8]) -> bool {
+    NET.set(Net::from_bytes(bytes)).is_ok()
+}
+
 /// The embedded net, if `data/evalnet.bin` holds one for the current inputs.
 pub fn embedded() -> Option<&'static Net> {
     NET.get_or_init(|| Net::from_bytes(include_bytes!("../../data/evalnet.bin"))).as_ref()

@@ -76,6 +76,8 @@ struct TtEntry {
     key: u64,
     depth: i16,
     bound: Bound,
+    /// A mate `score` is proven (see `AlphaBeta::proven`).
+    proven: bool,
     score: i32,
     action: MoveSeq,
 }
@@ -168,11 +170,19 @@ pub struct AlphaBeta {
     tt: TtTable,
     history: Vec<i32>,
     killers: Vec<[Option<MoveSeq>; 2]>,
+    /// Per ply: the last evasion that failed high in quiescence (tried before building).
+    qkillers: Vec<Option<MoveSeq>>,
     nodes: u64,
     deadline: Option<Instant>,
     node_limit: Option<u64>,
     aborted: bool,
     stop_ptr: *const AtomicBool,
+    /// Whether the mate score the last `negamax`/`qsearch` call returned is proven: a mated
+    /// score when every legal action was searched (no pruning, cap or cutoff left one out)
+    /// and every reply's mating score is proven; a mating score when the reply giving it is
+    /// proven; a checkmate on the board. A proven mate is a forced mate within the reported
+    /// distance. Only meaningful for mate scores; it never steers the search.
+    proven: bool,
     /// The root is won or lost by enough (or by mate) that pruning which hides long mating
     /// lines is switched off (Stockfish's seekMate).
     seek_mate: bool,
@@ -184,6 +194,8 @@ pub struct AlphaBeta {
     known_check: Option<bool>,
     /// Static evaluations and in-check status of recently seen positions.
     known: KnownCache,
+    /// The score (internal units, side to move) of the last `find_best_move`.
+    last_score: i32,
 }
 
 // The raw stop pointer is only dereferenced during `find_best_move`, while the borrow it
@@ -214,6 +226,24 @@ fn mate_from_tt(score: i32, ply: usize) -> i32 {
         score + ply as i32
     } else {
         score
+    }
+}
+
+/// Whether `v` is a mating score (the side to move mates).
+#[inline]
+fn mating(v: i32) -> bool {
+    v > MATE - 1000
+}
+
+/// Whether a node's `best` score is a proven mate: a mating score when the reply giving it is
+/// (`best_proven`), a mated score when every legal action was searched and every reply's
+/// mating score is proven (`all_proven`).
+#[inline]
+fn mate_proven(best: i32, best_proven: bool, all_proven: bool) -> bool {
+    if mating(best) {
+        best_proven
+    } else {
+        best < -MATE + 1000 && all_proven
     }
 }
 
@@ -396,16 +426,19 @@ impl AlphaBeta {
             tt: TtTable::new(DEFAULT_HASH_MB),
             history: vec![0; 1 << 16],
             killers: vec![[None, None]; MAX_PLY + 1],
+            qkillers: vec![None; MAX_PLY + 1],
             nodes: 0,
             deadline: None,
             node_limit: None,
             aborted: false,
             stop_ptr: std::ptr::null(),
+            proven: false,
             seek_mate: false,
             bufs: Vec::new(),
             terms: Box::default(),
             known_check: None,
             known: KnownCache::new(),
+            last_score: 0,
         }
     }
 
@@ -456,13 +489,14 @@ impl AlphaBeta {
         if e.bound != Bound::Empty && e.key == key { Some(e) } else { None }
     }
 
-    fn tt_store(&mut self, key: u64, depth: i32, bound: Bound, score: i32, action: &MoveSeq) {
+    fn tt_store(&mut self, key: u64, depth: i32, bound: Bound, score: i32, proven: bool, action: &MoveSeq) {
         let slot = self.tt_slot(key);
         let e = &mut self.tt.entries[slot];
         if e.bound == Bound::Empty || e.key != key || depth as i16 >= e.depth - 1 || bound == Bound::Exact {
             e.key = key;
             e.depth = depth as i16;
             e.bound = bound;
+            e.proven = proven;
             e.score = score;
             e.action.assign(action);
             self.tt.spilled |= e.action.spilled();
@@ -761,13 +795,28 @@ impl AlphaBeta {
         (amin..=amax).filter(|&l| s.get_timeline_end(l) == present).count()
     }
 
+    /// Whether `without_future` leaves out any point of `ss` (a move on an optional board).
+    fn trims_future(s: &State, info: &HcInfo, ss: &SearchSpace) -> bool {
+        let present = s.get_present();
+        let (amin, amax) = s.get_active_range();
+        let (lo, hi) = s.get_lines_range();
+        let optional: Vec<usize> = (lo..=hi)
+            .filter(|&l| !(l >= amin && l <= amax && s.get_timeline_end(l) == present))
+            .filter_map(|l| info.line_to_axis(l))
+            .collect();
+        !optional.is_empty() && ss.hcs.iter().any(|hc| optional.iter().any(|&n| hc[n].has_other_than(0)))
+    }
+
     fn terminal_score(&mut self, s: &State, ply: usize) -> i32 {
+        self.proven = true;
         if self.in_check(s) { -(MATE - ply as i32) } else { 0 }
     }
 
     /// `known_check`: whether `s` is in check, when the caller already knows.
     fn qsearch(&mut self, s: &mut State, ply: usize, mut alpha: i32, beta: i32, qd: i32, known_check: Option<bool>) -> i32 {
         self.nodes += 1;
+        // Only the in-check evasion search below can return a mate score.
+        self.proven = false;
         if self.check_abort() {
             return 0;
         }
@@ -801,7 +850,36 @@ impl AlphaBeta {
             }
             return stand + gain;
         }
-        // In check: search the evasions.
+        // In check: the evasion that failed high here last first, before building the rest.
+        let mut best = -INF;
+        let mut any = false;
+        let mut tried = 0;
+        // Mate proof: the best reply's, and every reply's with all evasions searched.
+        let (mut best_proven, mut all_proven) = (false, true);
+        let mut qkiller = if ply <= MAX_PLY { self.qkillers[ply].clone() } else { None };
+        if let Some(k) = qkiller.take() {
+            if let Some(mark) = Self::make_checked(s, &k) {
+                let v = -self.qsearch(s, ply + 1, -beta, -alpha, qd - 1, None);
+                s.unmake(mark);
+                if self.aborted {
+                    return 0;
+                }
+                // Searched: skipped when the evasions come round to it.
+                qkiller = Some(k);
+                any = true;
+                tried = 1;
+                best = v;
+                best_proven = self.proven;
+                all_proven &= self.proven;
+                if v > alpha {
+                    alpha = v;
+                    if v >= beta {
+                        return v;
+                    }
+                }
+            }
+        }
+        // Search the evasions.
         let mut nb = self.bufs.pop().unwrap_or_default();
         {
             let NodeBufs { info, evasions, order, evasion_scores, .. } = &mut *nb;
@@ -811,9 +889,6 @@ impl AlphaBeta {
             self.node_ordering(s, info, false, order, evasions.order.axes_mut(), evasion_scores, 0..fba, BranchOrder::Now);
             evasions.branch_pending = fba < info.dimension();
         }
-        let mut best = -INF;
-        let mut any = false;
-        let mut tried = 0;
         let aborted = 'search: {
             while tried < QCAP {
                 if self.check_abort() {
@@ -830,8 +905,13 @@ impl AlphaBeta {
                         continue;
                     }
                 }) else {
-                    break;
+                    // Every evasion was searched.
+                    break 'search false;
                 };
+                if qkiller.as_ref() == Some(&act) {
+                    qkiller = None;
+                    continue;
+                }
                 any = true;
                 tried += 1;
                 let mark = Self::make(s, &act);
@@ -840,16 +920,23 @@ impl AlphaBeta {
                 if self.aborted {
                     break 'search true;
                 }
+                all_proven &= self.proven;
                 if v > best {
                     best = v;
+                    best_proven = self.proven;
                     if v > alpha {
                         alpha = v;
                         if v >= beta {
+                            if ply <= MAX_PLY {
+                                self.qkillers[ply] = Some(act.clone());
+                            }
                             break;
                         }
                     }
                 }
             }
+            // The evasion cap or a cutoff left evasions unsearched.
+            all_proven = false;
             false
         };
         self.bufs.push(nb);
@@ -858,8 +945,10 @@ impl AlphaBeta {
         }
         if !any {
             // Only reached in check: mated.
+            self.proven = true;
             return -(MATE - ply as i32);
         }
+        self.proven = mate_proven(best, best_proven, all_proven);
         best
     }
 
@@ -884,6 +973,8 @@ impl AlphaBeta {
             return self.qsearch(s, ply, alpha, beta, QDEPTH, known_check);
         }
         self.nodes += 1;
+        // Every return below that can be a mate score sets this.
+        self.proven = false;
         if self.check_abort() {
             return 0;
         }
@@ -896,11 +987,15 @@ impl AlphaBeta {
         if let Some(e) = self.tt_probe(key) {
             let sc = mate_from_tt(e.score, ply);
             if !pv && e.depth as i32 >= depth {
-                match e.bound {
-                    Bound::Exact => return sc,
-                    Bound::Lower if sc >= beta => return sc,
-                    Bound::Upper if sc <= alpha => return sc,
-                    _ => {}
+                let cut = match e.bound {
+                    Bound::Exact => true,
+                    Bound::Lower => sc >= beta,
+                    Bound::Upper => sc <= alpha,
+                    Bound::Empty => false,
+                };
+                if cut {
+                    self.proven = e.proven;
+                    return sc;
                 }
             }
             if !e.action.is_empty() {
@@ -924,6 +1019,8 @@ impl AlphaBeta {
                     return 0;
                 }
                 if v >= beta {
+                    // Never a mate score (beta is not one): nothing to prove.
+                    self.proven = false;
                     return if v > MATE - 1000 { beta } else { v };
                 }
             }
@@ -932,6 +1029,8 @@ impl AlphaBeta {
         let mut best = -INF;
         let mut best_action = MoveSeq::new();
         let mut searched = 0usize;
+        // Mate proof: the best reply's, and every searched reply's (see `proven`).
+        let (mut best_proven, mut all_proven) = (false, true);
         let cap = {
             let base = LMP[(depth as usize).min(LMP.len() - 1)];
             if pv { base * PV_CAP_MULT } else { base }
@@ -958,8 +1057,10 @@ impl AlphaBeta {
                 return 0;
             }
             searched += 1;
+            all_proven &= self.proven;
             if v > best {
                 best = v;
+                best_proven = self.proven;
                 best_action = act.clone();
                 if v > alpha {
                     alpha = v;
@@ -967,7 +1068,9 @@ impl AlphaBeta {
             }
             if alpha >= beta {
                 self.on_cutoff(s, &act, depth, ply);
-                self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), &best_action);
+                let proven = mate_proven(best, best_proven, false);
+                self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
+                self.proven = proven;
                 return best;
             }
             pre_tried.push(act);
@@ -983,6 +1086,8 @@ impl AlphaBeta {
         }
         let mut generated = 0usize;
         let mut exhausted = false;
+        // An action was left unsearched (the action cap, or a TT action that failed validation).
+        let mut skipped = false;
         let outcome: Option<i32> = 'search: {
             while searched < cap && !exhausted {
                 let mut batch: Vec<(i32, MoveSeq)> = Vec::with_capacity(BATCH);
@@ -1010,7 +1115,13 @@ impl AlphaBeta {
                         }
                         Ok(Some(act)) => {
                             generated += 1;
-                            if pre_tried.contains(&act) || tt_action.as_ref() == Some(&act) {
+                            if pre_tried.contains(&act) {
+                                continue;
+                            }
+                            if tt_action.as_ref() == Some(&act) {
+                                // Only reached when the TT action failed validation (searched
+                                // ones are in `pre_tried`): it stays unsearched.
+                                skipped = true;
                                 continue;
                             }
                             batch.push((self.action_score(s, &act, ply), act));
@@ -1020,6 +1131,7 @@ impl AlphaBeta {
                 batch.sort_by(|a, b| b.0.cmp(&a.0));
                 for (sc, act) in batch {
                     if searched >= cap {
+                        skipped = true;
                         break;
                     }
                     let mark = Self::make(s, &act);
@@ -1054,8 +1166,10 @@ impl AlphaBeta {
                         break 'search Some(0);
                     }
                     searched += 1;
+                    all_proven &= self.proven;
                     if v > best {
                         best = v;
+                        best_proven = self.proven;
                         best_action = act.clone();
                         if v > alpha {
                             alpha = v;
@@ -1063,15 +1177,27 @@ impl AlphaBeta {
                     }
                     if alpha >= beta {
                         self.on_cutoff(s, &act, depth, ply);
-                        self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), &best_action);
+                        let proven = mate_proven(best, best_proven, false);
+                        self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
+                        self.proven = proven;
                         break 'search Some(best);
                     }
                 }
             }
             None
         };
+        // A mated score needs every legal action searched: the cursor ran out, none was left
+        // out, and `without_future` dropped no move on an optional board. (Only worked out
+        // when it matters: for a mated score.)
+        let all_proven = all_proven
+            && outcome.is_none()
+            && best < -MATE + 1000
+            && exhausted
+            && !skipped
+            && !full.as_ref().is_some_and(|f| Self::trims_future(s, &nb.info, f));
         self.bufs.push(nb);
         if let Some(v) = outcome {
+            // (A cutoff has set `proven`; an abort returns 0.)
             return v;
         }
         if searched == 0 && generated == 0 && tt_action.is_none() {
@@ -1079,10 +1205,13 @@ impl AlphaBeta {
         }
         if searched == 0 {
             // Only the TT action existed but failed validation; fall back to static eval.
+            self.proven = false;
             return self.static_eval(s);
         }
         let bound = if best > alpha0 { Bound::Exact } else { Bound::Upper };
-        self.tt_store(key, depth, bound, mate_to_tt(best, ply), &best_action);
+        let proven = mate_proven(best, best_proven, all_proven);
+        self.tt_store(key, depth, bound, mate_to_tt(best, ply), proven, &best_action);
+        self.proven = proven;
         best
     }
 
@@ -1120,6 +1249,21 @@ impl AlphaBeta {
             line.push(act);
         }
         line
+    }
+}
+
+/// The reported score of an internal `score`: "mate N" for a proven mate, otherwise "cp X"
+/// on the reported scale (an unproven mate counts as the largest non-mate score), followed by
+/// "wdl W D L" from the evaluation's logistic.
+pub fn score_text(score: i32, proven: bool) -> String {
+    if proven && score > MATE - 1000 {
+        format!("mate {} wdl 1000 0 0", (MATE - score + 1) / 2)
+    } else if proven && score < -MATE + 1000 {
+        format!("mate -{} wdl 0 0 1000", (MATE + score + 1) / 2)
+    } else {
+        let s = score.clamp(-(MATE - 1000), MATE - 1000);
+        let (w, d, l) = super::wdl(s);
+        format!("cp {} wdl {} {} {}", super::report_cp(s), w, d, l)
     }
 }
 
@@ -1167,6 +1311,7 @@ impl AlphaBeta {
         for k in self.killers.iter_mut() {
             *k = [None, None];
         }
+        self.qkillers.iter_mut().for_each(|k| *k = None);
         let max_depth = limits.depth.unwrap_or(64) as i32;
         let mut work = root.clone();
         work.enable_undo();
@@ -1197,6 +1342,8 @@ impl AlphaBeta {
         if roots.is_empty() {
             return None;
         }
+        // Every legal root action is searched (for proving that the root is mated).
+        let roots_complete = complete && !full.as_ref().is_some_and(|f| Self::trims_future(root, &hc, f));
         // A forced action on the clock is played at once.
         if complete && roots.len() == 1 && plan.as_ref().is_some_and(|p| p.clock) {
             return Some(Action::from_moveseq(&roots[0].1, root));
@@ -1204,6 +1351,8 @@ impl AlphaBeta {
         roots.sort_by(|a, b| b.0.cmp(&a.0));
         let mut best: MoveSeq = roots[0].1.clone();
         let mut best_score: i32 = 0;
+        // `best_score` is a proven mate (see `proven`): only then is it reported as a mate.
+        let mut best_proven = false;
         self.seek_mate = false;
         // Clock stability: decaying count of best-action changes and running average score.
         let mut changes = 0.0f64;
@@ -1214,7 +1363,8 @@ impl AlphaBeta {
             self.seek_mate = depth > 1 && best_score.abs() >= 3000 + 100_000 / (depth * depth);
             let mut alpha = -INF;
             let beta = INF;
-            let mut iter_best: Option<(i32, MoveSeq)> = None;
+            let mut iter_best: Option<(i32, MoveSeq, bool)> = None;
+            let mut all_proven = roots_complete;
             let mut scores: Vec<i32> = Vec::with_capacity(roots.len());
             for (k, (_, act)) in roots.iter().enumerate() {
                 let mark = Self::make(&mut work, act);
@@ -1241,21 +1391,26 @@ impl AlphaBeta {
                     break;
                 }
                 scores.push(v);
+                all_proven &= self.proven;
                 if v > alpha {
                     alpha = v;
-                    iter_best = Some((v, act.clone()));
+                    iter_best = Some((v, act.clone(), self.proven));
                 }
             }
             // A partially searched iteration still improves on the previous best, except that a
             // mate an earlier depth proved survives a depth that comes back longer, not mating
             // or interrupted, and an interrupted depth's loss is not trusted (Stockfish's
             // forgottenMate and abortedLossSearch).
+            // (The kept mate need not be proven: which action is played and how the next depth
+            // is ordered are search decisions, left as they were. It is reported as proven or
+            // not, as it was found.)
             let mut kept = false;
-            if let Some((v, act)) = iter_best {
+            if let Some((v, act, proven)) = iter_best {
                 kept = depth > 1 && ((best_score > MATE - 1000 && v < best_score) || (self.aborted && v < -(MATE - 1000)));
                 if !kept {
                     best = act;
                     best_score = v;
+                    best_proven = mate_proven(v, proven, all_proven && !self.aborted);
                 }
             }
             let elapsed = start.elapsed().as_secs_f64();
@@ -1271,13 +1426,7 @@ impl AlphaBeta {
                     }
                 }
                 let pv = self.pv_line(root, &best, depth as usize);
-                let score_txt = if best_score > MATE - 1000 {
-                    format!("mate {}", (MATE - best_score + 1) / 2)
-                } else if best_score < -MATE + 1000 {
-                    format!("mate -{}", (MATE + best_score + 1) / 2)
-                } else {
-                    format!("cp {}", best_score)
-                };
+                let score_txt = score_text(best_score, best_proven);
                 let mut st = root.clone();
                 let mut pv_txt = Vec::new();
                 for a in &pv {
@@ -1310,8 +1459,10 @@ impl AlphaBeta {
                 }
             }
             // Keep searching after a mate (pruning can report false or long mates) until the
-            // mate is well inside the searched depth.
-            if best_score.abs() > MATE - 1000 && depth >= 2 * (MATE - best_score.abs()) + 2 {
+            // mate is well inside the searched depth. On a time budget an unproven mate does
+            // not end the search early (that only changes the time used); depth- and
+            // node-limited searches stop as they always did, so they stay reproducible.
+            if best_score.abs() > MATE - 1000 && depth >= 2 * (MATE - best_score.abs()) + 2 && (best_proven || plan.is_none()) {
                 break;
             }
             if let Some(d) = self.deadline {
@@ -1323,6 +1474,13 @@ impl AlphaBeta {
                 }
             }
         }
+        self.last_score = best_score;
         Some(Action::from_moveseq(&best, root))
+    }
+
+    /// The score of the action the last `find_best_move` returned (internal units, from the
+    /// side to move's view; mates as `MATE - plies`, proven or not).
+    pub fn last_score(&self) -> i32 {
+        self.last_score
     }
 }
