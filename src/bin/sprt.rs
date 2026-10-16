@@ -540,8 +540,10 @@ fn play_game(cfg: &Config, procs: &mut [Option<Proc>; 2], op: &Opening, new_firs
             if (side == 0) == mover_wins { GameResult::Win } else { GameResult::Loss }
         };
         if !has_legal_action(&s) {
-            let r = match s.get_mate_type() {
-                MateType::Checkmate => (new_result(false), "checkmate"),
+            let r = match (s.get_mate_type(), s.exiled_kings_loser()) {
+                (MateType::Checkmate, _) => (new_result(false), "checkmate"),
+                // Stalemate with exiled kings: that side loses (tournament rule).
+                (_, Some(loser)) => (new_result(loser != player), "exiled kings"),
                 _ => (GameResult::Draw, "stalemate"),
             };
             return Ok(finish(r.0, r.1.into(), n, &history, &evals));

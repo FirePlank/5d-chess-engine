@@ -36,7 +36,7 @@ const ROOT_CAP: usize = 1000;
 /// Actions generated (and sorted by action score) at a time at interior nodes.
 const BATCH: usize = 12;
 const QDEPTH: i32 = 3;
-const QCAP: usize = 10;
+const QCAP: usize = 4;
 const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
@@ -809,7 +809,15 @@ impl AlphaBeta {
 
     fn terminal_score(&mut self, s: &State, ply: usize) -> i32 {
         self.proven = true;
-        if self.in_check(s) { -(MATE - ply as i32) } else { 0 }
+        if self.in_check(s) {
+            return -(MATE - ply as i32);
+        }
+        // Stalemate: a draw, unless the exiled-kings rule decides it.
+        match s.exiled_kings_loser() {
+            Some(loser) if loser == s.get_present().1 => -(MATE - ply as i32),
+            Some(_) => MATE - ply as i32,
+            None => 0,
+        }
     }
 
     /// `known_check`: whether `s` is in check, when the caller already knows.

@@ -229,6 +229,9 @@ export class Analysis {
     } else if (v.status === 'stalemate') {
       chip.textContent = 'Stalemate · draw';
       chip.classList.add('over');
+    } else if (v.status === 'exiled-white' || v.status === 'exiled-black') {
+      chip.textContent = `Stalemate · exiled kings · ${v.status === 'exiled-white' ? 'Black' : 'White'} wins`;
+      chip.classList.add('over');
     } else {
       const side = v.player ? 'Black' : 'White';
       const inCheck = v.checks.length > 0;
@@ -420,7 +423,7 @@ export class Analysis {
     }
     clearTimeout(this.budgetTimer);
     const v = this.view;
-    if (!v || v.status === 'checkmate' || v.status === 'stalemate') {
+    if (!v || v.status === 'checkmate' || v.status === 'stalemate' || v.status === 'exiled-white' || v.status === 'exiled-black') {
       this.engine.stop();
       this.searching = null;
       this.renderEngine();
@@ -509,7 +512,7 @@ export class Analysis {
     let stats;
     if (this.engineOn && this.suppressed) stats = 'Paused while your game against Kairos runs (E to start)';
     else if (!this.engineOn) stats = score && !info ? 'Recorded eval · analysis off (E)' : 'Off · press E to analyse';
-    else if (this.view && (this.view.status === 'checkmate' || this.view.status === 'stalemate')) stats = 'Game over';
+    else if (this.view && ['checkmate', 'stalemate', 'exiled-white', 'exiled-black'].includes(this.view.status)) stats = 'Game over';
     else if (!info) stats = running ? 'Starting…' : 'Waiting';
     else {
       stats = `Depth ${info.depth}` + (info.nps ? ` · ${fmtNodes(info.nps)} nodes/s` : '') + (!running ? ' · done' : '');

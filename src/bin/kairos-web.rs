@@ -854,6 +854,8 @@ impl Play {
         if status != Status::Playing {
             let result = match status {
                 Status::Checkmate => if mover_black { "0-1" } else { "1-0" },
+                Status::WhiteExiled => "0-1",
+                Status::BlackExiled => "1-0",
                 _ => "1/2-1/2",
             };
             self.finish(s, result, status.name());
