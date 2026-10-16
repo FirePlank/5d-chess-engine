@@ -56,24 +56,36 @@ export function confirmDialog(title, { text = '', ok = 'OK', danger = false } = 
   });
 }
 
-/** Engine score (White's view): "+1.23", "−0.40", "#3", "#−2". Units are hundredths. */
+/**
+ * Kairos scores are in internal units, not centipawns: a pawn is about 142 (src/engine/hce.rs,
+ * mat_a_pawn) and a queen 1250. Numbers are shown in pawns; the bar and the graph use the
+ * win probability of the engine tuner's logistic, p = 1 / (1 + exp(-0.004 * score))
+ * (src/bin/tune.rs, --k 0.004), i.e. K = 250 units.
+ */
+export const PAWN_UNITS = 142;
+export const LOGISTIC_K = 250;
+
+/** Engine score (White's view) in pawns: "+2.3", "-0.4", "0.0"; mates "#3" / "#-2". */
 export function fmtScore(s) {
   if (!s) return '-';
   // Recorded mates (SPRT writes ±20000) carry no distance.
-  if (s.mate != null && s.recorded) return s.mate > 0 ? '+#' : '−#';
-  if (s.mate != null) return s.mate > 0 ? `#${s.mate}` : `#−${-s.mate}`;
+  if (s.mate != null && s.recorded) return s.mate > 0 ? '+#' : '-#';
+  if (s.mate != null) return s.mate > 0 ? `#${s.mate}` : `#-${-s.mate}`;
   if (s.cp == null) return '-';
-  const v = s.cp / 100;
-  const t = Math.abs(v).toFixed(Math.abs(v) >= 10 ? 1 : 2);
-  return v > 0 ? `+${t}` : v < 0 ? `−${t}` : '0.00';
+  const v = Math.round((s.cp / PAWN_UNITS) * 10) / 10;
+  return v > 0 ? `+${v.toFixed(1)}` : v < 0 ? `-${(-v).toFixed(1)}` : '0.0';
 }
 
-/** Winning chances in [-1, 1] for White (for the bar and the graph). */
+/** White's win probability in [0, 1]. */
+export function winProbability(s) {
+  if (!s) return 0.5;
+  if (s.mate != null) return s.mate > 0 ? 1 : 0;
+  return 1 / (1 + Math.exp(-(s.cp || 0) / LOGISTIC_K));
+}
+
+/** The same as an advantage in [-1, 1] (0 = even), for the bar and the graph. */
 export function winChance(s) {
-  if (!s) return 0;
-  if (s.mate != null) return s.mate > 0 ? 1 : -1;
-  const cp = Math.max(-2500, Math.min(2500, s.cp || 0));
-  return 2 / (1 + Math.exp(-0.0022 * cp)) - 1;
+  return 2 * winProbability(s) - 1;
 }
 
 /** A recorded engine score (mover's view, ±20000 = mate) as {cp|mate} for White. */

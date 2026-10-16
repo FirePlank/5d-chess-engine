@@ -43,6 +43,8 @@ export class Analysis {
 
   // ---------------------------------------------------------------- activation
   activate(params) {
+    // While you play Kairos, analysis here would take CPU from the engine: off unless asked.
+    this.suppressed = this.engineOn && this.playing();
     this.input.attach(this.source);
     this.board.setOverlay({ readonly: false });
     if (params.get('file')) {
@@ -401,8 +403,21 @@ export class Analysis {
   }
 
   // ---------------------------------------------------------------- engine
+  /** A Play game of this browser is in progress (its engine needs the CPU). */
+  playing() {
+    const p = this.app.pages.play;
+    const st = p && p.state;
+    return !!(st && st.you && st.game && !st.game.over);
+  }
+
   restartEngine() {
-    if (!this.engineOn || !this.tree) { this.renderEngine(); return; }
+    if (this.suppressed && !this.playing()) this.suppressed = false;
+    if (!this.engineOn || this.suppressed || !this.tree) {
+      this.engine.stop();
+      this.searching = null;
+      this.renderEngine();
+      return;
+    }
     clearTimeout(this.budgetTimer);
     const v = this.view;
     if (!v || v.status === 'checkmate' || v.status === 'stalemate') {
@@ -430,9 +445,11 @@ export class Analysis {
     if (!s || (s.id != null && m.id !== s.id)) return;
     if (m.type === 'info') {
       const info = parseInfo(m.line, s.blackToMove);
-      if (info.depth == null || (info.cp == null && info.mate == null)) return;
+      // Info lines come once per completed depth; keep the deepest one per position, so a
+      // revisited position shows its best result until the new search gets deeper.
+      if (info.depth == null || (info.cp == null && info.mate == null) || !info.pv) return;
       const prev = this.cache.get(s.node);
-      if (!prev || prev.depth <= info.depth || prev.done) this.cache.set(s.node, { ...info, at: performance.now() });
+      if (!prev || info.depth >= prev.depth) this.cache.set(s.node, { ...info, at: performance.now() });
       this.scheduleRender();
     } else if (m.type === 'done') {
       const c = this.cache.get(s.node);
@@ -468,6 +485,7 @@ export class Analysis {
   }
 
   setEngine(on) {
+    this.suppressed = false;
     this.engineOn = on;
     store('engine', on);
     $('#engine-toggle').checked = on;
@@ -481,6 +499,7 @@ export class Analysis {
 
   renderEngine() {
     const card = $('#engine-card');
+    $('#engine-toggle').checked = this.engineOn && !this.suppressed;
     const info = this.cache.get(this.cur);
     const s = this.searching;
     const running = this.engineOn && s && s.node === this.cur && !s.finished;
@@ -488,7 +507,8 @@ export class Analysis {
     const score = this.scoreAt(this.cur);
     $('#engine-eval').textContent = this.engineOn && info ? fmtScore(info) : score ? fmtScore(score) : '-';
     let stats;
-    if (!this.engineOn) stats = score && !info ? 'Recorded eval · analysis off (E)' : 'Off · press E to analyse';
+    if (this.engineOn && this.suppressed) stats = 'Paused while your game against Kairos runs (E to start)';
+    else if (!this.engineOn) stats = score && !info ? 'Recorded eval · analysis off (E)' : 'Off · press E to analyse';
     else if (this.view && (this.view.status === 'checkmate' || this.view.status === 'stalemate')) stats = 'Game over';
     else if (!info) stats = running ? 'Starting…' : 'Waiting';
     else {
@@ -709,7 +729,7 @@ export class Analysis {
     else if (k === 'Home') this.first();
     else if (k === 'End') this.last();
     else if (k === ' ') this.toggleAutoplay();
-    else if (k === 'e' || k === 'E') this.setEngine(!this.engineOn);
+    else if (k === 'e' || k === 'E') this.setEngine(!(this.engineOn && !this.suppressed));
     else if (k === 'l' || k === 'L') this.openLoad();
     else if (k === 'Enter') this.input.submit();
     else if (k === 'Backspace') this.input.undo();
