@@ -25,6 +25,37 @@ export function toast(msg, { error = false, ms = 3200 } = {}) {
   setTimeout(() => t.remove(), ms);
 }
 
+/**
+ * In-app confirmation: resolves true when the user confirms, false on Cancel, Esc or a click
+ * outside. `danger` styles the confirm button as destructive.
+ */
+export function confirmDialog(title, { text = '', ok = 'OK', danger = false } = {}) {
+  const dlg = $('#dlg-confirm');
+  $('#confirm-title').textContent = title;
+  $('#confirm-text').textContent = text;
+  $('#confirm-text').classList.toggle('hidden', !text);
+  const btn = $('#confirm-ok');
+  btn.textContent = ok;
+  btn.classList.toggle('danger', danger);
+  return new Promise((resolve) => {
+    // Settle from the controls themselves (not the dialog's close event).
+    const handlers = [
+      [btn, 'click', (e) => { e.preventDefault(); done(true); }],
+      [$('#confirm-cancel'), 'click', (e) => { e.preventDefault(); done(false); }],
+      [dlg, 'cancel', (e) => { e.preventDefault(); done(false); }],
+      [dlg, 'click', (e) => { if (e.target === dlg) done(false); }],
+    ];
+    const done = (v) => {
+      for (const [node, ev, fn] of handlers) node.removeEventListener(ev, fn);
+      if (dlg.open) dlg.close();
+      resolve(v);
+    };
+    for (const [node, ev, fn] of handlers) node.addEventListener(ev, fn);
+    dlg.showModal();
+    btn.focus();
+  });
+}
+
 /** Engine score (White's view): "+1.23", "−0.40", "#3", "#−2". Units are hundredths. */
 export function fmtScore(s) {
   if (!s) return '—';

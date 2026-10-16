@@ -404,6 +404,10 @@ table.games { width: 100%; border-collapse: collapse; font-size: 13px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .modal .seg { margin-bottom: 10px; }
 .file-btn { cursor: pointer; }
+.modal.confirm { width: min(400px, calc(100vw - 24px)); }
+.modal.confirm p { margin: 4px 0 0; }
+.btn.primary.danger { background: var(--danger); border-color: var(--danger); }
+.btn.primary.danger:hover { background: color-mix(in srgb, var(--danger) 88%, #000); }
 .jsonl-pick { margin-top: 10px; max-height: 180px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
 .jsonl-pick .pick { display: flex; gap: 10px; padding: 6px 10px; font-size: 12.5px; cursor: pointer; border-bottom: 1px solid var(--border); }
 .jsonl-pick .pick:hover { background: var(--hover); }

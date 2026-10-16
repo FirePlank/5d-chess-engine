@@ -108,16 +108,30 @@ export class MoveInput {
     this.refresh();
   }
 
+  /**
+   * Submit the action once. The draft is cleared before the source applies it: the source
+   * (and any state update arriving meanwhile) redraws the new position, which must not
+   * replay the submitted moves on top of it.
+   */
   async submit() {
-    if (!this.draft.length) return;
+    if (!this.draft.length || this.submitting) return;
     const moves = this.draft.slice();
+    const node = this.source.node();
+    this.submitting = true;
+    this.draft = [];
+    this.deselect();
+    this.renderBar(null);
     try {
       await this.source.submit(moves);
-      this.draft = [];
-      this.deselect();
-      this.renderBar(null);
     } catch (e) {
       toast(e.message, { error: true });
+      // Rejected before the position changed: give the moves back to keep editing.
+      if (this.source.node() === node) {
+        this.draft = moves;
+        try { this.refresh(false); } catch (err) { this.reset(); }
+      }
+    } finally {
+      this.submitting = false;
     }
   }
 

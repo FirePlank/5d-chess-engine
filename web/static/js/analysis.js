@@ -1,7 +1,7 @@
 // The analysis board / game viewer: a game tree with variations, step-through navigation,
 // book and engine actions, the recorded eval graph and live engine analysis.
 import { Rules, parseInfo } from './kairos.js';
-import { $, $$, el, toast, fmtScore, fmtNodes, winChance, recordScore, parseLan, store } from './util.js';
+import { $, $$, el, toast, fmtScore, fmtNodes, winChance, recordScore, parseLan, store, confirmDialog } from './util.js';
 
 const THROTTLE_MS = 70;
 const DEFAULT_BUDGET_MS = 30_000;
@@ -550,14 +550,14 @@ export class Analysis {
       const c = e.target.closest('[data-id]');
       if (c) this.goto(+c.dataset.id);
     });
-    $('#moves').addEventListener('contextmenu', (e) => {
+    $('#moves').addEventListener('contextmenu', async (e) => {
       const c = e.target.closest('[data-id]');
       if (!c) return;
       e.preventDefault();
       const id = +c.dataset.id;
       const n = this.node(id);
       if (n.parent == null) return;
-      if (confirm('Delete this action and everything after it?')) {
+      if (await confirmDialog('Delete this action?', { text: 'Everything after it is deleted too.', ok: 'Delete', danger: true })) {
         const r = this.rules.call({ cmd: 'delete', node: id });
         this.tree = r.tree;
         if (!this.line().includes(this.cur) || this.isInSubtree(this.cur, id)) this.cur = r.node;

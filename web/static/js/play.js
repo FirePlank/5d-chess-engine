@@ -2,7 +2,7 @@
 // time and everyone else watches the live game (and may queue for the next one).
 import { Rules } from './kairos.js';
 import { lanText } from './input.js';
-import { $, $$, el, toast, fmtClock, fmtScore, fmtNodes, store } from './util.js';
+import { $, $$, el, toast, fmtClock, fmtScore, fmtNodes, store, confirmDialog } from './util.js';
 
 export class Play {
   constructor(app) {
@@ -41,7 +41,9 @@ export class Play {
       b.onclick = () => { $$('#play-tc button').forEach((x) => x.classList.toggle('on', x === b)); store('play.tc', b.textContent); };
     });
     $('#play-form').onsubmit = (e) => { e.preventDefault(); this.start(); };
-    $('#play-resign').onclick = () => { if (confirm('Resign this game?')) this.post('resign'); };
+    $('#play-resign').onclick = async () => {
+      if (await confirmDialog('Resign this game?', { text: 'Kairos wins the game.', ok: 'Resign', danger: true })) this.post('resign').catch(() => {});
+    };
     $('#play-new').onclick = () => this.showSetup(true);
     $('#play-analyze').onclick = () => this.analyze();
     $('#play-queue').onclick = () => this.queue();
