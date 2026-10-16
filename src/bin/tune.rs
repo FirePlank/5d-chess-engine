@@ -1,15 +1,35 @@
 //! Texel tuning of the feature evaluation on harness game files (JSONL).
 //!
-//! tune [--epochs N] [--lr X] [--threads T] [--out weights.txt] games1.jsonl games2.jsonl ...
+//! tune [--epochs N] [--lr X] [--threads T] [--out weights.txt] [--freeze name,name,...]
+//!      games1.jsonl games2.jsonl ...
+//!
+//! `--freeze` keeps the named features at their prior weight (to compare feature sets on the
+//! same data and holdout).
 
 use kairos::core::state::State;
 use kairos::core::variants::{apply_uci_moves, position_from_uci};
-use kairos::engine::hce::{self, Features, Weights, NF};
+use kairos::engine::hce::{self, Weights, NF};
 use std::sync::{Arc, Mutex};
 
+/// Features stored compactly (they are small counts).
+type Packed = [i16; NF];
+
 struct Sample {
-    f: Features,
+    f: Packed,
     r: f32,
+}
+
+fn pack(f: &hce::Features) -> Packed {
+    std::array::from_fn(|i| f[i].clamp(i16::MIN as i32, i16::MAX as i32) as i16)
+}
+
+#[inline]
+fn linear(f: &Packed, w: &Weights) -> f32 {
+    let mut acc = 0f32;
+    for i in 0..NF {
+        acc += w[i] * f[i] as f32;
+    }
+    acc
 }
 
 fn field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
@@ -116,7 +136,7 @@ fn game_samples(line: &str, out: &mut Vec<Sample>) -> Option<()> {
         if QUIET_ONLY.load(std::sync::atomic::Ordering::Relaxed) && !quiet(&st) {
             continue;
         }
-        out.push(Sample { f: hce::features(&st), r: white_result });
+        out.push(Sample { f: pack(&hce::features(&st)), r: white_result });
     }
     Some(())
 }
@@ -128,7 +148,7 @@ fn sigmoid(x: f64) -> f64 {
 fn loss(samples: &[Sample], w: &Weights, k: f64) -> f64 {
     let mut acc = 0.0;
     for s in samples {
-        let p = sigmoid(k * hce::linear(&s.f, w) as f64);
+        let p = sigmoid(k * linear(&s.f, w) as f64);
         acc += (s.r as f64 - p).powi(2);
     }
     acc / samples.len().max(1) as f64
@@ -158,7 +178,7 @@ fn main() {
     }
     eprintln!("{} games from {} files", lines.len(), files.len());
     let lines = Arc::new(lines);
-    let collected: Arc<Mutex<Vec<Vec<Sample>>>> = Arc::new(Mutex::new(Vec::new()));
+    let collected: Arc<Mutex<Vec<(usize, Vec<Sample>)>>> = Arc::new(Mutex::new(Vec::new()));
     let t0 = std::time::Instant::now();
     let mut hs = Vec::new();
     for tid in 0..threads {
@@ -170,13 +190,16 @@ fn main() {
                 let _ = game_samples(&lines[i], &mut mine);
                 i += threads;
             }
-            collected.lock().unwrap().push(mine);
+            collected.lock().unwrap().push((tid, mine));
         }));
     }
     for h in hs {
         h.join().unwrap();
     }
-    let mut all: Vec<Sample> = collected.lock().unwrap().drain(..).flatten().collect();
+    // In thread order, so the shuffle and holdout below are reproducible.
+    let mut parts = std::mem::take(&mut *collected.lock().unwrap());
+    parts.sort_by_key(|p| p.0);
+    let mut all: Vec<Sample> = parts.into_iter().flat_map(|p| p.1).collect();
     // Deterministic shuffle, then 10% holdout.
     let mut st = 0x2545F4914F6CDD1Du64;
     for i in (1..all.len()).rev() {
@@ -190,6 +213,20 @@ fn main() {
     eprintln!("{} positions ({} train, {} holdout) in {:.1}s", all.len(), train.len(), valid.len(), t0.elapsed().as_secs_f64());
 
     let mut w = hce::default_weights();
+    // --init file: start from (name value) lines, times --init-scale; unnamed features keep
+    // their default.
+    let init: String = arg(&args, "--init", String::new());
+    if !init.is_empty() {
+        let sc: f32 = arg(&args, "--init-scale", 1.0);
+        for line in std::fs::read_to_string(&init).expect("init weights").lines() {
+            let mut it = line.split_whitespace();
+            if let (Some(n), Some(v)) = (it.next(), it.next().and_then(|v| v.parse::<f32>().ok())) {
+                if let Some(i) = hce::FEATURE_NAMES.iter().position(|x| *x == n) {
+                    w[i] = v * sc;
+                }
+            }
+        }
+    }
     if args.iter().any(|a| a == "--featdiag") {
         // Per-feature correlation with the result and mean result by sign.
         let n = all.len() as f64;
@@ -228,7 +265,7 @@ fn main() {
         // Mean result by default-eval bucket (white's view), to check labels and scale.
         let mut bk: std::collections::BTreeMap<i32, (f64, usize)> = Default::default();
         for s in all.iter() {
-            let e = hce::linear(&s.f, &w) as i32;
+            let e = linear(&s.f, &w) as i32;
             let b = (e.clamp(-2000, 2000) / 200) * 200;
             let x = bk.entry(b).or_default();
             x.0 += s.r as f64;
@@ -245,10 +282,14 @@ fn main() {
     let k: f64 = arg(&args, "--k", 0.004);
     let l2: f64 = arg(&args, "--l2", 1e-7);
     // Features that are almost never non-zero keep their prior weight.
+    // Features non-zero in fewer than this fraction of positions keep their prior weight.
+    let min_nz: f64 = arg(&args, "--min-nz", 0.005);
+    let forced_arg: String = arg(&args, "--freeze", String::new());
+    let forced: Vec<&str> = forced_arg.split(',').filter(|x| !x.is_empty()).collect();
     let mut frozen = [false; NF];
     for i in 0..NF {
         let nz = train.iter().filter(|s| s.f[i] != 0).count();
-        frozen[i] = (nz as f64) < 0.005 * train.len() as f64;
+        frozen[i] = (nz as f64) < min_nz * train.len() as f64 || forced.contains(&hce::FEATURE_NAMES[i]);
         if frozen[i] {
             eprintln!("frozen {} ({} non-zero)", hce::FEATURE_NAMES[i], nz);
         }
@@ -276,7 +317,7 @@ fn main() {
                     sc.spawn(move || {
                         let mut g = [0f64; NF];
                         for s in ch.iter() {
-                            let p = sigmoid(k * hce::linear(&s.f, &wf) as f64);
+                            let p = sigmoid(k * linear(&s.f, &wf) as f64);
                             let d = 2.0 * (p - s.r as f64) * p * (1.0 - p) * k;
                             for i in 0..NF {
                                 g[i] += d * s.f[i] as f64;
