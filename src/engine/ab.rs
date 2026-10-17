@@ -53,7 +53,7 @@ const ROOT_FUTURE_MATE_PROBE: usize = 16;
 const ROOT_FUTURE_MATE_MS: u64 = 50;
 /// Interior nodes up to this ply (the root is 0) look for a checkmate in one by a checking
 /// travel the node would search late or never (`travel_mate`).
-const TRAVEL_MATE_PLY: usize = 2;
+const TRAVEL_MATE_PLY: usize = 1;
 /// Hypercuboids the search for an evasion of such a check may look at (an evasion is usually
 /// found in a few; past this the check counts as no mate).
 const TRAVEL_MATE_STEPS: u32 = 64;
