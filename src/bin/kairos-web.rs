@@ -1031,8 +1031,10 @@ impl Play {
                 if !Self::can_start(&st, who.as_deref()) {
                     return Response::json(obj![("ok", false), ("error", "busy"), ("state", Self::public_state(&st, who.as_deref()))]);
                 }
-                let variant = body.get("variant").str().unwrap_or("Standard - Turn Zero").to_string();
-                if !VARIANTS.contains(&variant.as_str()) {
+                // A variant by name, or a position (5DUCI, from the board editor).
+                let mut variant = body.get("variant").str().unwrap_or("Standard - Turn Zero").to_string();
+                let custom = !VARIANTS.contains(&variant.as_str());
+                if custom && !variant.contains('[') {
                     return Response::error(400, "unknown variant");
                 }
                 let start = match resolve_position(&variant) {
@@ -1043,6 +1045,12 @@ impl Play {
                     Ok(s) => s,
                     Err(e) => return Response::error(400, &e),
                 };
+                if custom {
+                    if tree::status_of(&state) != Status::Playing || state.first_check(state.get_present().1).is_some() {
+                        return Response::error(400, "that position has no game to play");
+                    }
+                    variant = record::variant_of(&state).unwrap_or("Custom").to_string();
+                }
                 let human_black = match body.get("color").str() {
                     Some("b") => true,
                     Some("w") => false,

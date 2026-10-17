@@ -611,3 +611,72 @@ table.games { width: 100%; border-collapse: collapse; font-size: 13px; }
 .rules-table { width: 100%; border-collapse: collapse; margin: var(--s2) 0; font-size: 14px; }
 .rules-table th, .rules-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
 .rules-table th { color: var(--strong); font-weight: 600; }
+
+/* ------------------------------------------------------------ board editor */
+.workspace.editing #eval-bar, .workspace.editing #draft-bar, .workspace.editing #tool-autosubmit, .workspace.editing #tool-present { display: none !important; }
+.ed-panel { padding: var(--s3); }
+.ed-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--s2); }
+.ed-head .panel-title { margin: 0; }
+.ed-history { display: flex; gap: 2px; }
+.ed-history .icon-btn:disabled { opacity: .35; cursor: default; background: none; }
+.ed-tools { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s1); margin-bottom: var(--s2); }
+.ed-tools button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; height: 48px; border: 1px solid var(--border); border-radius: var(--r); background: var(--inset); color: var(--muted); font-size: 11.5px; font-weight: 600; }
+.ed-tools button svg { width: 18px; height: 18px; }
+.ed-tools button:hover { border-color: var(--border-strong); color: var(--strong); }
+.ed-tools button.on { border-color: var(--accent); background: var(--accent-soft); color: var(--strong); }
+.ed-palette { display: grid; grid-template-columns: repeat(6, 1fr); gap: 3px; }
+.ed-palette button { aspect-ratio: 1; display: grid; place-items: center; padding: 2px; border: 1px solid transparent; border-radius: var(--r-sm); background: var(--inset); }
+.ed-palette button:nth-child(n+13) { background: color-mix(in srgb, var(--inset) 80%, var(--strong) 8%); }
+.ed-palette button img { width: 100%; height: 100%; max-width: 42px; max-height: 42px; pointer-events: none; }
+.ed-palette button:hover { border-color: var(--border-strong); }
+.ed-palette button.on { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.ed-palette button:nth-child(13) { margin-top: 0; }
+.ed-hint { margin: var(--s2) 0 0; font-size: 12px; line-height: 1.45; color: var(--muted); min-height: 3em; }
+.ed-sel-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); margin-bottom: var(--s2); font-size: 13px; color: var(--strong); }
+.ed-sel-actions { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s1); }
+.ed-sel-actions .btn.danger { color: var(--bad); }
+.ed-status { display: flex; flex-direction: column; gap: 4px; font-size: 13px; margin-bottom: var(--s3); }
+.ed-st { line-height: 1.4; }
+.ed-st.head { font-size: 14px; color: var(--text); }
+.ed-st.head strong { color: var(--strong); }
+.ed-st.muted { color: var(--muted); font-size: 12.5px; }
+.ed-st.warn { color: var(--warn); font-weight: 600; }
+.ed-st.bad { color: var(--bad); }
+.ed-st.note { color: var(--muted); font-size: 12.5px; padding-left: 14px; position: relative; }
+.ed-st.note::before { content: "!"; position: absolute; left: 2px; font-weight: 700; color: var(--warn); }
+.ed-st .link-btn { padding: 0 4px; color: var(--accent); font-weight: 600; }
+.ed-actions { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); }
+.ed-row { display: flex; gap: var(--s1); align-items: center; }
+.ed-row select { flex: 1; min-width: 0; }
+.ed-quick { margin: calc(-1 * var(--s1)) 0 var(--s3); }
+.ed-quick .btn { flex: 1; }
+.ed-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); }
+.ed-grid .field { margin-bottom: var(--s2); }
+.ed-size select { flex: 1; }
+.ed-size span { color: var(--muted); }
+.ed-layout { margin: 0; display: flex; }
+.ed-layout button { flex: 1; height: 30px; }
+.ed-promos { display: flex; flex-wrap: wrap; gap: 3px; }
+.ed-promos button { width: 34px; height: 34px; padding: 2px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--inset); opacity: .45; }
+.ed-promos button img { width: 100%; height: 100%; pointer-events: none; }
+.ed-promos button.on { opacity: 1; border-color: var(--accent); background: var(--accent-soft); }
+.ed-text-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: var(--s1); }
+.ed-text-btns { display: flex; }
+.ed-text-btns .link-btn { font-size: 12px; padding: 2px 6px; }
+#ed-fen { height: auto; min-height: 120px; font-size: 11.5px; white-space: pre; overflow-x: auto; }
+#ed-fen.bad { border-color: var(--bad); }
+.ed-fen-error { margin-top: var(--s1); font-size: 12px; color: var(--bad); }
+
+/* Phones: five sections in the header (no board-colour button there), and the editor's
+   palette as one row per colour. */
+@media (max-width: 430px) {
+  .site-nav a { padding: 0 5px; font-size: 11px; letter-spacing: 0; }
+  #btn-board-theme { display: none; }
+}
+@media (max-width: 800px) and (orientation: portrait), (max-width: 560px) {
+  .ed-palette { grid-template-columns: repeat(12, 1fr); gap: 2px; }
+  .ed-palette button { padding: 1px; }
+  .ed-tools button { height: 42px; }
+  .ed-hint { min-height: 0; }
+}
+.keys-head { margin: var(--s4) 0 var(--s1); font-size: 14px; color: var(--strong); }
