@@ -51,9 +51,6 @@ const ROOT_LMR_MIN_INDEX: usize = 6;
 const ROOT_FUTURE_MATE_PROBE: usize = 16;
 /// Time for that probe without a time plan (with one: a 32nd of the optimum).
 const ROOT_FUTURE_MATE_MS: u64 = 50;
-/// Root actions with a move on an optional board added when every root action loses to a
-/// mate (interior nodes take up to their action cap).
-const ROOT_WIDEN_CAP: usize = 256;
 /// Interior nodes up to this ply (the root is 0) look for a checkmate in one by a checking
 /// travel the node would search late or never (`travel_mate`).
 const TRAVEL_MATE_PLY: usize = 2;
@@ -878,37 +875,6 @@ impl AlphaBeta {
         out
     }
 
-    /// The points of `ss` that `without_future` leaves out: actions with a move on a board the
-    /// side to move need not play. Disjoint hypercuboids: the k-th optional axis played, the
-    /// optional axes before it not.
-    fn future_only(s: &State, info: &HcInfo, ss: &SearchSpace) -> SearchSpace {
-        let present = s.get_present();
-        let (amin, amax) = s.get_active_range();
-        let (lo, hi) = s.get_lines_range();
-        let optional: Vec<usize> = (lo..=hi)
-            .filter(|&l| !(l >= amin && l <= amax && s.get_timeline_end(l) == present))
-            .filter_map(|l| info.line_to_axis(l))
-            .collect();
-        let mut out = SearchSpace::default();
-        for hc in &ss.hcs {
-            for (k, &n) in optional.iter().enumerate() {
-                if !hc[n].has_other_than(0) {
-                    continue;
-                }
-                if optional[..k].iter().any(|&p| !hc[p].contains(0)) {
-                    break;
-                }
-                let mut h = hc.clone();
-                for &p in &optional[..k] {
-                    h[p].assign_singleton(0);
-                }
-                h[n].erase(0);
-                out.hcs.push(h);
-            }
-        }
-        out
-    }
-
     /// A checkmate in one by a checking travel the node's actions come to late or never: a
     /// travel that gives check on arrival and branches off a new timeline (actions creating
     /// timelines come after every other one: with two boards to play, after hundreds) or
@@ -1081,27 +1047,6 @@ impl AlphaBeta {
             }
         }
         None
-    }
-
-    /// Root actions with a move on a board the side to move need not play (the ones
-    /// `without_future` leaves out) that `roots` lacks: at most `ROOT_WIDEN_CAP`, in the
-    /// cursor's order (checks, then captures), travels first.
-    fn root_widen(&self, root: &State, roots: &[(i32, MoveSeq)]) -> Vec<(i32, MoveSeq)> {
-        let (hc, ss) = HcInfo::build_hc(root);
-        if !Self::trims_future(root, &hc, &ss) {
-            return Vec::new();
-        }
-        let mut cursor = BestFirstCursor::default();
-        self.start_actions(root, &hc, &mut cursor, &mut OrderScratch::default(), Self::future_only(root, &hc, &ss), false);
-        let mut out: Vec<(i32, MoveSeq)> = Vec::new();
-        while out.len() < ROOT_WIDEN_CAP {
-            let Some(a) = cursor.next(&hc, root) else { break };
-            if !roots.iter().any(|r| r.1 == a) {
-                out.push((self.action_score(root, &a, 0), a));
-            }
-        }
-        out.sort_by_key(|(_, a)| !a.iter().any(|m| m.from.tl() != m.to.tl()));
-        out
     }
 
     /// Order the node's coordinates into `cursor` and start it on `ss`.
@@ -1703,94 +1648,15 @@ impl AlphaBeta {
             }
             None
         };
-        // Every action searched loses to a mate: the ones `without_future` left out (moves on
-        // boards the side to move need not play, travels back from them among them) may
-        // hold, so they are searched too, travels first, until one escapes the mate.
-        let mut outcome = outcome;
-        let mut widen_complete = false;
-        if outcome.is_none() && best < -MATE + 1000 && full.as_ref().is_some_and(|f| Self::trims_future(s, &nb.info, f)) {
-            let space = Self::future_only(s, &nb.info, full.as_ref().expect("checked"));
-            nb.cursor.restart(&nb.info, space);
-            let mut widened = 0usize;
-            outcome = 'widen: loop {
-                // A batch in the cursor's order (checks, then captures), travels first.
-                let mut batch: Vec<MoveSeq> = Vec::with_capacity(BATCH);
-                let mut done = false;
-                while batch.len() < BATCH {
-                    if self.check_abort() {
-                        break 'widen Some(0);
-                    }
-                    let next = {
-                        let NodeBufs { info, cursor, order, .. } = &mut *nb;
-                        cursor.next_with(info, s, &mut |o, sc| self.branch_order(s, info, order, o, sc))
-                    };
-                    match next {
-                        Err(NeedBranch) => nb.info.materialize_branch(s),
-                        Ok(None) if interrupted() => {
-                            self.aborted = true;
-                            break 'widen Some(0);
-                        }
-                        Ok(None) => {
-                            done = true;
-                            break;
-                        }
-                        Ok(Some(act)) => {
-                            if !pre_tried.contains(&act) {
-                                batch.push(act);
-                            }
-                        }
-                    }
-                }
-                batch.sort_by_key(|a| !a.iter().any(|m| m.from.tl() != m.to.tl()));
-                for act in batch {
-                    if widened >= cap {
-                        break 'widen None;
-                    }
-                    let mark = Self::make(s, &act);
-                    let v = self.search_child(s, mark, false, depth, ply, alpha, beta, pv);
-                    if self.aborted {
-                        break 'widen Some(0);
-                    }
-                    widened += 1;
-                    searched += 1;
-                    all_proven &= self.proven;
-                    if v > best {
-                        best = v;
-                        best_proven = self.proven;
-                        best_action = act.clone();
-                        if v > alpha {
-                            alpha = v;
-                            if pv {
-                                self.pv_update(ply, &act);
-                            }
-                        }
-                    }
-                    if alpha >= beta {
-                        self.on_cutoff(s, &act, depth, ply);
-                        let proven = mate_proven(best, best_proven, false);
-                        self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
-                        self.proven = proven;
-                        break 'widen Some(best);
-                    }
-                    if v > -MATE + 1000 {
-                        break 'widen None;
-                    }
-                }
-                if done {
-                    widen_complete = true;
-                    break None;
-                }
-            };
-        }
         // A mated score needs every legal action searched: the cursor ran out, none was left
-        // out, and every move on an optional board `without_future` dropped was searched
-        // after all. (Only worked out when it matters: for a mated score.)
+        // out, and `without_future` dropped no move on an optional board. (Only worked out
+        // when it matters: for a mated score.)
         let all_proven = all_proven
             && outcome.is_none()
             && best < -MATE + 1000
             && exhausted
             && !skipped
-            && (widen_complete || !full.as_ref().is_some_and(|f| Self::trims_future(s, &nb.info, f)));
+            && !full.as_ref().is_some_and(|f| Self::trims_future(s, &nb.info, f));
         self.bufs.push(nb);
         if let Some(v) = outcome {
             // (A cutoff has set `proven`; an abort returns 0.)
@@ -2240,12 +2106,6 @@ impl AlphaBeta {
             return Some(Action::from_moveseq(&roots[0].1, root));
         }
         roots.sort_by(|a, b| b.0.cmp(&a.0));
-        // The probe's mate is a root action, searched first: every depth's line (and a
-        // resumed search) has it.
-        if let Some(m) = &future_mate {
-            roots.retain(|r| r.1 != *m);
-            roots.insert(0, (i32::MAX, m.clone()));
-        }
         let best = self.search_roots(root, roots, roots_complete, max_depth, start, plan.as_ref(), info, None);
         match future_mate {
             Some(m) if self.last_score < MATE - 1 => {
@@ -2390,10 +2250,7 @@ impl AlphaBeta {
         // and fill the table at a spread of depths instead of re-walking the same iteration.
         let ahead = self.thread_id % 2 == 1;
         let first = if ahead { 2.min(max_depth) } else { 1 }.max((resumed_depth + 1).min(max_depth));
-        // The optional-board root actions were added (see below).
-        let mut root_widened = false;
-        let mut base_depth = first;
-        while base_depth <= max_depth {
+        for base_depth in first..=max_depth {
             let depth = if ahead { (base_depth + 1).min(max_depth) } else { base_depth };
             let prev_best = best.clone();
             // seekMate bar: 3000 + 100000 / depth^2 (Stockfish's form, in our units).
@@ -2492,17 +2349,6 @@ impl AlphaBeta {
                     }
                 }
             }
-            // Every root action searched loses to a mate: the ones on boards the side to move
-            // need not play are added (once, searched first) and the depth is searched again.
-            if !self.aborted && !root_widened && iter_best.as_ref().is_some_and(|b| b.0 < -MATE + 1000) {
-                root_widened = true;
-                let extra = self.root_widen(root, &roots);
-                if !extra.is_empty() {
-                    roots.splice(0..0, extra);
-                    continue;
-                }
-            }
-            base_depth += 1;
             if self.aborted {
                 // An interrupted try's fail high is only a bound.
                 if iter_best.as_ref().is_some_and(|b| b.0 >= hi) {
@@ -2888,60 +2734,5 @@ mod tests {
         let a = e.find_best_move(&s, &Limits { depth: Some(3), ..Default::default() }, &stop, &mut |_| {}).unwrap();
         let seq: MoveSeq = a.moves().iter().map(|m| m.fm).collect();
         assert!(seq.as_slice() != [losing], "played {:?}", seq);
-    }
-
-    /// "Focused - Just Unicorns" after 1.Ka1b2 Ke5d4 2.Kb2a1 Kd4c5.
-    const UNICORNS_A: &str = "G 1 size 5x5 odd fen [1u1uk*/5/5/5/K*U1U1:0:1:w] moves (0T1)a1b2 submit (0T1)e5d4 submit \
-         (0T2)b2a1 submit (0T2)d4c5 submit";
-
-    /// `UNICORNS_A` then 3.(0T3)Ub1>>(0T1)d3 (1T1)Ke5d4 4.(1T2)Ud1>>(0T1)d2+: every move of
-    /// Black's board (1T2) loses to a mate, but the unicorn on the inactive timeline L2 mates
-    /// first, (2T1)Ud5>>(0T1)b3#. Searched at ply 3 (past the plies `travel_mate` looks at),
-    /// the mated node searches the moves on optional boards.
-    #[test]
-    fn mated_node_searches_optional_boards() {
-        let mut s = crate::core::perft::parse_g_line(&format!("{} (0T3)b1(0T1)d3 submit (1T1)e5d4 submit (1T2)d1(0T1)d2 submit", UNICORNS_A)).unwrap();
-        s.enable_undo();
-        let mut e = AlphaBeta::new();
-        let stop = AtomicBool::new(false);
-        e.begin_search(&stop, None, None);
-        let v = e.negamax(&mut s, 4, 3, -INF, INF, true);
-        assert_eq!(v, MATE - 4, "the mate in one from the inactive timeline");
-        assert_eq!(e.pv_rows[3][0], MoveSeq::from(&[FullMove::parse("(2T1)d5(0T1)b3").unwrap()][..]));
-    }
-
-    /// The same game two moves earlier: 3.(0T3)Ub1>>(0T1)d3 was reported as a mate in 4
-    /// through 4.(1T2)Ud1>>(0T1)d2+, refuted by that unicorn.
-    #[test]
-    fn no_mate_claim_refuted_on_an_optional_board() {
-        let s = crate::core::perft::parse_g_line(UNICORNS_A).unwrap();
-        let mut e = AlphaBeta::new();
-        let stop = AtomicBool::new(false);
-        let mut lines = Vec::new();
-        e.find_best_move(&s, &Limits { depth: Some(10), ..Default::default() }, &stop, &mut |m| lines.push(m));
-        assert!(!lines.iter().any(|l| l.contains("score mate ") && info_field(l, "pv") == "(0T3)b1(0T1)d3"), "{:#?}", lines);
-    }
-
-    /// "Focused - Just Unicorns", 1.Ka1b2 Ke5d4 2.Kb2c1 Kd4c5 3.Kc1b2 Kc5d4 4.Kb2c1
-    /// (0T4)Ud5>>(0T1)a2+ 5.(-1T2)Kb2xa2 Ke5d4 6.Ka2b3 Kd4d3: White mates with the unicorn of
-    /// the board ahead of the present, 7.(0T5)Ub1>>(-1T4)b2#. The root probe's mate is a root
-    /// action: every depth reports it (the search alone saw White mated), and so does a
-    /// resumed search.
-    #[test]
-    fn future_board_mate_is_reported_at_every_depth() {
-        let s = crate::core::perft::parse_g_line(
-            "G 1 size 5x5 odd fen [1u1uk*/5/5/5/K*U1U1:0:1:w] moves (0T1)a1b2 submit (0T1)e5d4 submit (0T2)b2c1 submit \
-             (0T2)d4c5 submit (0T3)c1b2 submit (0T3)c5d4 submit (0T4)b2c1 submit (0T4)d5(0T1)a2 submit (-1T2)b2a2 submit \
-             (-1T2)e5d4 submit (-1T3)a2b3 submit (-1T3)d4d3 submit",
-        )
-        .unwrap();
-        let mut e = AlphaBeta::new();
-        let stop = AtomicBool::new(false);
-        for (depth, resume) in [(4, false), (6, true)] {
-            let mut lines = Vec::new();
-            let a = e.find_best_move(&s, &Limits { depth: Some(depth), resume, ..Default::default() }, &stop, &mut |m| lines.push(m)).unwrap();
-            assert_eq!(a.moves().iter().map(|m| m.fm).collect::<MoveSeq>().as_slice(), [FullMove::parse("(0T5)b1(-1T4)b2").unwrap()]);
-            assert!(!lines.is_empty() && lines.iter().all(|l| info_field(l, "score") == "mate 1 wdl 1000 0 0"), "{:#?}", lines);
-        }
     }
 }
