@@ -670,7 +670,7 @@ impl AlphaBeta {
             threads: 1,
             multipv: 1,
             own_book: false,
-            sac_bot: true,
+            sac_bot: false,
             helpers: Vec::new(),
             helper_nodes: 0,
             helper_results: 0,
