@@ -1677,15 +1677,10 @@ impl AlphaBeta {
 
         let mut nb = self.bufs.pop().unwrap_or_default();
         let ss = nb.info.rebuild(s, true);
-        // At ply 1 (the replies to a root action) the checking travels travel_mate tries are
-        // searched right after the remembered actions, as at the root: such a travel comes after
-        // every action creating none, past the interior action cap, so a mate it starts against
-        // the root action went unseen.
-        let mut tchecks: Vec<MoveSeq> = Vec::new();
         if ply <= TRAVEL_MATE_PLY {
             let mate = {
                 let NodeBufs { info, order, .. } = &mut *nb;
-                self.travel_mate(s, info, &ss, order, if ply == 1 { Some(&mut tchecks) } else { None })
+                self.travel_mate(s, info, &ss, order, None)
             };
             if let Some(act) = mate {
                 self.bufs.push(nb);
@@ -1698,39 +1693,6 @@ impl AlphaBeta {
                 self.proven = true;
                 return v;
             }
-        }
-        for act in tchecks {
-            if pre_tried.contains(&act) {
-                continue;
-            }
-            let mark = Self::make(s, &act);
-            let v = self.search_child(s, mark, searched == 0, depth, ply, alpha, beta, pv);
-            if self.aborted {
-                self.bufs.push(nb);
-                return 0;
-            }
-            searched += 1;
-            all_proven &= self.proven;
-            if v > best {
-                best = v;
-                best_proven = self.proven;
-                best_action = act.clone();
-                if v > alpha {
-                    alpha = v;
-                    if pv {
-                        self.pv_update(ply, &act);
-                    }
-                }
-            }
-            if alpha >= beta {
-                self.bufs.push(nb);
-                self.on_cutoff(s, &act, depth, ply);
-                let proven = mate_proven(best, best_proven, false);
-                self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
-                self.proven = proven;
-                return best;
-            }
-            pre_tried.push(act);
         }
         let mut first = Self::without_future(s, &nb.info, &ss);
         // Capturing travels first: the first classes of the cursor (see `travel_class`).
