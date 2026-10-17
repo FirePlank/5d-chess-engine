@@ -71,6 +71,10 @@ fn quiet(s: &State) -> bool {
 static QUIET_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn game_samples(line: &str, out: &mut Vec<Sample>) -> Option<()> {
+    // A game lost to an engine failure has no real result.
+    if field(line, "reason").is_some_and(|r| r.starts_with("protocol")) {
+        return None;
+    }
     let position = field(line, "position")?;
     let moves = field(line, "moves")?;
     let score: f32 = field(line, "score")?.parse().ok()?;

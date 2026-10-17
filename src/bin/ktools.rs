@@ -1623,6 +1623,10 @@ fn netdata(args: &[String], out: &mut impl Write) {
                     while g < lines.len() {
                         let line = &lines[g];
                         g += threads;
+                        // A game lost to an engine failure has no real result.
+                        if json_field(line, "reason").is_some_and(|r| r.starts_with("protocol")) {
+                            continue;
+                        }
                         let (Some(pos), Some(moves), Some(score)) =
                             (json_field(line, "position"), json_field(line, "moves"), json_field(line, "score"))
                         else {
