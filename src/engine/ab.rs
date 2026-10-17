@@ -50,10 +50,6 @@ const ROOT_LMR_MIN_INDEX: usize = 6;
 const ROOT_FUTURE_MATE_PROBE: usize = 16;
 /// Time for that probe without a time plan (with one: a 32nd of the optimum).
 const ROOT_FUTURE_MATE_MS: u64 = 50;
-/// Checking travels (`checking_travels`) are searched first, this many actions of each, at
-/// nodes with at least CHECKING_TRAVEL_MIN_DEPTH plies left (and at the root).
-const CHECKING_TRAVEL_ACTIONS: usize = 1;
-const CHECKING_TRAVEL_MIN_DEPTH: i32 = 1;
 /// Aspiration windows (Apeiron's scheme): from depth ASP_MIN_DEPTH, after a completed depth
 /// with a non-mate score `prev`, the root is searched in [prev - w, prev + w], w starting at
 /// ASP_WINDOW; a fail low or high multiplies w by ASP_FAIL_MULT and moves that bound to
@@ -872,82 +868,6 @@ impl AlphaBeta {
         out
     }
 
-    /// Checking travels, which a node would otherwise search late or never: a travel that gives
-    /// check on arrival and either branches off a new timeline (actions creating timelines
-    /// come after all the others: with two boards to play, after hundreds of actions) or leaves
-    /// or reaches a board the side to move need not play (`without_future` leaves those out).
-    /// Each travel gets a hypercuboid of its own, with the other optional boards unplayed and
-    /// no other timeline branching off; they are appended to `first`, so they come first (see
-    /// `BestFirstCursor`), and their number is returned.
-    fn checking_travels(&self, s: &State, info: &mut HcInfo, ss: &SearchSpace, first: &mut SearchSpace, scratch: &mut OrderScratch) -> usize {
-        let dim = info.dimension();
-        let fba = info.first_branch_axis();
-        let present = s.get_present();
-        let (amin, amax) = s.get_active_range();
-        let (lo, hi) = s.get_lines_range();
-        let optional: Vec<usize> = (lo..=hi)
-            .filter(|&l| !(l >= amin && l <= amax && s.get_timeline_end(l) == present))
-            .filter_map(|l| info.line_to_axis(l))
-            .collect();
-        if fba >= dim && optional.is_empty() {
-            return 0;
-        }
-        info.materialize_branch(s);
-        let info: &HcInfo = info;
-        // (departure axis, departure coordinate, arrival axis, arrival coordinate)
-        let mut travels: Vec<(usize, Index, usize, Index)> = Vec::new();
-        let mut det = CheckDetector::new(info, s, scratch);
-        let u = info.get_universe();
-        // Branch axes share their entries: the first one stands for all.
-        for n in 0..dim.min(fba + 1) {
-            let wanted = n >= fba || optional.contains(&n);
-            for i in u[n].iter() {
-                let Entry::Arriving { idx, fa, .. } = info.entry(n, i) else { continue };
-                let fa = *fa as usize;
-                if (wanted || optional.contains(&fa)) && det.gives_check(n, i) {
-                    travels.push((fa, *idx, n, i));
-                }
-            }
-        }
-        det.finish(scratch);
-        let k = first.hcs.len();
-        for &(fa, dep, n, i) in &travels {
-            for hc in &ss.hcs {
-                if !hc[fa].contains(dep)
-                    || !hc[n].contains(i)
-                    || optional.iter().any(|&p| p != fa && p != n && !hc[p].contains(0))
-                    || (fba..dim).any(|b| b != n && !hc[b].contains(0))
-                {
-                    continue;
-                }
-                let mut h = hc.clone();
-                for &p in &optional {
-                    h[p].assign_singleton(0);
-                }
-                for b in fba..dim {
-                    h[b].assign_singleton(0);
-                }
-                h[fa].assign_singleton(dep);
-                h[n].assign_singleton(i);
-                first.hcs.push(h);
-            }
-        }
-        first.hcs.len() - k
-    }
-
-    /// Whether the action `cursor` just found is a checking travel's (its class is one of the
-    /// first `counts.len()`, see `checking_travels`); once CHECKING_TRAVEL_ACTIONS of one
-    /// travel are found, the rest of its class is dropped.
-    fn travel_class(cursor: &mut BestFirstCursor, counts: &mut [usize]) -> bool {
-        let class = cursor.last_class();
-        let Some(n) = counts.get_mut(class as usize) else { return false };
-        *n += 1;
-        if *n >= CHECKING_TRAVEL_ACTIONS {
-            cursor.drop_class(class);
-        }
-        true
-    }
-
     /// A checkmate in one among the root actions `without_future` leaves out: a piece that
     /// travels back from a board the side to move need not play (ahead of the present, or
     /// on an inactive timeline) and gives check on arrival, with moves on the boards that must
@@ -1491,15 +1411,7 @@ impl AlphaBeta {
 
         let mut nb = self.bufs.pop().unwrap_or_default();
         let ss = nb.info.rebuild(s, true);
-        let mut first = Self::without_future(s, &nb.info, &ss);
-        // Checking travels first: the first classes of the cursor (see `travel_class`).
-        let travels = if depth >= CHECKING_TRAVEL_MIN_DEPTH {
-            let NodeBufs { info, order, .. } = &mut *nb;
-            self.checking_travels(s, info, &ss, &mut first, order)
-        } else {
-            0
-        };
-        let mut travel_counts = vec![0usize; travels];
+        let first = Self::without_future(s, &nb.info, &ss);
         let mut full = Some(ss);
         {
             let NodeBufs { info, cursor, order, .. } = &mut *nb;
@@ -1544,14 +1456,8 @@ impl AlphaBeta {
                         }
                         Ok(Some(act)) => {
                             generated += 1;
-                            let travel = full.is_some() && Self::travel_class(&mut nb.cursor, &mut travel_counts);
                             if pre_tried.contains(&act) {
                                 continue;
-                            }
-                            if travel {
-                                // (A branching one comes again with the actions creating a
-                                // timeline.)
-                                pre_tried.push(act.clone());
                             }
                             if tt_action.as_ref() == Some(&act) {
                                 // Only reached when the TT action failed validation (searched
@@ -1559,7 +1465,7 @@ impl AlphaBeta {
                                 skipped = true;
                                 continue;
                             }
-                            batch.push((self.action_score(s, &act, ply) + if travel { CHECK_BONUS } else { 0 }, act));
+                            batch.push((self.action_score(s, &act, ply), act));
                         }
                     }
                 }
@@ -2023,7 +1929,7 @@ impl AlphaBeta {
         }
 
         // Root actions (all of them, up to the root cap), ordered heuristically.
-        let (mut hc, ss) = HcInfo::build_hc(root);
+        let (hc, ss) = HcInfo::build_hc(root);
         // The root (like every node) leaves out moves on optional boards: a mate in one by a
         // travel back from one of them is played unless the search finds a mate in one.
         let future_mate = {
@@ -2033,12 +1939,7 @@ impl AlphaBeta {
             self.future_mate_in_one(root, &hc, &ss)
         };
         let mut agen = BestFirstCursor::default();
-        let mut scratch = OrderScratch::default();
-        let mut first = Self::without_future(root, &hc, &ss);
-        let travels = self.checking_travels(root, &mut hc, &ss, &mut first, &mut scratch);
-        let mut travel_counts = vec![0usize; travels];
-        let mut travel_acts: Vec<MoveSeq> = Vec::new();
-        self.start_actions(root, &hc, &mut agen, &mut scratch, first, false);
+        self.start_actions(root, &hc, &mut agen, &mut OrderScratch::default(), Self::without_future(root, &hc, &ss), false);
         let mut full = Some(ss);
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
         // Enumerating every root action can take seconds with many timelines: spend at most
@@ -2065,14 +1966,7 @@ impl AlphaBeta {
                 None => agen.next(&hc, root),
             };
             match next {
-                Some(a) => {
-                    if full.is_some() && Self::travel_class(&mut agen, &mut travel_counts) {
-                        travel_acts.push(a.clone());
-                        roots.push((self.action_score(root, &a, 0) + CHECK_BONUS, a));
-                    } else if !travel_acts.contains(&a) {
-                        roots.push((self.action_score(root, &a, 0), a));
-                    }
-                }
+                Some(a) => roots.push((self.action_score(root, &a, 0), a)),
                 // Out of time: with no action found yet, none can be played.
                 None if interrupted() => break,
                 None if roots.is_empty() && full.is_some() => agen.restart(&hc, full.take().unwrap()),
@@ -2693,32 +2587,5 @@ mod tests {
         assert_eq!(AlphaBeta::child(&s, &seq).get_mate_type(), MateType::Checkmate, "played {:?}", seq);
         assert_eq!(e.last_score(), MATE - 1);
         assert!(last.contains("score mate 1 "), "{}", last);
-    }
-
-    /// Turn Zero engine game, Black's move 30: (-2T16)Na5xb3 loses to the knight travel
-    /// (-2T17)Ng5>>x(-2T16)g7#, a branching travel from a board White must play, which interior
-    /// nodes reached only after every action creating no timeline (tactics suite, "T0 travel
-    /// mate").
-    #[test]
-    fn checking_travel_reply_is_searched() {
-        let s = start_with_moves(
-            "(0T1)e2e3 submit (0T1)g8f6 submit (0T2)b2b4 submit (0T2)d7d5 submit (0T3)c1b2 submit (0T3)c8g4 submit \
-             (0T4)g1f3 submit (0T4)b8c6 submit (0T5)b4b5 submit (0T5)c6a5 submit (0T6)h2h3 submit (0T6)g4h5 submit \
-             (0T7)g2g4 submit (0T7)h5g6 submit (0T8)d2d3 submit (0T8)e7e6 submit (0T9)b1d2 submit (0T9)f8d6 submit \
-             (0T10)d1e2 submit (0T10)d8d7 submit (0T11)a2a4 submit (0T11)e8g8 submit (0T12)h3h4 submit (0T12)a5c4 submit \
-             (0T13)d3c4 submit (0T13)d5d4 submit (0T14)b2d4 submit (0T14)e6e5 submit (0T15)d4c3 submit (0T15)g6c2 submit \
-             (0T16)f1h3 submit (0T16)e5e4 submit (0T17)c3f6 submit (0T17)g7f6 submit (0T18)f3d4 submit (0T18)d6e5 submit \
-             (0T19)d4c2 submit (0T19)e5a1 submit (0T20)c2a1 submit (0T20)d7d6 submit (0T21)g4g5 submit (0T21)d6e5 submit \
-             (0T22)e2d1 submit (0T22)e5(0T18)a1 submit (-1T19)d2b1 submit (-1T19)a1b1 submit (0T23)d1(0T11)d1 submit \
-             (1T11)d7b5 submit (1T12)f3g5 submit (1T12)b5b2 submit (1T13)a1b1 submit (1T13)b2c3 submit (1T14)h3h4 submit \
-             (1T14)e8f8 submit (1T15)h4h5 submit (1T15)g6h5 submit (1T16)g4h5 submit (1T16)a5(1T15)a3 submit \
-             (-2T16)b1b3 submit",
-        );
-        let losing = FullMove::parse("(-2T16)a5b3").unwrap();
-        let mut e = AlphaBeta::new();
-        let stop = AtomicBool::new(false);
-        let a = e.find_best_move(&s, &Limits { depth: Some(3), ..Default::default() }, &stop, &mut |_| {}).unwrap();
-        let seq: MoveSeq = a.moves().iter().map(|m| m.fm).collect();
-        assert!(seq.as_slice() != [losing], "played {:?}", seq);
     }
 }
