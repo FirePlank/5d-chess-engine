@@ -183,3 +183,17 @@
 # Qa5/Qb6/Qc7".
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. c3 / Nf6 2. Qa4 {know} / c6 {play 10} 3. Qc4 {know} / Qb6 {play 10}
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. c3 / Nf6 2. Qa4 / c6 3. a3 {know} / d5 {play 10} 4. Qb3 {know} / Qb6 {play 10}
+# More of the guide's answers once 1...Nf6 is in: "2...d5 then stops T1f7 access" (the queen's
+# b3-c4-d5 diagonal and the bishop's c4 square), and the knight takes a queen on h5.
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Qf3 {know} / d5 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. c3 {know} / d5 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Bc4 {know} / d5 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Qh5 {know} / Nxh5 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. c3 / Nf6 2. Qb3 {know} / d5 {play 10}
+# White, mirrored: after its own 1. e3 the knight to f3 shuts the f-file and the h4 queen sac
+# against T0f2 (the mirror of "against anything: 1...Nf6").
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / e6 {know} 2. Nf3 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / e5 {know} 2. Nf3 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / c6 {know} 2. Nf3 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e4 / e5 {know} 2. Nf3 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e4 / e6 {know} 2. Nf3 {play 10}
