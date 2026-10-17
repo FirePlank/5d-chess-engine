@@ -2735,7 +2735,7 @@ impl AlphaBeta {
             let mut on_free = false;
             if let Some(p) = plan.filter(|p| p.clock) {
                 changes = changes / 2.0 + if depth > 1 && best != prev_best { 1.0 } else { 0.0 };
-                let falling = avg_score.map_or(1.0, |a| (1.0 + (a - best_score) as f64 / 150.0).clamp(0.75, 1.6));
+                let falling = avg_score.map_or(1.0, |a| (1.0 + (a - best_score) as f64 / 240.0).clamp(0.75, 1.6));
                 avg_score = Some(avg_score.map_or(best_score, |a| (a + best_score) / 2));
                 let instability = (0.8 + 0.6 * changes).min(2.0);
                 // The next depth costs about as much as all before it together: none is
