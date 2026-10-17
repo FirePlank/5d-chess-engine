@@ -63,7 +63,7 @@ const TRAVEL_MATE_STEPS: u32 = 64;
 /// Hypercuboids the cursor may take on a capturing travel (`travel_captures`) before it gives
 /// it up (when most of its combinations with the other boards' moves are illegal, finding one
 /// can take thousands).
-const TRAVEL_CAPTURE_STEPS: u32 = 32;
+const TRAVEL_CAPTURE_STEPS: u32 = 16;
 /// Aspiration windows (Apeiron's scheme): from depth ASP_MIN_DEPTH, after a completed depth
 /// with a non-mate score `prev`, the root is searched in [prev - w, prev + w], w starting at
 /// ASP_WINDOW; a fail low or high multiplies w by ASP_FAIL_MULT and moves that bound to
