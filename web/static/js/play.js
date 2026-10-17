@@ -4,6 +4,7 @@
 // (local-play.js), with the same requests and state.
 import { Rules } from './kairos.js';
 import { LocalPlay } from './local-play.js';
+import { saveGame } from './history.js';
 import { lanText } from './input.js';
 import { $, $$, el, toast, fmtClock, store, confirmDialog } from './util.js';
 
@@ -249,6 +250,8 @@ export class Play {
       book: $('#play-book').checked,
     };
     this.wantSetup = false;
+    // When the game began, which also marks it as one to keep when it ends (see `archive`).
+    this.startedAt = Date.now();
     this.post('start', body).then(() => {
       const g = this.state && this.state.game;
       if (g) {
@@ -340,7 +343,49 @@ export class Play {
     this.previewing = false;
     if (s.game) this.sync(s.game);
     if (s.you) this.wantSetup = this.wantSetup && !!(s.game && s.game.over);
+    if (s.you && s.game && s.game.over) this.archive(s.game);
     if (this.active) this.show();
+  }
+
+  /**
+   * Keep a game you finished (longer than one action) in this browser's game history, shown in
+   * the Games tab. Only games started on this page, once each.
+   */
+  archive(g) {
+    if (!this.startedAt || this.archived === this.startedAt) return;
+    this.archived = this.startedAt;
+    if (g.moves.length <= 1) return;
+    const white = g.humanColor === 'w';
+    const app = this.app;
+    const engine = app.server
+      ? { where: 'server', version: `Kairos ${app.server.version || ''}`.trim() }
+      : {
+        where: 'browser',
+        version: app.build ? `Kairos ${app.build.sha.slice(0, 7)}` : 'Kairos (local build)',
+        build: app.build ? app.build.sha : null,
+        threads: app.engine.threadsActive || app.engine.threads,
+        hashMb: app.engine.hashMb,
+      };
+    const rec = {
+      kind: 'played',
+      started: this.startedAt,
+      ended: Date.now(),
+      variant: g.variant,
+      position: g.start,
+      moves: [...g.moves],
+      human: white ? 'white' : 'black',
+      white: white ? 'You' : 'Kairos',
+      black: white ? 'Kairos' : 'You',
+      result: g.over.result,
+      score: g.over.result === '1-0' ? 1 : g.over.result === '0-1' ? 0 : 0.5,
+      reason: g.over.reason,
+      timeControl: g.clock ? clockShort(g.clock) : `${g.movetime / 1000}s/move`,
+      clock: g.clock || null,
+      movetime: g.clock ? null : g.movetime,
+      openingBook: g.book !== false,
+      engine,
+    };
+    saveGame(rec).then(() => toast('Game saved to Games')).catch((e) => toast('Could not save the game: ' + e.message, { error: true }));
   }
 
   /** The engine's progress (depth, score, speed) is not shown while playing: it would give the game away. */

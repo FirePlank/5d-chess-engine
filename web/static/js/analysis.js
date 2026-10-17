@@ -2,6 +2,7 @@
 // book and engine actions, the recorded eval graph and live engine analysis.
 import { Rules, parseInfo, threadsSupported } from './kairos.js';
 import { apiGet } from './static-api.js';
+import { getGame, saveGame, putGame, recordLine } from './history.js';
 import { $, $$, el, toast, fmtScore, fmtNodes, winChance, recordScore, parseLan, store, confirmDialog } from './util.js';
 
 const THROTTLE_MS = 70;
@@ -75,6 +76,14 @@ export class Analysis {
         this.loadRemote(file, index);
         return;
       }
+    } else if (params.get('game')) {
+      // A game from Your games (played against Kairos, or a saved analysis).
+      const key = 'game:' + params.get('game');
+      if (this.loadedKey !== key) {
+        this.loadedKey = key;
+        this.loadSaved(+params.get('game'));
+        return;
+      }
     } else if (params.get('uci')) {
       const key = 'uci:' + params.get('uci');
       if (this.loadedKey !== key) {
@@ -119,11 +128,14 @@ export class Analysis {
 
   // ---------------------------------------------------------------- loading
   /** Load a record (JSONL line, 5dpgn, 5DUCI); throws with a readable message. */
-  load(text, position = null, { source = null, quiet = false } = {}) {
+  load(text, position = null, { source = null, quiet = false, prepare = null } = {}) {
     const r = this.rules.call({ cmd: 'load', text, position: position || undefined });
     this.setGame(r.tree, r.meta, source);
-    // Open at the end of the main line, like a finished game.
-    this.cur = r.mainline[r.mainline.length - 1];
+    // What was loaded, so a saved analysis of it keeps the record's scores and book marks.
+    this.loadedText = text;
+    this.loadedPosition = position;
+    // Open at the end of the main line, like a finished game (or where `prepare` says).
+    this.cur = prepare ? prepare(r) : r.mainline[r.mainline.length - 1];
     this.board.fitted = false;
     this.show({ follow: false });
     this.board.fit(false, true);
@@ -135,6 +147,8 @@ export class Analysis {
   newGame(position, { quiet = false } = {}) {
     const r = this.rules.call({ cmd: 'new', position });
     this.setGame(r.tree, r.meta, null);
+    this.loadedText = null;
+    this.loadedPosition = null;
     this.cur = 0;
     this.board.fitted = false;
     this.show({ follow: false });
@@ -404,13 +418,15 @@ export class Analysis {
     $('#gm-result').textContent = m.result ? m.result.replace('1/2-1/2', '½-½') : '*';
     const parts = [];
     if (m.variant) parts.push(m.variant);
-    if (m.format && m.format !== 'new') parts.push({ sprt: 'SPRT record', '5dpgn': '5dpgn', '5duci': '5DUCI' }[m.format] || m.format);
+    if (m.format && m.format !== 'new' && !(m.source && m.source.game != null)) parts.push({ sprt: 'SPRT record', '5dpgn': '5dpgn', '5duci': '5DUCI' }[m.format] || m.format);
     if (m.reason) parts.push(m.reason);
-    if (m.actions) parts.push(`${m.actions} actions`);
+    if (m.actions) parts.push(`${m.actions} action${m.actions === 1 ? '' : 's'}`);
     if (m.book) parts.push(`${m.book} book (grey)`);
     if (m.game != null) parts.push(`game ${m.game}${m.pair != null ? `, pair ${m.pair}` : ''}`);
+    // A saved game's name on a line of its own above the rest.
     const pills = parts.map((t, i) => el('span', { class: i ? 'sep' : '', text: t }));
-    if (m.source) {
+    if (m.name) pills.unshift(el('span', { class: 'game-name', text: m.name }));
+    if (m.source && m.source.file) {
       const { file, index, count } = m.source;
       const nav = (d) => () => { location.hash = `#/analysis?file=${encodeURIComponent(file)}&index=${index + d}`; };
       if (index > 0) pills.push(el('span', { class: 'sep' }, el('button', { text: '‹ previous', onclick: nav(-1) })));
@@ -895,6 +911,9 @@ export class Analysis {
     this.bindVariantPicker();
     // Export dialog.
     $('#btn-export').onclick = () => this.openExport();
+    $('#btn-save').onclick = () => this.openSave();
+    $('#save-go').onclick = (e) => { e.preventDefault(); this.saveAnalysis(false); };
+    $('#save-copy').onclick = (e) => { e.preventDefault(); this.saveAnalysis(true); };
     $$('#export-kind button').forEach((b) => (b.onclick = () => this.fillExport(b.dataset.v)));
     $('#export-copy').onclick = async () => {
       try { await navigator.clipboard.writeText($('#export-text').value); toast('Copied'); }
@@ -945,6 +964,148 @@ export class Analysis {
   isInSubtree(id, root) {
     for (let n = id; n != null; n = this.node(n).parent) if (n === root) return true;
     return false;
+  }
+
+  // ---------------------------------------------------------------- Your games
+  /**
+   * The whole tree as saved: per action its LAN, comment, whether it is a forced variation,
+   * and its continuations in order (`k`; the first is the main one).
+   */
+  snapshot(id = 0) {
+    const n = this.node(id);
+    const out = { lan: n.lan || '', k: n.children.map((c) => this.snapshot(c)) };
+    if (n.comments.length) out.c = n.comments.join(' ');
+    if (this.forced.has(id)) out.f = 1;
+    return out;
+  }
+
+  /** The LANs from the start to node `id`. */
+  pathTo(id) {
+    const out = [];
+    for (let c = id; this.node(c).parent != null; c = this.node(c).parent) out.unshift(this.node(c).lan);
+    return out;
+  }
+
+  /** The Save dialog: a name and the players (a game opened from Your games can be updated). */
+  async openSave() {
+    const m = this.meta || {};
+    const existing = m.source && m.source.game != null ? await getGame(m.source.game).catch(() => null) : null;
+    this.saveTarget = existing;
+    const date = new Date().toLocaleDateString(undefined, { dateStyle: 'medium' });
+    const players = m.white && m.black && !(m.white === 'White' && m.black === 'Black') ? `${m.white} vs ${m.black}` : m.variant || 'Analysis';
+    $('#save-name').value = (existing && existing.name) || m.name || `${players} · ${date}`;
+    $('#save-white').value = m.white && m.white !== 'White' ? m.white : (existing && existing.white) || '';
+    $('#save-black').value = m.black && m.black !== 'Black' ? m.black : (existing && existing.black) || '';
+    $('#save-copy').classList.toggle('hidden', !existing);
+    $('#save-go').textContent = existing ? 'Update' : 'Save';
+    $('#dlg-save').showModal();
+    $('#save-name').select();
+  }
+
+  /** Save this game and its analysis to Your games (`copy`: as a new one even if opened from there). */
+  async saveAnalysis(copy) {
+    const name = $('#save-name').value.trim();
+    if (!name) { $('#save-name').focus(); return; }
+    const m = this.meta || {};
+    const existing = copy ? null : this.saveTarget;
+    const rec = {
+      kind: existing ? existing.kind || 'analysis' : 'analysis',
+      name,
+      white: $('#save-white').value.trim() || 'White',
+      black: $('#save-black').value.trim() || 'Black',
+      variant: m.variant || null,
+      position: this.rules.call({ cmd: 'view', node: 0, draft: [] }).view.position,
+      moves: this.mainline().slice(1).map((id) => this.node(id).lan),
+      result: m.result || (existing && existing.result) || null,
+      reason: m.reason || (existing && existing.reason) || null,
+      tree: this.snapshot(),
+      cur: this.pathTo(this.cur),
+      base: this.loadedText || null,
+      basePosition: this.loadedPosition || null,
+      saved: Date.now(),
+    };
+    // A game you played keeps its record (what was played, how it ended); the analysis goes on top.
+    if (existing && existing.kind === 'played') {
+      for (const k of ['variant', 'position', 'moves', 'result', 'reason', 'base', 'basePosition']) delete rec[k];
+    }
+    try {
+      let id;
+      if (existing) {
+        id = existing.id;
+        await putGame({ ...existing, ...rec, id });
+      } else {
+        id = await saveGame({ ...rec, started: Date.now(), ended: Date.now() });
+      }
+      this.meta.source = { game: id };
+      this.meta.name = name;
+      this.meta.white = rec.white;
+      this.meta.black = rec.black;
+      this.loadedKey = 'game:' + id;
+      history.replaceState(null, '', `#/analysis?game=${id}`);
+      $('#dlg-save').close();
+      this.renderGameCard();
+      toast(existing ? 'Updated in Your games' : 'Saved to Your games');
+    } catch (e) {
+      toast('Could not save: ' + e.message, { error: true });
+    }
+  }
+
+  /**
+   * Open a game from Your games: its record (as loaded or played), then a saved analysis's
+   * tree on top (variations added, their order, comments and forced variations restored,
+   * removed actions removed), at the position it was saved at.
+   */
+  async loadSaved(id) {
+    let g;
+    try { g = await getGame(id); } catch (e) { g = null; }
+    if (!g) {
+      toast('That game is no longer in Your games', { error: true });
+      return this.newGame('Standard - Turn Zero', { quiet: true });
+    }
+    const prepare = (r) => {
+      if (g.tree) this.applyTree(0, g.tree);
+      Object.assign(this.meta, { name: g.name || null, white: g.white || this.meta.white, black: g.black || this.meta.black });
+      if (g.result) this.meta.result = g.result;
+      if (g.reason) this.meta.reason = g.reason;
+      if (g.moves) this.meta.actions = g.moves.length;
+      this.renderGameCard();
+      if (!g.cur) return r.mainline[r.mainline.length - 1];
+      let cur = 0;
+      for (const lan of g.cur) {
+        const next = this.node(cur).children.find((c) => this.node(c).lan === lan);
+        if (next == null) break;
+        cur = next;
+      }
+      return cur;
+    };
+    try {
+      this.load(g.base || recordLine(g), g.basePosition || null, { quiet: true, source: { game: id }, prepare });
+    } catch (e) {
+      toast('Could not open the game: ' + e.message, { error: true });
+    }
+  }
+
+  /** Make node `id`'s subtree match the saved `snap` (see `snapshot`). */
+  applyTree(id, snap) {
+    const comment = snap.c || '';
+    if ((this.node(id).comments.join(' ')) !== comment) this.tree = this.rules.call({ cmd: 'comment', node: id, text: comment }).tree;
+    const want = snap.k || [];
+    const ids = want.map((c) => {
+      let child = this.node(id).children.find((k) => this.node(k).lan === c.lan);
+      if (child == null) {
+        const r = this.rules.call({ cmd: 'play', node: id, lan: c.lan });
+        this.tree = r.tree;
+        child = r.node;
+      }
+      if (c.f) this.forced.add(child);
+      this.applyTree(child, c);
+      return child;
+    });
+    // Actions removed before saving are removed again; then the saved order.
+    for (const k of [...this.node(id).children]) {
+      if (!ids.includes(k)) this.tree = this.rules.call({ cmd: 'delete', node: k }).tree;
+    }
+    for (const k of [...ids].reverse()) this.tree = this.rules.call({ cmd: 'promote', node: k, fork: true }).tree;
   }
 
   /**

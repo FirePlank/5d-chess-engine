@@ -416,24 +416,30 @@ textarea { width: 100%; height: 180px; padding: var(--s2); font: 12.5px/1.5 var(
 .spectators:empty { display: none; }
 
 /* ------------------------------------------------------------ game browser */
-.browser { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: var(--s2); height: 100%; padding: 0 var(--s2) var(--s2); }
-.files, .games-panel { padding: var(--s3); min-height: 0; min-width: 0; display: flex; flex-direction: column; }
-.files-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); margin-bottom: var(--s2); }
-.files-head .panel-title { margin: 0; }
-.files-head .input { width: 130px; }
-.file-list { overflow-y: auto; flex: 1; margin: 0 calc(-1 * var(--s3)); }
-.file-group { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; padding: var(--s3) var(--s3) var(--s1); }
-.file { display: flex; justify-content: space-between; gap: var(--s2); padding: 5px var(--s3); cursor: pointer; font-size: 13px; }
-.file:hover { background: var(--hover); color: var(--strong); }
-.file.on { background: var(--accent-soft); color: var(--strong); font-weight: 600; }
-.file .size { color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.file .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s2); height: 100%; padding: 0 var(--s2) var(--s2); }
+.games-note { margin: 0 0 var(--s2); font-size: 12.5px; color: var(--muted); }
+.games .res.win { color: var(--good); }
+.games .res.loss { color: var(--bad); }
+.games .side-cell { white-space: nowrap; }
+.games .del { width: 1%; text-align: right; }
+.games .del button { border: 0; background: none; color: var(--muted); font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: var(--r-sm); cursor: pointer; }
+.games .del button:hover { color: var(--bad); background: var(--hover); }
+.btn.danger:not(.primary) { color: var(--bad); }
+.games .kind { display: inline-block; margin-right: 6px; padding: 0 5px; border-radius: 3px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; vertical-align: 1px; }
+.games .kind.played { background: color-mix(in srgb, var(--good) 22%, transparent); color: var(--strong); }
+.games .kind.saved { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--strong); }
+.games .name-cell { white-space: normal; min-width: 160px; color: var(--strong); }
+.games .notes { display: block; font-size: 11.5px; color: var(--muted); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.games .date-cell, .games .engine-cell { color: var(--muted); }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); }
+.game-meta .game-name { flex-basis: 100%; font-weight: 600; color: var(--strong); }
+.games-panel { padding: var(--s3); min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 .games-head { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; justify-content: space-between; margin-bottom: var(--s2); }
 .games-head .panel-title { margin: 0; }
 .filters { display: flex; flex-wrap: wrap; gap: var(--s1); }
 .table-wrap { flex: 1; overflow: auto; }
 table.games { width: 100%; border-collapse: collapse; font-size: 13px; }
-.games th { position: sticky; top: 0; background: var(--panel); text-align: left; font-weight: 600; font-size: 12px; color: var(--muted); padding: 6px var(--s2); border-bottom: 1px solid var(--border); }
+.games th { white-space: nowrap; position: sticky; top: 0; background: var(--panel); text-align: left; font-weight: 600; font-size: 12px; color: var(--muted); padding: 6px var(--s2); border-bottom: 1px solid var(--border); }
 .games td { padding: 6px var(--s2); white-space: nowrap; }
 .games tbody tr:nth-child(even) { background: var(--zebra); }
 .games tbody tr { cursor: pointer; }
@@ -442,7 +448,6 @@ table.games { width: 100%; border-collapse: collapse; font-size: 13px; }
 .games .center { text-align: center; }
 .games .res { font-weight: 700; color: var(--strong); text-align: center; font-variant-numeric: tabular-nums; }
 .games .reason { color: var(--muted); max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
-.pager { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); padding-top: var(--s2); font-size: 13px; color: var(--muted); }
 .empty-state { padding: var(--s5) var(--s4); text-align: center; color: var(--muted); }
 
 /* ------------------------------------------------------------ dialogs */
@@ -535,18 +540,25 @@ table.games { width: 100%; border-collapse: collapse; font-size: 13px; }
 
   /* Game browser and rules: their own scroll area under the header. */
   .browser { grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; height: 100%; overflow-y: auto; padding: var(--s2); }
-  .files { max-height: 34vh; }
-  .files .file-list { overflow-y: auto; }
   .games-panel { min-height: 60vh; }
   .filters { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: var(--s1); }
   .filters > *, .filters .input.num { min-width: 0; width: 100%; max-width: none; }
   .table-wrap { max-height: none; overflow-x: auto; }
-  table.games th:nth-child(1), table.games td:nth-child(1), table.games th:nth-child(8), table.games td:nth-child(8) { display: none; }
-  table.games { table-layout: auto; }
-  .games th, .games td { padding: 9px 5px; }
-  .games td:nth-child(2), .games .reason { white-space: normal; overflow-wrap: break-word; line-height: 1.3; }
-  .games td:nth-child(2) { min-width: 84px; }
-  .games .reason { max-width: 92px; font-size: 12px; }
+  /* Your games as cards: the name and its buttons, then the result and how it was played, then the date. */
+  table.games, table.games tbody { display: block; }
+  table.games thead, table.games .engine-cell { display: none; }
+  table.games tbody tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; padding: 10px 6px; border-bottom: 1px solid var(--border); }
+  .games td { padding: 0; font-size: 12px; color: var(--muted); }
+  .games td.name-cell { order: 0; flex: 1 1 calc(100% - 72px); min-width: 0; font-size: 14px; color: var(--strong); overflow-wrap: break-word; line-height: 1.35; }
+  .games td.del { order: 1; width: auto; }
+  .games td.del button { padding: 4px 8px; font-size: 18px; }
+  .games td.res, .games td.reason, .games td.num, .games td.variant-cell, .games td.tc-cell { order: 3; }
+  .games td.res { text-align: left; }
+  .games td.reason { max-width: none; white-space: normal; }
+  .games td.num:not(:empty)::after { content: attr(data-unit); }
+  .games td.date-cell { order: 4; flex-basis: 100%; font-size: 11.5px; }
+  .games .notes { max-width: none; white-space: normal; }
+  .games td.empty-state { flex: 1; text-align: center; padding: var(--s4) 0; }
   .rules { padding: 0; }
   .rules-doc { padding: var(--s2) var(--s4) var(--s5); }
   .rules-doc h1 { font-size: 22px; }
