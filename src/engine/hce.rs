@@ -6,7 +6,7 @@ use crate::core::board::Board;
 use crate::core::check_position::CheckPosition;
 use crate::core::state::State;
 
-pub const NF: usize = 100;
+pub const NF: usize = 95;
 
 /// Feature indices.
 pub mod fi {
@@ -98,9 +98,6 @@ pub mod fi {
     /// Own royals that left a timeline: active boards without an own royal and the enemy pieces
     /// on them (white's minus black's).
     pub const KL: usize = 93;
-    /// King exposure across the royal's past boards, alone and times the enemy queens (at most 3),
-    /// and the softmate shape (own danger, white's minus black's).
-    pub const XP: usize = 95;
 }
 
 pub const FEATURE_NAMES: [&str; NF] = [
@@ -119,7 +116,6 @@ pub const FEATURE_NAMES: [&str; NF] = [
     "tl_lost", "to_move", "zone_mand_stm", "zone_mand_opp",
     "def_hot", "def_board", "travel_hot",
     "kingless", "kl_swarm",
-    "xp_open", "xp_noshield", "xp_open_q", "xp_nosh_q", "soft",
 ];
 
 pub type Features = [i32; NF];
@@ -148,81 +144,81 @@ pub fn default_weights() -> Weights {
 /// Weights used by the alpha-beta search with `use_hce` (Texel-tuned, see bin/tune.rs).
 pub fn tuned_weights() -> Weights {
     weights_by_name(&[
-        ("mat_a_pawn", 428.5),
+        ("mat_a_pawn", 484.2),
         ("mat_a_brawn", 150.0),
-        ("mat_a_knight", 786.9),
-        ("mat_a_bishop", 1383.8),
-        ("mat_a_rook", 755.1),
-        ("mat_a_queen", 2133.3),
+        ("mat_a_knight", 845.5),
+        ("mat_a_bishop", 1553.5),
+        ("mat_a_rook", 944.9),
+        ("mat_a_queen", 2464.5),
         ("mat_a_princess", 899.8),
         ("mat_a_unicorn", 250.0),
         ("mat_a_dragon", 150.0),
-        ("mat_a_cking", 130.7),
-        ("mat_i_pawn", -102.9),
+        ("mat_a_cking", 195.3),
+        ("mat_i_pawn", -83.8),
         ("mat_i_brawn", 74.9),
-        ("mat_i_knight", 213.1),
-        ("mat_i_bishop", 537.3),
-        ("mat_i_rook", 284.9),
-        ("mat_i_queen", 1032.2),
+        ("mat_i_knight", 219.3),
+        ("mat_i_bishop", 630.7),
+        ("mat_i_rook", 316.4),
+        ("mat_i_queen", 1097.3),
         ("mat_i_princess", 450.0),
         ("mat_i_unicorn", 125.1),
         ("mat_i_dragon", 74.9),
         ("mat_i_cking", 150.0),
-        ("cent_knight", 72.0),
-        ("cent_bishop", -48.7),
-        ("cent_rook", 39.5),
-        ("cent_queen", -75.3),
-        ("cent_other", 108.2),
-        ("pawn_adv", -35.1),
-        ("pawn_near", 243.6),
-        ("king_cent", -117.8),
-        ("tl_slots", 2158.5),
-        ("tl_slots_heavy", -96.9),
-        ("k_holes", -182.4),
-        ("k_knights", 2386.5),
-        ("k_open_orth", -367.5),
-        ("k_open_diag", 155.1),
-        ("k_shield", 396.4),
-        ("k_zone_att", 332.0),
-        ("mob_knight", 72.5),
-        ("mob_bishop", 111.6),
-        ("mob_rook", 92.7),
-        ("mob_queen", 68.9),
-        ("mob_king", 106.9),
-        ("hanging", -14.4),
-        ("royal_att", -2029.5),
-        ("tempo", -60.9),
-        ("active_lines", 136.0),
-        ("checks_5d", -711.1),
-        ("sp_checks", -711.8),
-        ("mandatory", 41.6),
-        ("passed", 45.1),
-        ("doubled", 10.9),
-        ("isolated", -21.6),
-        ("king_prox", 915.1),
-        ("undeveloped", -367.5),
-        ("king_prox_5d", 132.0),
-        ("queen_prox", -327.6),
-        ("travel_past", -40.5),
-        ("travel_now", 626.0),
-        ("travel_backed", -550.7),
-        ("weak_sq", 362.7),
-        ("open_orth5", 4.7),
-        ("open_diag5", -17.6),
-        ("open_multi5", 16.4),
-        ("king_off", -848.9),
-        ("king_off_new", -1625.8),
-        ("low_flight", 681.8),
-        ("exiled", -44.2),
-        ("inactive_royal_att", -8.5),
-        ("travel_stm", 394.0),
-        ("tl_slots_threat", 392.4),
-        ("tl_slots_stm", -439.5),
-        ("f7_weak", 53.5),
-        ("f7_open", 37.5),
-        ("f7_qreach", 260.2),
-        ("f7_broute", -11.8),
-        ("kn_checks", 280.9),
+        ("cent_knight", 97.5),
+        ("cent_bishop", -50.9),
+        ("cent_rook", 52.0),
+        ("cent_queen", -6.4),
+        ("cent_other", 142.7),
+        ("pawn_adv", -28.2),
+        ("pawn_near", 302.0),
+        ("king_cent", -123.6),
+        ("tl_slots", 2332.7),
+        ("tl_slots_heavy", -98.2),
+        ("k_holes", -224.7),
+        ("k_knights", 2526.0),
+        ("k_open_orth", -511.5),
+        ("k_open_diag", 31.5),
+        ("k_shield", 624.7),
+        ("k_zone_att", 234.0),
+        ("mob_knight", 76.0),
+        ("mob_bishop", 129.6),
+        ("mob_rook", 106.9),
+        ("mob_queen", 91.3),
+        ("mob_king", 93.1),
+        ("hanging", -15.6),
+        ("royal_att", -2076.0),
+        ("tempo", -106.2),
+        ("active_lines", 142.2),
+        ("checks_5d", 0.0),
+        ("sp_checks", 0.0),
+        ("mandatory", 278.9),
+        ("passed", 64.0),
+        ("doubled", -2.4),
+        ("isolated", -29.8),
+        ("king_prox", 972.7),
+        ("undeveloped", -381.6),
+        ("king_prox_5d", 84.5),
+        ("queen_prox", -341.1),
+        ("travel_past", 54.9),
+        ("travel_now", 532.9),
+        ("travel_backed", -567.5),
+        ("weak_sq", 380.5),
+        ("open_orth5", 0.0),
+        ("open_diag5", -20.2),
+        ("open_multi5", -20.5),
+        ("king_off", -847.1),
+        ("king_off_new", -1536.2),
+        ("low_flight", 746.0),
+        ("exiled", -11.8),
+        ("inactive_royal_att", -4.4),
+        ("travel_stm", 608.4),
+        ("tl_slots_threat", 552.0),
+        ("tl_slots_stm", -415.3),
+        ("f7_weak", 26.4),
+        ("f7_open", 62.9),
+        ("f7_qreach", 248.4),
+        ("f7_broute", -11.6),
+        ("kn_checks", 296.2),
         // Set by hand (untuned; see `split_sac`), for defence: the local proofs ignore
         // time-travel defences and the other timelines, so they only nudge. A side to move
         // with a verified f7 travel on hand is a pawn and a half up (its opponent should have
@@ -236,26 +232,21 @@ pub fn tuned_weights() -> Weights {
         ("sac_now", 0.0),
         ("sac_now_stm", 700.0),
         ("sac_open", 150.0),
-        ("zone_hot", 568.5),
-        ("weak_hot", -66.2),
-        ("dmax5", -277.5),
-        ("zone_max", -463.3),
-        ("k_def", -19.5),
-        ("k_flight", 268.4),
-        ("tl_lost", -246.2),
-        ("to_move", 578.7),
-        ("zone_mand_stm", -235.3),
-        ("zone_mand_opp", 874.9),
-        ("def_hot", -72.2),
-        ("def_board", -19.5),
-        ("travel_hot", -184.9),
-        ("kingless", -246.7),
-        ("kl_swarm", -190.5),
-        ("xp_open", -201.6),
-        ("xp_noshield", -120.7),
-        ("xp_open_q", -39.1),
-        ("xp_nosh_q", -311.8),
-        ("soft", -37.3),
+        ("zone_hot", 460.2),
+        ("weak_hot", -74.7),
+        ("dmax5", -197.1),
+        ("zone_max", -430.7),
+        ("k_def", -15.5),
+        ("k_flight", 226.9),
+        ("tl_lost", -92.7),
+        ("to_move", 372.2),
+        ("zone_mand_stm", -20.4),
+        ("zone_mand_opp", 732.9),
+        ("def_hot", -76.5),
+        ("def_board", -15.5),
+        ("travel_hot", -129.1),
+        ("kingless", -171.3),
+        ("kl_swarm", -313.5),
     ])
 }
 
@@ -499,15 +490,7 @@ pub mod ex {
     pub const KINGLESS: usize = 28;
     /// Enemy non-pawn pieces on those boards.
     pub const KL_SWARM: usize = 29;
-    /// King exposure that persists in the past: the most open lines from own royals on any
-    /// of the last `XP_BOARDS` boards of their timelines (time travel can reach them there).
-    pub const XP_OPEN: usize = 30;
-    /// The same for missing shield pawns (three per royal minus `si::K_SHIELD`).
-    pub const XP_NOSHIELD: usize = 31;
-    /// Own royals attacked on their board with every escape square on that board covered
-    /// (the softmate shape).
-    pub const SOFT: usize = 32;
-    pub const COUNT: usize = 33;
+    pub const COUNT: usize = 30;
 }
 
 /// Squares within king distance 2.
@@ -716,11 +699,6 @@ pub trait TermSource {
         None
     }
     fn past_put(&mut self, _key: u64, _v: [i32; 2]) {}
-    /// Memoized `exposure_line` results.
-    fn xp_get(&mut self, _key: u64) -> Option<[i32; 2]> {
-        None
-    }
-    fn xp_put(&mut self, _key: u64, _v: [i32; 2]) {}
     /// The winning travels of the search's root (`sac::root_travels`), if known.
     fn sac_root(&self) -> Option<&super::sac::RootTravels> {
         None
@@ -741,7 +719,6 @@ pub struct TermCache {
     size: (i32, i32),
     slots: Vec<(Board, bool, BoardTerms)>,
     past: Vec<(u64, [i32; 2])>,
-    xp: Vec<(u64, [i32; 2])>,
     /// The winning travels of the current search's root.
     pub sac_root: super::sac::RootTravels,
 }
@@ -752,7 +729,6 @@ impl Default for TermCache {
             size: (0, 0),
             slots: vec![(Board::default(), false, BoardTerms::ZERO); 1 << 12],
             past: vec![(0, [0; 2]); 1 << 14],
-            xp: vec![(0, [0; 2]); 1 << 12],
             sac_root: super::sac::RootTravels::default(),
         }
     }
@@ -767,15 +743,6 @@ impl TermSource for TermCache {
     #[inline]
     fn past_put(&mut self, key: u64, v: [i32; 2]) {
         self.past[(key >> 50) as usize] = (key, v);
-    }
-    #[inline]
-    fn xp_get(&mut self, key: u64) -> Option<[i32; 2]> {
-        let e = &self.xp[(key >> 52) as usize];
-        if e.0 == key { Some(e.1) } else { None }
-    }
-    #[inline]
-    fn xp_put(&mut self, key: u64, v: [i32; 2]) {
-        self.xp[(key >> 52) as usize] = (key, v);
     }
     #[inline]
     fn sac_root(&self) -> Option<&super::sac::RootTravels> {
@@ -886,7 +853,6 @@ pub fn sides_with(s: &State, src: &mut impl TermSource) -> Sides {
         }
     }
     royal_5d(s, &mut sd, src, &atts);
-    exposure_past(s, &mut sd, src);
     if super::sac::active() {
         sac_terms(s, &mut sd, src);
     }
@@ -923,67 +889,6 @@ fn sac_terms(s: &State, sd: &mut Sides, src: &mut impl TermSource) {
             }
         }
     }
-}
-
-/// Boards (the latest and those before it) of a royal's timeline that `exposure_past` reads.
-const XP_BOARDS: usize = 6;
-
-/// `ex::XP_OPEN` and `ex::XP_NOSHIELD`: the worst exposure of each side's royals over the
-/// last boards of the active timelines that hold them. Past boards never change, so each
-/// line's result is memoized by the keys of the boards it read.
-fn exposure_past(s: &State, sd: &mut Sides, src: &mut impl TermSource) {
-    let (amin, amax) = s.get_active_range();
-    let (w, h) = s.get_board_size();
-    let m = s.multiverse();
-    for l in amin..=amax {
-        let tl = m.timeline(l);
-        let keys = tl.keys();
-        let kk = XP_BOARDS.min(tl.boards.len()).min(keys.len());
-        let mut key = 0x51_7cc1_b727_220a_95u64;
-        for &x in &keys[keys.len() - kk..] {
-            key ^= x;
-        }
-        let key = (key ^ key >> 31).wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
-        let v = match src.xp_get(key) {
-            Some(v) => v,
-            None => {
-                let v = exposure_line(&tl.boards[tl.boards.len() - kk..], w, h);
-                src.xp_put(key, v);
-                v
-            }
-        };
-        for d in 0..2 {
-            let e = &mut sd.extra[d];
-            e[ex::XP_OPEN] = e[ex::XP_OPEN].max((v[0] >> (8 * d)) & 0xff);
-            e[ex::XP_NOSHIELD] = e[ex::XP_NOSHIELD].max((v[1] >> (8 * d)) & 0xff);
-        }
-    }
-}
-
-/// The most open lines from, and missing shield pawns in front of, each colour's royals over
-/// `boards`, packed a byte per colour: [open, missing shield].
-fn exposure_line(boards: &[Board], w: i32, h: i32) -> [i32; 2] {
-    let mut v = [[0i32; 2]; 2];
-    for b in boards {
-        for d in 0..2 {
-            let me = if d == 1 { b.black() & !b.white() } else { b.white() & !b.black() };
-            let royals = b.royal() & me;
-            if royals == 0 {
-                continue;
-            }
-            let own = b.friendly(d == 1);
-            let (mut open, mut shield) = (0, 0);
-            for k in marked_pos(royals) {
-                open += open_rays(k, own, &ORTH, w, h) + open_rays(k, own, &DIAG, w, h);
-                let fwd = if d == 1 { shift_south(pmask(k)) } else { shift_north(pmask(k)) };
-                shield += ((fwd | shift_west(fwd) | shift_east(fwd)) & b.lpawn() & me).count_ones() as i32;
-            }
-            let nosh = (3 * royals.count_ones() as i32 - shield).max(0);
-            v[d][0] = v[d][0].max(open.min(255));
-            v[d][1] = v[d][1].max(nosh.min(255));
-        }
-    }
-    [v[0][0] | v[1][0] << 8, v[0][1] | v[1][1] << 8]
 }
 
 // ------------------------------------------------------------------ 5D royal danger
@@ -1502,7 +1407,6 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
                 let flight = near & !b2.friendly(d == 1) & !hit;
                 f[si::LOW_FLIGHT] += (flight.count_ones() <= 1 && (near | pmask(k)) & hit != 0) as i32;
                 sd.extra[d][ex::K_FLIGHT] += flight.count_ones().min(3) as i32;
-                sd.extra[d][ex::SOFT] += (att_c & pmask(k) != 0 && flight == 0) as i32;
             }
         }
     }
@@ -1585,12 +1489,6 @@ pub fn features_from(sd: &Sides, s: &State, checks: bool) -> Features {
     f[fi::DEF + 2] = e(ex::TRAVEL_HOT);
     f[fi::KL] = e(ex::KINGLESS);
     f[fi::KL + 1] = e(ex::KL_SWARM);
-    let eq = |d: usize| (sd.side[1 - d][si::MAT_A + 5] + sd.side[1 - d][si::MAT_A + 6]).min(3);
-    f[fi::XP] = e(ex::XP_OPEN);
-    f[fi::XP + 1] = e(ex::XP_NOSHIELD);
-    f[fi::XP + 2] = sd.extra[0][ex::XP_OPEN] * eq(0) - sd.extra[1][ex::XP_OPEN] * eq(1);
-    f[fi::XP + 3] = sd.extra[0][ex::XP_NOSHIELD] * eq(0) - sd.extra[1][ex::XP_NOSHIELD] * eq(1);
-    f[fi::XP + 4] = e(ex::SOFT);
     for k in 0..=si::INACTIVE_ROYAL_ATT - si::TRAVEL_PAST {
         f[fi::DANGER_5D + k] = d(si::TRAVEL_PAST + k);
     }
@@ -1936,7 +1834,6 @@ mod royal_tests {
                     let flight = near & !b2.friendly(d == 1) & !hit;
                     f[si::LOW_FLIGHT] += (flight.count_ones() <= 1 && (near | pmask(k)) & hit != 0) as i32;
                     sd.extra[d][ex::K_FLIGHT] += flight.count_ones().min(3) as i32;
-                    sd.extra[d][ex::SOFT] += (att_c & pmask(k) != 0 && flight == 0) as i32;
                 }
             }
             sd.side[d][si::EXILED] = (royals_any && !royals_active) as i32;

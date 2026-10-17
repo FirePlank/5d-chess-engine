@@ -69,8 +69,6 @@ fn quiet(s: &State) -> bool {
 }
 
 static QUIET_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// `--keep-check`: also tune on positions where the side to move is in check.
-static KEEP_CHECK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn game_samples(line: &str, out: &mut Vec<Sample>) -> Option<()> {
     // A game lost to an engine failure has no real result.
@@ -136,7 +134,7 @@ fn game_samples(line: &str, out: &mut Vec<Sample>) -> Option<()> {
         }
     }
     for st in snaps {
-        if !KEEP_CHECK.load(std::sync::atomic::Ordering::Relaxed) && st.has_phantom_check() {
+        if st.has_phantom_check() {
             continue;
         }
         if QUIET_ONLY.load(std::sync::atomic::Ordering::Relaxed) && !quiet(&st) {
@@ -171,7 +169,6 @@ fn main() {
     let threads: usize = arg(&args, "--threads", 14);
     let out_path: String = arg(&args, "--out", "games/tuned_weights.txt".to_string());
     QUIET_ONLY.store(args.iter().any(|a| a == "--quiet"), std::sync::atomic::Ordering::Relaxed);
-    KEEP_CHECK.store(args.iter().any(|a| a == "--keep-check"), std::sync::atomic::Ordering::Relaxed);
     let files: Vec<String> = args[1..]
         .iter()
         .enumerate()
