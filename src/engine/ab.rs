@@ -1739,7 +1739,9 @@ impl AlphaBeta {
     /// the transposition table's actions, each checked legal, up to that length, never past
     /// a position already on the line.
     fn report_pv(&self, root: &State, pv: &[MoveSeq], score: i32, depth: i32) -> Vec<MoveSeq> {
-        let len = if score.abs() > MATE - 1000 { (MATE - score.abs()) as usize } else { depth.max(0) as usize };
+        // (A score past MATE is no mate distance: a line of none is asked for, not one of
+        // a wrapped-around length, which aborted the engine.)
+        let len = if score.abs() > MATE - 1000 { (MATE - score.abs()).max(0) as usize } else { depth.max(0) as usize };
         let mut line: Vec<MoveSeq> = Vec::with_capacity(len.max(pv.len()));
         let mut s = root.clone();
         s.enable_undo();
