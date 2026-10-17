@@ -73,6 +73,9 @@ class PieceSet {
 
 const pieces = new PieceSet();
 
+/** A raster of piece `p` (FEN letter) at about `px` pixels, once the images are loaded. */
+export function pieceImage(p, px) { return pieces.get(p, px); }
+
 export class MultiverseView {
   constructor(canvas) {
     this.canvas = canvas;
@@ -102,6 +105,9 @@ export class MultiverseView {
     this.dirty = true;
     this.onSquare = null;
     this.onHover = null;
+    // The board editor, while it is open: it takes the pointer (see `editorInfo`) and draws over
+    // the boards (`drawWorld`, `drawScreen`).
+    this.editor = null;
     this.pointers = new Map();
     this.readColors();
     pieces.ready.then(() => this.redraw());
@@ -165,6 +171,26 @@ export class MultiverseView {
   toScreen(wx, wy) { return [(wx - this.cam.x) * this.cam.s + this.w / 2, (wy - this.cam.y) * this.cam.s + this.h / 2]; }
   toWorld(sx, sy) { return [(sx - this.w / 2) / this.cam.s + this.cam.x, (sy - this.h / 2) / this.cam.s + this.cam.y]; }
 
+  /**
+   * The board slot under a screen point, whether or not a board is there: {l, v, t, c} plus
+   * the square {x, y} when the point is on the board's squares (`inside`).
+   */
+  pickSlot(sx, sy) {
+    const [wx, wy] = this.toWorld(sx, sy);
+    const v = Math.floor(wx / this.px);
+    const rowIdx = Math.floor(wy / this.py);
+    const l = this.flipped ? -rowIdx : rowIdx;
+    const bx = wx - v * this.px, by = wy - rowIdx * this.py;
+    const inside = bx >= 0 && by >= 0 && bx < this.bw && by < this.bh;
+    const col = Math.min(this.bw - 1, Math.max(0, Math.floor(bx))), rw = Math.min(this.bh - 1, Math.max(0, Math.floor(by)));
+    return { l, v, t: v >> 1, c: v & 1, inside, x: this.flipped ? this.bw - 1 - col : col, y: this.flipped ? rw : this.bh - 1 - rw, wx, wy };
+  }
+
+  /** What the editor gets with a pointer event: the screen point and the slot under it. */
+  editorInfo(e) {
+    return { sx: e.offsetX, sy: e.offsetY, slot: this.pickSlot(e.offsetX, e.offsetY), e };
+  }
+
   /** The square under a screen point: {l, t, c, v, x, y} or null. */
   pick(sx, sy) {
     if (!this.view) return null;
@@ -189,6 +215,8 @@ export class MultiverseView {
       y0 = Math.min(y0, by); y1 = Math.max(y1, by + this.bh);
     }
     if (x0 === Infinity) return [0, 0, this.bw, this.bh];
+    // In the editor, room around the boards for the slots where boards can be added.
+    if (this.editor) return [x0 - this.px, y0 - this.py, x1 + this.px, y1 + this.py];
     return [x0, y0, x1, y1];
   }
 
@@ -278,7 +306,8 @@ export class MultiverseView {
       const v = 2 * t + c;
       this.boards.set(`${l},${v}`, { l, t, c, v, squares: parseFen(fen, w, h) });
     }
-    if (prev && prev.size[0] === w && prev.size[1] === h) this.animateBoards(old, prev);
+    // Boards an action adds slide in (not in the editor, where boards are placed by hand).
+    if (prev && prev.size[0] === w && prev.size[1] === h && !this.editor) this.animateBoards(old, prev);
     this.phantom = (view.phantom || []).map(([l, t, c, fen]) => ({ l, t, c, v: 2 * t + c, squares: parseFen(fen, w, h) }));
     this.timelines = new Map(view.timelines.map((tl) => [tl.l, tl]));
     if (!prev || prev.size[0] !== w || prev.size[1] !== h || !this.fitted) {
@@ -416,6 +445,15 @@ export class MultiverseView {
       this.pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
       if (this.pointers.size === 1) {
         down = { x: e.offsetX, y: e.offsetY, cam: { ...this.cam }, moved: false, button: e.button };
+        if (this.editor) {
+          // The editor takes what it uses (placing, dragging, selecting); the rest pans, with
+          // either button (the right one too: there are no markers in the editor).
+          if (this.editor.pointerDown(this.editorInfo(e))) { down.editor = true; return; }
+          down.button = 0;
+          down.pan = true;
+          this.stopCamera();
+          return;
+        }
         if (e.button === 2) {
           // Right button: markers, never the camera. With a piece selected it only deselects.
           if (this.onRightPress && this.onRightPress()) { down = null; return; }
@@ -426,6 +464,8 @@ export class MultiverseView {
       } else if (this.pointers.size === 2) {
         const [a, b] = [...this.pointers.values()];
         pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), cam: { ...this.cam }, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+        // A second finger: a pinch, which undoes what the first one started in the editor.
+        if (down && down.editor) this.editor.cancel();
         down = null;
       }
     });
@@ -440,6 +480,10 @@ export class MultiverseView {
         const wy = (pinch.my - this.h / 2) / pinch.cam.s + pinch.cam.y;
         this.cam = { x: wx - (mx - this.w / 2) / s, y: wy - (my - this.h / 2) / s, s };
         this.redraw();
+        return;
+      }
+      if (down && down.editor) {
+        this.editor.pointerMove(this.editorInfo(e));
         return;
       }
       if (down && down.button === 2) {
@@ -464,6 +508,18 @@ export class MultiverseView {
         }
         return;
       }
+      if (this.editor) {
+        const info = this.editorInfo(e);
+        this.editor.hover(info);
+        cv.classList.toggle('pointing', false);
+        const sq = info.slot.inside && this.boards.has(`${info.slot.l},${info.slot.v}`) ? info.slot : null;
+        const key = sq ? `${sq.l},${sq.v},${sq.x},${sq.y}` : null;
+        if (key !== this.hoverKey) {
+          this.hoverKey = key;
+          if (this.onHover) this.onHover(sq);
+        }
+        return;
+      }
       const badge = this.badgeAt(e.offsetX, e.offsetY);
       if (badge !== this.hoverBadge) {
         this.hoverBadge = badge;
@@ -483,6 +539,17 @@ export class MultiverseView {
       this.pointers.delete(e.pointerId);
       cv.classList.remove('dragging');
       if (this.pointers.size < 2) pinch = null;
+      if (down && down.editor) {
+        if (e.type === 'pointerup') this.editor.pointerUp(this.editorInfo(e));
+        else this.editor.cancel();
+        down = null;
+        return;
+      }
+      if (down && down.pan) {
+        if (!down.moved && e.type === 'pointerup') this.editor.emptyClick(this.editorInfo(e));
+        down = null;
+        return;
+      }
       if (down && down.button === 2 && e.type === 'pointerup') {
         const sq = this.pick(e.offsetX, e.offsetY);
         const same = (a, b) => a && b && a.l === b.l && a.v === b.v && a.x === b.x && a.y === b.y;
@@ -521,6 +588,7 @@ export class MultiverseView {
     cv.addEventListener('pointerup', up);
     cv.addEventListener('pointercancel', up);
     cv.addEventListener('pointerleave', () => {
+      if (this.editor) this.editor.hover(null);
       if (this.overlay.hover) { this.overlay.hover = null; this.hoverKey = null; this.redraw(); if (this.onHover) this.onHover(null); }
     });
     cv.addEventListener('wheel', (e) => {
@@ -534,6 +602,7 @@ export class MultiverseView {
       this.zoomAt(Math.exp(-e.deltaY * k * (e.ctrlKey ? 2.5 : 1)), e.offsetX, e.offsetY);
     }, { passive: false });
     cv.addEventListener('dblclick', (e) => {
+      if (this.editor) return;
       const sq = this.pick(e.offsetX, e.offsetY);
       if (!sq) return;
       const x = this.boardX(sq.v), y = this.boardY(sq.l);
@@ -635,7 +704,7 @@ export class MultiverseView {
       ctx.fillRect(laneX0, y, laneX1 - laneX0, this.py);
     }
     // The present: a faint column over the active timelines.
-    {
+    if (!v.noPresent) {
       const ya = this.boardY(aMin), yb = this.boardY(aMax);
       const lo = Math.min(ya, yb) - GAP_Y / 2, hi = Math.max(ya, yb) + this.bh + GAP_Y / 2;
       const px0 = this.boardX(presentV) - GAP_X / 2;
@@ -691,10 +760,12 @@ export class MultiverseView {
     for (const [b, alpha, , , off] of visible) this.drawPieces(b, alpha, s, off);
     this.drawTargets();
     this.drawArrows(s);
+    if (this.editor) this.editor.drawWorld(ctx, s);
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.drawLabels(vMin, vMax, lMin, lMax);
     this.drawCheckBadges();
+    if (this.editor) this.editor.drawScreen(ctx);
   }
 
   drawBoard(b, alpha, s, tl, phantom = false, off = null) {
@@ -891,8 +962,8 @@ export class MultiverseView {
   shownChecks() {
     const v = this.view;
     const checks = (v && v.checks) || [];
-    // At checkmate every check is shown, to see why and how it is mate.
-    if ((v.draft && v.draft.length) || v.status === 'checkmate') return checks;
+    // At checkmate every check is shown, to see why and how it is mate; in the editor, always.
+    if ((v.draft && v.draft.length) || v.status === 'checkmate' || v.allChecks) return checks;
     return checks.filter((ch) => this.checkLines(ch).some((l) => this.revealed.has(l)));
   }
 
@@ -917,7 +988,7 @@ export class MultiverseView {
   drawCheckBadges() {
     const { ctx, view: v } = this;
     this.badges = [];
-    if (!v || (v.draft && v.draft.length) || v.status === 'checkmate') return;
+    if (!v || (v.draft && v.draft.length) || v.status === 'checkmate' || v.allChecks) return;
     const lines = [...new Set((v.checks || []).flatMap((ch) => this.checkLines(ch)))];
     for (const l of lines) {
       const tl = this.timelines.get(l);

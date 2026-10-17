@@ -103,6 +103,23 @@ impl Api {
                 self.game = Some(g);
                 Ok(ok(obj![("tree", tree), ("meta", obj![("format", "new"), ("variant", variant.unwrap_or("Custom"))])]))
             }
+            // A position from the board editor (5DFEN, a 5DUCI position or a game, which counts
+            // as its last position), checked without touching the loaded game: whether it
+            // loads, its view (present, checks, status) and whether the side to move could
+            // capture a royal at once (the side that just moved left it in check).
+            "inspect" => {
+                let text = j.get("text").str().ok_or("missing text")?;
+                let mut l = match record::load(text, None) {
+                    Ok(l) => l,
+                    Err(e) => return Ok(ok(obj![("valid", false), ("error", e)])),
+                };
+                let end = *l.game.mainline().last().unwrap_or(&ROOT);
+                let view = l.game.view(end, &[])?;
+                let s = &l.game.nodes[end].state;
+                let player = s.get_present().1;
+                let capture = s.first_check(player).map(|fm| obj![("from", v4(fm.from)), ("to", v4(fm.to)), ("c", player as i32)]);
+                Ok(ok(obj![("valid", true), ("view", view), ("meta", l.meta), ("capture", capture)]))
+            }
             "tree" => Ok(ok(obj![("tree", self.game()?.tree_json())])),
             "view" => {
                 let id = self.node_arg(j);

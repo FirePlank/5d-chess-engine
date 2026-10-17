@@ -93,7 +93,10 @@ export class Play {
     $('#play-book').checked = store('play.book') !== false;
     $('#play-book').onchange = () => store('play.book', $('#play-book').checked);
     $('#play-form').onsubmit = (e) => { e.preventDefault(); this.start(); };
-    $('#play-variant').onchange = () => { store('play.variant.t0', $('#play-variant').value); this.preview(); };
+    $('#play-variant').onchange = () => {
+      if ($('#play-variant').value !== '__custom') store('play.variant.t0', $('#play-variant').value);
+      this.preview();
+    };
     $('#play-resign').onclick = async () => {
       if (await confirmDialog('Resign this game?', { text: 'Kairos wins the game.', ok: 'Resign', danger: true })) this.post('resign').catch(() => {});
     };
@@ -109,6 +112,33 @@ export class Play {
     setInterval(() => this.tickClocks(), 100);
   }
 
+  /** A game's variant by name ("Custom" for a position from the editor). */
+  variantName(g) {
+    if (g.variant && g.variant.length < 60 && !g.variant.includes('[')) return g.variant;
+    if (this.variantMemo && this.variantMemo[0] === g.start) return this.variantMemo[1];
+    let name = 'Custom';
+    try { name = this.rules.call({ cmd: 'variant', position: g.start }).variant; } catch (e) { /* custom */ }
+    this.variantMemo = [g.start, name];
+    return name;
+  }
+
+  /** Add (or update) the "Custom position" choice of the variant list, and choose it. */
+  setCustom(position) {
+    this.customPosition = position;
+    let opt = $('#play-variant option[value="__custom"]');
+    if (!opt) {
+      opt = el('option', { value: '__custom', text: 'Custom position (board editor)' });
+      $('#play-variant').prepend(opt);
+    }
+    $('#play-variant').value = '__custom';
+  }
+
+  /** The start position chosen: a variant's name, or the editor's position. */
+  startPosition() {
+    const v = $('#play-variant').value;
+    return v === '__custom' ? this.customPosition : v || 'Standard - Turn Zero';
+  }
+
   /** No game in progress is on the board (none, a finished one, or you are setting up the next). */
   previewable(s = this.state) {
     const g = s && s.game;
@@ -119,7 +149,7 @@ export class Play {
   preview() {
     if (!this.rules || !this.previewable()) return;
     try {
-      const r = this.rules.call({ cmd: 'new', position: $('#play-variant').value || 'Standard - Turn Zero' });
+      const r = this.rules.call({ cmd: 'new', position: this.startPosition() });
       this.tree = r.tree;
     } catch (e) {
       toast(e.message, { error: true });
@@ -140,8 +170,15 @@ export class Play {
     this.show();
   }
 
-  activate() {
+  activate(params) {
     this.active = true;
+    // A position from the board editor: offered as the game's start.
+    if (params && params.get('position')) {
+      this.setCustom(params.get('position'));
+      history.replaceState(null, '', '#/play');
+      if (this.state && this.state.game && !this.state.game.over && this.state.you) toast('Finish or resign this game to play the position from the editor');
+      else this.wantSetup = true;
+    }
     this.input.attach(this.source);
     if (this.local) this.local.resume();
     else this.connect();
@@ -241,8 +278,8 @@ export class Play {
   }
 
   start() {
-    const variant = $('#play-variant').value;
-    store('play.variant.t0', variant);
+    const variant = this.startPosition();
+    if ($('#play-variant').value !== '__custom') store('play.variant.t0', variant);
     const body = {
       variant,
       color: this.color === 'r' ? 'random' : this.color,
@@ -370,7 +407,7 @@ export class Play {
       kind: 'played',
       started: this.startedAt,
       ended: Date.now(),
-      variant: g.variant,
+      variant: this.variantName(g),
       position: g.start,
       moves: [...g.moves],
       human: white ? 'white' : 'black',
@@ -437,10 +474,11 @@ export class Play {
       if (!g.thinking) {
         // Short: the time control, the variant without its group, and no book if off. The
         // full time control is the tooltip; the turn's delay shows on the running clock.
-        const variant = g.variant.includes(' - ') ? g.variant.split(' - ').slice(1).join(' - ') : g.variant;
+        const name = this.variantName(g);
+        const variant = name.includes(' - ') ? name.split(' - ').slice(1).join(' - ') : name;
         const line = $('#play-thinking');
         line.textContent = g.over ? '' : [g.clock ? clockShort(g.clock) : `${g.movetime / 1000}s/move`, variant, g.book === false ? 'no book' : ''].filter(Boolean).join(' · ');
-        line.title = g.clock ? `${clockText(g.clock)} · ${g.variant}` : g.variant;
+        line.title = g.clock ? `${clockText(g.clock)} · ${name}` : name;
       }
       $('#play-resign').classList.toggle('hidden', !mine || !!g.over);
       $('#play-new').classList.toggle('hidden', !mine || !g.over);

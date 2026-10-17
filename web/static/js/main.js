@@ -1,10 +1,12 @@
-// App shell: routing between Analysis, Play and Games, theme, shared board and engine.
+// App shell: routing between Analysis, Play, the board editor and Games, theme, shared board
+// and engine.
 import { MultiverseView } from './board.js';
 import { MoveInput } from './input.js';
 import { Engine, defaultEngineSettings } from './kairos.js';
 import { Analysis } from './analysis.js';
 import { Play } from './play.js';
 import { Games } from './games.js';
+import { Editor } from './editor.js';
 import { setRules } from './static-api.js';
 import { $, $$, toast, store } from './util.js';
 
@@ -35,7 +37,7 @@ async function serverInfo() {
 function route() {
   const hash = location.hash || '#/analysis';
   const [path, qs] = hash.slice(2).split('?');
-  const name = ['analysis', 'play', 'games', 'rules'].includes(path) ? path : 'analysis';
+  const name = ['analysis', 'play', 'editor', 'games', 'rules'].includes(path) ? path : 'analysis';
   const params = new URLSearchParams(qs || '');
   if (app.route !== name) {
     const prev = app.pages[app.route];
@@ -48,7 +50,9 @@ function route() {
   $('#browser').classList.toggle('hidden', name !== 'games');
   $('#side-analysis').classList.toggle('hidden', name !== 'analysis');
   $('#side-play').classList.toggle('hidden', name !== 'play');
-  if (name === 'analysis' || name === 'play') app.board.resize();
+  $('#side-editor').classList.toggle('hidden', name !== 'editor');
+  $('#workspace').classList.toggle('editing', name === 'editor');
+  if (name === 'analysis' || name === 'play' || name === 'editor') app.board.resize();
   app.pages[name].activate(params);
 }
 
@@ -63,6 +67,8 @@ function bindKeys() {
   document.addEventListener('keydown', (e) => {
     if (e.target.closest('input, textarea, select, dialog') || e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key;
+    // The editor's keys come first: its piece letters include P (pawn).
+    if (app.route === 'editor' && app.pages.editor.key(e)) { e.preventDefault(); return; }
     let handled = true;
     if (k === 'f' || k === 'F') {
       app.board.setFlipped(!app.board.flipped);
@@ -156,7 +162,7 @@ async function main() {
   });
 
   app.server = await serverInfo();
-  app.pages = { analysis: new Analysis(app), play: new Play(app), games: new Games(app), rules: rulesPage() };
+  app.pages = { analysis: new Analysis(app), play: new Play(app), editor: new Editor(app), games: new Games(app), rules: rulesPage() };
   try {
     await app.pages.analysis.init();
     setRules(app.pages.analysis.rules);
@@ -167,6 +173,7 @@ async function main() {
   }
   await app.pages.play.init();
   app.pages.games.init();
+  app.pages.editor.init();
   window.addEventListener('hashchange', route);
   route();
   // Warm up the engine worker in the background.
