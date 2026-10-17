@@ -6,7 +6,7 @@ use crate::core::board::Board;
 use crate::core::check_position::CheckPosition;
 use crate::core::state::State;
 
-pub const NF: usize = 93;
+pub const NF: usize = 95;
 
 /// Feature indices.
 pub mod fi {
@@ -95,6 +95,9 @@ pub mod fi {
     /// every board, and travel landings next to own royals where the enemy moves next (white's
     /// minus black's).
     pub const DEF: usize = 90;
+    /// Own royals that left a timeline: active boards without an own royal and the enemy pieces
+    /// on them (white's minus black's).
+    pub const KL: usize = 93;
 }
 
 pub const FEATURE_NAMES: [&str; NF] = [
@@ -112,6 +115,7 @@ pub const FEATURE_NAMES: [&str; NF] = [
     "k_def", "k_flight",
     "tl_lost", "to_move", "zone_mand_stm", "zone_mand_opp",
     "def_hot", "def_board", "travel_hot",
+    "kingless", "kl_swarm",
 ];
 
 pub type Features = [i32; NF];
@@ -140,81 +144,81 @@ pub fn default_weights() -> Weights {
 /// Weights used by the alpha-beta search with `use_hce` (Texel-tuned, see bin/tune.rs).
 pub fn tuned_weights() -> Weights {
     weights_by_name(&[
-        ("mat_a_pawn", 508.5),
+        ("mat_a_pawn", 484.2),
         ("mat_a_brawn", 150.0),
-        ("mat_a_knight", 909.1),
-        ("mat_a_bishop", 1638.7),
-        ("mat_a_rook", 1094.2),
-        ("mat_a_queen", 2341.8),
+        ("mat_a_knight", 845.5),
+        ("mat_a_bishop", 1553.5),
+        ("mat_a_rook", 944.9),
+        ("mat_a_queen", 2464.5),
         ("mat_a_princess", 899.8),
         ("mat_a_unicorn", 250.0),
         ("mat_a_dragon", 150.0),
-        ("mat_a_cking", 251.3),
-        ("mat_i_pawn", -69.3),
+        ("mat_a_cking", 195.3),
+        ("mat_i_pawn", -83.8),
         ("mat_i_brawn", 74.9),
-        ("mat_i_knight", 218.9),
-        ("mat_i_bishop", 656.9),
-        ("mat_i_rook", 329.3),
-        ("mat_i_queen", 1076.5),
+        ("mat_i_knight", 219.3),
+        ("mat_i_bishop", 630.7),
+        ("mat_i_rook", 316.4),
+        ("mat_i_queen", 1097.3),
         ("mat_i_princess", 450.0),
         ("mat_i_unicorn", 125.1),
         ("mat_i_dragon", 74.9),
         ("mat_i_cking", 150.0),
-        ("cent_knight", 105.1),
-        ("cent_bishop", -27.6),
-        ("cent_rook", 22.7),
-        ("cent_queen", 0.4),
-        ("cent_other", 95.8),
-        ("pawn_adv", -52.7),
-        ("pawn_near", 374.2),
-        ("king_cent", -49.3),
-        ("tl_slots", 2516.4),
-        ("tl_slots_heavy", -118.4),
-        ("k_holes", -247.3),
-        ("k_knights", 2548.7),
-        ("k_open_orth", -540.5),
-        ("k_open_diag", 113.6),
-        ("k_shield", 763.6),
-        ("k_zone_att", 105.1),
-        ("mob_knight", 98.2),
-        ("mob_bishop", 137.3),
-        ("mob_rook", 130.5),
-        ("mob_queen", 89.8),
-        ("mob_king", 155.1),
-        ("hanging", -16.7),
-        ("royal_att", -2034.7),
-        ("tempo", -140.4),
-        ("active_lines", 75.3),
+        ("cent_knight", 97.5),
+        ("cent_bishop", -50.9),
+        ("cent_rook", 52.0),
+        ("cent_queen", -6.4),
+        ("cent_other", 142.7),
+        ("pawn_adv", -28.2),
+        ("pawn_near", 302.0),
+        ("king_cent", -123.6),
+        ("tl_slots", 2332.7),
+        ("tl_slots_heavy", -98.2),
+        ("k_holes", -224.7),
+        ("k_knights", 2526.0),
+        ("k_open_orth", -511.5),
+        ("k_open_diag", 31.5),
+        ("k_shield", 624.7),
+        ("k_zone_att", 234.0),
+        ("mob_knight", 76.0),
+        ("mob_bishop", 129.6),
+        ("mob_rook", 106.9),
+        ("mob_queen", 91.3),
+        ("mob_king", 93.1),
+        ("hanging", -15.6),
+        ("royal_att", -2076.0),
+        ("tempo", -106.2),
+        ("active_lines", 142.2),
         ("checks_5d", 0.0),
         ("sp_checks", 0.0),
-        ("mandatory", 454.0),
-        ("passed", 107.8),
-        ("doubled", 7.8),
-        ("isolated", -42.7),
-        ("king_prox", 991.5),
-        ("undeveloped", -252.9),
-        ("king_prox_5d", 62.7),
-        ("queen_prox", -379.6),
-        ("travel_past", 80.5),
-        ("travel_now", 461.6),
-        ("travel_backed", -522.7),
-        ("weak_sq", 325.5),
+        ("mandatory", 278.9),
+        ("passed", 64.0),
+        ("doubled", -2.4),
+        ("isolated", -29.8),
+        ("king_prox", 972.7),
+        ("undeveloped", -381.6),
+        ("king_prox_5d", 84.5),
+        ("queen_prox", -341.1),
+        ("travel_past", 54.9),
+        ("travel_now", 532.9),
+        ("travel_backed", -567.5),
+        ("weak_sq", 380.5),
         ("open_orth5", 0.0),
-        ("open_diag5", -7.5),
-        ("open_multi5", -16.5),
-        ("king_off", -788.5),
-        ("king_off_new", -1323.5),
-        ("low_flight", 713.3),
-        ("exiled", -8.7),
-        ("inactive_royal_att", 0.0),
-        ("travel_stm", 596.0),
-        ("tl_slots_threat", 553.8),
-        ("tl_slots_stm", -369.3),
-        ("f7_weak", 15.1),
-        ("f7_open", 76.0),
-        ("f7_qreach", 197.5),
-        ("f7_broute", 66.4),
-        ("kn_checks", 280.9),
+        ("open_diag5", -20.2),
+        ("open_multi5", -20.5),
+        ("king_off", -847.1),
+        ("king_off_new", -1536.2),
+        ("low_flight", 746.0),
+        ("exiled", -11.8),
+        ("inactive_royal_att", -4.4),
+        ("travel_stm", 608.4),
+        ("tl_slots_threat", 552.0),
+        ("tl_slots_stm", -415.3),
+        ("f7_weak", 26.4),
+        ("f7_open", 62.9),
+        ("f7_qreach", 248.4),
+        ("f7_broute", -11.6),
+        ("kn_checks", 296.2),
         // Set by hand (untuned; see `split_sac`), for defence: the local proofs ignore
         // time-travel defences and the other timelines, so they only nudge. A side to move
         // with a verified f7 travel on hand is a pawn and a half up (its opponent should have
@@ -228,19 +232,21 @@ pub fn tuned_weights() -> Weights {
         ("sac_now", 0.0),
         ("sac_now_stm", 700.0),
         ("sac_open", 150.0),
-        ("zone_hot", 236.7),
-        ("weak_hot", -42.4),
-        ("dmax5", -136.7),
-        ("zone_max", -338.5),
-        ("k_def", -3.1),
-        ("k_flight", 180.5),
-        ("tl_lost", -61.3),
-        ("to_move", 197.5),
-        ("zone_mand_stm", -6.0),
-        ("zone_mand_opp", 447.6),
-        ("def_hot", -91.3),
-        ("def_board", -3.1),
-        ("travel_hot", -71.5),
+        ("zone_hot", 460.2),
+        ("weak_hot", -74.7),
+        ("dmax5", -197.1),
+        ("zone_max", -430.7),
+        ("k_def", -15.5),
+        ("k_flight", 226.9),
+        ("tl_lost", -92.7),
+        ("to_move", 372.2),
+        ("zone_mand_stm", -20.4),
+        ("zone_mand_opp", 732.9),
+        ("def_hot", -76.5),
+        ("def_board", -15.5),
+        ("travel_hot", -129.1),
+        ("kingless", -171.3),
+        ("kl_swarm", -313.5),
     ])
 }
 
@@ -480,7 +486,11 @@ pub mod ex {
     pub const DEF_HOT: usize = 26;
     /// `si::TRAVEL_NOW` landings next to own royals on boards where the enemy moves next.
     pub const TRAVEL_HOT: usize = 27;
-    pub const COUNT: usize = 28;
+    /// Active boards without an own royal (the royal travelled off them).
+    pub const KINGLESS: usize = 28;
+    /// Enemy non-pawn pieces on those boards.
+    pub const KL_SWARM: usize = 29;
+    pub const COUNT: usize = 30;
 }
 
 /// Squares within king distance 2.
@@ -533,6 +543,10 @@ fn board_extra(b: &Board, extra: &mut [[i32; ex::COUNT]; 2], w: i32, h: i32, att
         }
         for k in marked_pos(b.royal() & me) {
             f[ex::DEF_BOARD] += (king_attack(k) & att_nr[c]).count_ones() as i32;
+        }
+        if b.royal() & me == 0 {
+            f[ex::KINGLESS] += 1;
+            f[ex::KL_SWARM] += (them & !b.lpawn() & !b.royal()).count_ones() as i32;
         }
         let royals = b.royal() & them;
         if royals == 0 {
@@ -1473,6 +1487,8 @@ pub fn features_from(sd: &Sides, s: &State, checks: bool) -> Features {
     f[fi::DEF] = e(ex::DEF_HOT);
     f[fi::DEF + 1] = e(ex::DEF_BOARD);
     f[fi::DEF + 2] = e(ex::TRAVEL_HOT);
+    f[fi::KL] = e(ex::KINGLESS);
+    f[fi::KL + 1] = e(ex::KL_SWARM);
     for k in 0..=si::INACTIVE_ROYAL_ATT - si::TRAVEL_PAST {
         f[fi::DANGER_5D + k] = d(si::TRAVEL_PAST + k);
     }

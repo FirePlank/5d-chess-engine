@@ -1092,6 +1092,30 @@ fn main() {
             .unwrap();
         }
         "bench" => bench(args.get(2).map(|s| s.as_str()).unwrap_or("data/bench.g"), &mut out),
+        "matecheck" => matecheck(&args[2..], &mut out),
+        "mrank" => {
+            // mrank <file.g> [cap] : ranks of the mating actions (first ten) among the first
+            // `cap` actions of each G line in the order an interior node tries them.
+            let text = std::fs::read_to_string(&args[2]).expect("positions");
+            let cap: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20000);
+            let e = kairos::engine::ab::AlphaBeta::new();
+            for line in text.lines().filter(|l| l.starts_with("G ")) {
+                let s = parse_g_line(line).unwrap();
+                let order = e.node_order(&s, cap);
+                let ranks: Vec<usize> = order.iter().enumerate().filter(|(_, a)| apply_seq(&s, a).is_some_and(|c| is_mated(&c))).map(|(i, _)| i).collect();
+                writeln!(out, "actions {} | mating ranks {:?}", order.len(), &ranks[..ranks.len().min(10)]).unwrap();
+                if let Ok(v) = std::env::var("MRANK_V") {
+                    // The first `v` actions (and the first mating one): checking or not.
+                    let n: usize = v.parse().unwrap_or(10);
+                    let checks = order.iter().filter(|a| apply_seq(&s, a).is_some_and(|c| c.has_phantom_check())).count();
+                    writeln!(out, "  checking actions among them: {}", checks).unwrap();
+                    for (i, a) in order.iter().enumerate().filter(|(i, _)| *i < n || ranks.first() == Some(i)) {
+                        let c = apply_seq(&s, a).is_some_and(|c| c.has_phantom_check());
+                        writeln!(out, "  {:>5} {} {}", i, if c { "+" } else { " " }, seq_string(a)).unwrap();
+                    }
+                }
+            }
+        }
         _ => {
             eprintln!(
                 "usage: ktools <mode> ...\n  \
@@ -1100,6 +1124,8 @@ fn main() {
                  bench [file]            perft oracle\n  \
                  abbench [file] [depth]  alpha-beta node oracle (AB_NODES caps nodes per position)\n  \
                  puzzles [file] [ms]     time to find each mate in data/puzzles.g
+                   matecheck <cases> [nodes] [max] [threads] [records_out]   mate consistency along played lines
+                   mrank <file.g> [cap]   ranks of the mating actions in the interior node order
                    tactics [file] [ms] [threads]   solved/unsolved and time to solve per position of data/tactics.g
                    sacprep [file]   the f7 sac table's local searches per position (SAC_VERBOSE=1: each outcome)
                    sactable <out.bin> <file>...   precompute data/fsac_table.bin from the files' positions
@@ -1960,4 +1986,381 @@ fn firstact(path: &str, cap: u64, out: &mut impl Write) {
             out.flush().unwrap();
         }
     }
+}
+
+/// Run the calling process below normal priority (long diagnostic runs share the machine).
+fn lower_priority() {
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetCurrentProcess() -> *mut std::ffi::c_void;
+            fn SetPriorityClass(process: *mut std::ffi::c_void, class: u32) -> i32;
+        }
+        const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x4000;
+        // SAFETY: plain Win32 call on the current process' pseudo-handle.
+        unsafe { SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS) };
+    }
+}
+
+/// One `matecheck` case: a start position, its G line, and (replaying a record) the actions to
+/// play instead of the engines' own.
+struct McCase {
+    id: String,
+    start: State,
+    g: String,
+    forced: Option<Vec<String>>,
+}
+
+/// One searched ply of a `matecheck` line.
+struct McPly {
+    /// Side to move (true: black).
+    black: bool,
+    /// The engine's score (internal units, side to move's view), whether a mate score is
+    /// proven, and the depth of its last report.
+    score: i32,
+    proven: bool,
+    depth: i32,
+    /// The mate (in moves, < 0: mated) of the last depth reported, when it was one.
+    reported: Option<i32>,
+    /// The action played (as moves for a G line, and in LAN).
+    uci: String,
+    lan: String,
+}
+
+/// Mate distance in moves of an internal score: > 0 the side to move mates, < 0 it is mated.
+fn mc_mate(score: i32) -> Option<i32> {
+    use kairos::engine::ab::MATE;
+    if score > MATE - 1000 {
+        Some((MATE - score + 1) / 2)
+    } else if score < -(MATE - 1000) {
+        Some(-((MATE + score + 1) / 2))
+    } else {
+        None
+    }
+}
+
+/// The G line of `s` (its moves continued by `acts`).
+fn mc_g_line(base: &str, acts: &[&str]) -> String {
+    let mut g = base.to_string();
+    if !acts.is_empty() {
+        if !g.contains(" moves") {
+            g += " moves";
+        }
+        for a in acts {
+            g += &format!(" {} submit", a);
+        }
+    }
+    g
+}
+
+/// Cases from `path`: G lines (one start each), `R <id>\t<G line>\t<action>;<action>...`
+/// records (replayed with these actions), or harness JSONL games (each game's first claimed
+/// mate: the position two actions before the first `evals` entry with a mate score).
+fn mc_cases(path: &str, max: usize) -> Vec<McCase> {
+    use kairos::core::variants::{apply_uci_moves, position_from_uci};
+    let text = std::fs::read_to_string(path).expect("cases");
+    let mut cases = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        if cases.len() >= max {
+            break;
+        }
+        if line.starts_with("G ") {
+            let Ok(s) = parse_g_line(line) else { continue };
+            cases.push(McCase { id: format!("{}:{}", path.rsplit(['/', '\\']).next().unwrap_or(path), n + 1), start: s, g: line.to_string(), forced: None });
+        } else if let Some(r) = line.strip_prefix("R ") {
+            let mut f = r.split('\t');
+            let (Some(id), Some(g), acts) = (f.next(), f.next(), f.next().unwrap_or("")) else { continue };
+            let Ok(s) = parse_g_line(g) else { continue };
+            let forced = acts.split(';').map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect();
+            cases.push(McCase { id: id.to_string(), start: s, g: g.to_string(), forced: Some(forced) });
+        } else if line.starts_with('{') {
+            let (Some(pos), Some(moves)) = (json_field(line, "position"), json_field(line, "moves")) else { continue };
+            let Some(e) = line.find("\"evals\":") else { continue };
+            let Some(list) = line[e + 8..].trim_start().strip_prefix('[') else { continue };
+            let evals: Vec<Option<i32>> = list.split(']').next().unwrap_or("").split(',').map(|x| x.trim().parse().ok()).collect();
+            let mate = if json_field(line, "eval_scale").is_some() { 20000 } else { kairos::engine::ab::MATE - 1000 };
+            let acts: Vec<&str> = moves.split(" submit").map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+            // The evals are of the actions after the opening's.
+            let book: usize = json_field(line, "book").and_then(|b| b.parse().ok()).unwrap_or(0);
+            if evals.len() + book != acts.len() {
+                continue;
+            }
+            let Some(claim) = evals.iter().position(|v| v.is_some_and(|v| v >= mate)).map(|i| i + book) else { continue };
+            let start = claim.saturating_sub(2);
+            let Ok(mut s) = position_from_uci(pos) else { continue };
+            if !acts[..start].iter().all(|a| apply_uci_moves(&mut s, &format!("{} submit", a)).is_ok()) {
+                continue;
+            }
+            let g = mc_g_line(&format!("G {} {}", s.get_promotion_options().0, pos), &acts[..start]);
+            let game = json_field(line, "game").unwrap_or("?");
+            cases.push(McCase { id: format!("{}:{}#{}@{}", path.rsplit(['/', '\\']).next().unwrap_or(path), n + 1, game, start), start: s, g, forced: None });
+        }
+    }
+    cases
+}
+
+/// Plays one case: two engines (one per side, each keeping its tables between its moves as in
+/// a game) search every position with `nodes` nodes and play their actions (or the record's).
+/// Self-play stops at a mate, at `max_plies`, when no mate is claimed in the first 4 plies, or
+/// a few plies after a claimed mate should have been delivered.
+fn mc_play(case: &McCase, nodes: u64, max_plies: usize, depth_limit: u32, max_ms: u64) -> (Vec<McPly>, bool) {
+    use kairos::engine::ab::AlphaBeta;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let mut engines = [AlphaBeta::new(), AlphaBeta::new()];
+    let mut s = case.start.clone();
+    let mut plies: Vec<McPly> = Vec::new();
+    // Ply by which the first claimed mate should be over.
+    let mut due: Option<usize> = None;
+    for j in 0..max_plies {
+        // A ply gets `max_ms` at most (finding a first action, or the root's actions, can take
+        // minutes in big positions): then the search is stopped.
+        let stop = AtomicBool::new(false);
+        let done = AtomicBool::new(false);
+        let r = std::thread::scope(|sc| {
+            sc.spawn(|| {
+                let t = Instant::now();
+                while !done.load(Ordering::Relaxed) {
+                    if t.elapsed().as_millis() as u64 >= max_ms {
+                        stop.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            });
+            let r = mc_ply(case, j, &s, &mut engines, &stop, nodes, depth_limit);
+            done.store(true, Ordering::Relaxed);
+            r
+        });
+        let Some((ply, next)) = r else { break };
+        if due.is_none() && case.forced.is_none() {
+            if let Some(m) = mc_mate(ply.score).filter(|&m| m > 0) {
+                due = Some(j + 2 * m as usize - 2);
+            }
+        }
+        plies.push(ply);
+        s = next;
+        if let Some(f) = &case.forced {
+            if j + 1 >= f.len() {
+                break;
+            }
+        } else if due.is_some_and(|d| j + 1 > d + 4) || (due.is_none() && j + 1 >= 4) {
+            break;
+        }
+    }
+    let mated = s.get_mate_type() == MateType::Checkmate;
+    (plies, mated)
+}
+
+/// One ply of `mc_play`: the search of `s` and the position after the action played (None: the
+/// game is over, or the record's action does not apply).
+#[allow(clippy::too_many_arguments)]
+fn mc_ply(
+    case: &McCase,
+    j: usize,
+    s: &State,
+    engines: &mut [kairos::engine::ab::AlphaBeta; 2],
+    stop: &std::sync::atomic::AtomicBool,
+    nodes: u64,
+    depth_limit: u32,
+) -> Option<(McPly, State)> {
+    use kairos::engine::Limits;
+    {
+        let _g = kairos::core::hypercuboid::interrupt_on(stop, None);
+        let (w, ss) = HcInfo::build_hc(s);
+        if w.search(s, ss).next().is_none() {
+            return None;
+        }
+    }
+    let forced = match &case.forced {
+        Some(f) => Some(f.get(j)?.as_str()),
+        None => None,
+    };
+    let black = s.get_present().1;
+    // The f7 sac table's outcomes, as a search on the clock works them out (by a node budget
+    // here, so that runs repeat).
+    kairos::engine::sac::prepare(s, kairos::engine::sac::NODE_BUDGET, None, Some(stop), kairos::engine::sac::PROBE_NODES, false);
+    let e = &mut engines[black as usize];
+    let mut last = String::new();
+    let limits = Limits { nodes: Some(nodes).filter(|&n| n > 0), depth: Some(depth_limit), ..Default::default() };
+    let best = e.find_best_move(s, &limits, stop, &mut |m| last = m)?;
+    let depth: i32 = last.split_whitespace().nth(1).and_then(|d| d.parse().ok()).unwrap_or(0);
+    let reported: Option<i32> = last.split_whitespace().skip_while(|w| *w != "score").nth(2).filter(|_| last.contains(" score mate ")).and_then(|m| m.parse().ok());
+    let (score, proven) = (e.last_score(), e.last_proven());
+    if let Some(uci) = forced {
+        let mut c = s.clone();
+        kairos::core::variants::apply_uci_moves(&mut c, &format!("{} submit", uci)).ok()?;
+        return Some((McPly { black, score, proven, depth, reported, uci: uci.to_string(), lan: uci.to_string() }, c));
+    }
+    let uci = best.moves().iter().map(|m| m.to_string()).collect::<Vec<_>>().join(" ");
+    let lan = kairos::web::tree::action_lan(s, &best);
+    let next = s.can_apply_action(&best)?;
+    Some((McPly { black, score, proven, depth, reported, uci, lan }, next))
+}
+
+/// Inconsistencies of a played line (see `matecheck`), as (ply, kind, detail).
+fn mc_flags(plies: &[McPly], mated: bool) -> (Option<(usize, i32)>, Vec<(usize, &'static str, String)>) {
+    let mut flags = Vec::new();
+    for (j, p) in plies.iter().enumerate() {
+        if let Some(m) = p.reported.filter(|&m| mc_mate(p.score) != Some(m)) {
+            flags.push((j, "DROPPED", format!("depth {} reported mate {}, the action played scored {}", p.depth, m, mc_text(p.score))));
+        }
+    }
+    let Some(k) = plies.iter().position(|p| mc_mate(p.score).is_some_and(|m| m > 0)) else {
+        return (None, flags);
+    };
+    let n = mc_mate(plies[k].score).unwrap();
+    let winner = plies[k].black;
+    // Before the claim: the loser's search let the mate in although it searched deep enough
+    // to see it, and the winner's search one move earlier saw no mate that deep.
+    if k >= 1 && plies[k - 1].black != winner && mc_mate(plies[k - 1].score).is_none_or(|m| m > 0) && plies[k - 1].depth >= 2 * n {
+        flags.push((k - 1, "WALKED", format!("loser depth {} saw {}, then mate {}", plies[k - 1].depth, mc_text(plies[k - 1].score), n)));
+    }
+    if k >= 2 && plies[k - 2].black == winner && plies[k - 2].depth >= 2 * n + 1 {
+        flags.push((k - 2, "EARLY", format!("winner depth {} saw {}, then mate {} after the reply", plies[k - 2].depth, mc_text(plies[k - 2].score), n)));
+    }
+    let mut bound = n;
+    for (j, p) in plies.iter().enumerate().skip(k + 1) {
+        let m = mc_mate(p.score);
+        if bound < 1 || (p.black == winner && bound < 2) {
+            // Past the claimed mate (see UNREALIZED).
+            break;
+        }
+        if p.black == winner {
+            let want = bound - 1;
+            match m {
+                Some(m) if m > 0 => {
+                    if m > want {
+                        flags.push((j, "LONGER", format!("mate {} where mate <= {}", m, want)));
+                    }
+                    bound = m;
+                }
+                _ => {
+                    let kind = if p.depth >= 2 * want - 1 { "LOST" } else { "FADED" };
+                    flags.push((j, kind, format!("{} at depth {} where mate <= {}", mc_text(p.score), p.depth, want)));
+                    bound = want;
+                }
+            }
+        } else if m.is_none_or(|m| m > 0) {
+            let kind = if m.is_some() { "REFUTED" } else if p.depth >= 2 * bound { "BLIND" } else { "UNSEEN" };
+            flags.push((j, kind, format!("loser {} at depth {} where mated in <= {}", mc_text(p.score), p.depth, bound)));
+        }
+    }
+    let end = plies.len();
+    // The mating action is due at this ply.
+    let due = k + 2 * n as usize - 2;
+    if !mated || plies.last().is_some_and(|p| p.black != winner) {
+        flags.push((end, "UNREALIZED", format!("no mate by ply {} (due at {})", end, due)));
+    } else if end - 1 > due {
+        flags.push((end, "SLOW", format!("mated at ply {} (due at {})", end - 1, due)));
+    }
+    (Some((k, n)), flags)
+}
+
+fn mc_text(score: i32) -> String {
+    match mc_mate(score) {
+        Some(m) => format!("M{}", m),
+        None => format!("cp{}", kairos::engine::report_cp(score)),
+    }
+}
+
+/// Mate consistency checker: `matecheck <cases> [nodes] [max_cases] [threads] [records_out]`.
+/// Each case's position is played out by the engine (both sides, `nodes` nodes a search, one
+/// thread, a fresh pair of engines per case) or along a record's actions, and every position
+/// is searched. Once a side claims mate in N, it must claim mate in N-1 or less a move later,
+/// and the other side must see itself mated. Flags:
+///   LOST       the winner's mate disappeared, at a depth enough to see it (FADED: below)
+///   LONGER     the winner's mate got longer than one move less
+///   BLIND      the loser did not see itself mated at a depth enough to see it (UNSEEN: below)
+///   REFUTED    the loser found a mate of its own (the claim was false)
+///   WALKED     the loser let the mate in although its depth was enough to see it
+///   EARLY      the winner, a move earlier, searched deep enough but saw no mate
+///   UNREALIZED the line ended without the mate (the claim was false, or the mate lost)
+///   SLOW       the mate came later than claimed
+/// Cases are G lines, records (written to `records_out` for replaying with another build:
+/// the same actions, to compare what each build sees), or harness JSONL games (the position
+/// two actions before the game's first mate score). `nodes` 0 searches without a node limit;
+/// env MC_DEPTH limits the depth (default 64), MC_MAX_PLIES the plies a case plays (40), MC_MS
+/// the time of one ply (60000 ms: a longer search is stopped).
+/// Cases run in parallel and are reported as they finish; a mate score ending in `!` is
+/// proven (see `AlphaBeta::last_proven`), `/d` gives the depth reached, `(Mn)` the mate the last
+/// completed depth reported when an unfinished deeper one replaced it, `#` marks a line ending
+/// in checkmate. DROPPED flags such a replaced mate.
+fn matecheck(args: &[String], out: &mut impl Write) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    lower_priority();
+    let path = args.first().map(|s| s.as_str()).unwrap_or("data/matecheck.g");
+    let nodes: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(40_000);
+    let max: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(usize::MAX);
+    let threads: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(4).max(1);
+    let records = args.get(4);
+    let max_plies: usize = std::env::var("MC_MAX_PLIES").ok().and_then(|v| v.parse().ok()).unwrap_or(40);
+    let depth_limit: u32 = std::env::var("MC_DEPTH").ok().and_then(|v| v.parse().ok()).unwrap_or(64);
+    let max_ms: u64 = std::env::var("MC_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(60_000);
+    let cases = mc_cases(path, max);
+    let next = AtomicUsize::new(0);
+    let t0 = Instant::now();
+    let mut counts: std::collections::BTreeMap<&'static str, usize> = std::collections::BTreeMap::new();
+    let (mut claimed, mut clean, mut proven_false, mut total) = (0, 0, 0, 0);
+    let mut rec = records.map(|p| std::io::BufWriter::new(std::fs::File::create(p).expect("records file")));
+    std::thread::scope(|sc| {
+        let (tx, rx) = std::sync::mpsc::channel::<(usize, Vec<McPly>, bool)>();
+        for _ in 0..threads {
+            let (cases, next, tx) = (&cases, &next, tx.clone());
+            std::thread::Builder::new()
+                .stack_size(64 << 20)
+                .spawn_scoped(sc, move || loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(c) = cases.get(i) else { break };
+                    let (plies, mated) = mc_play(c, nodes, max_plies, depth_limit, max_ms);
+                    if tx.send((i, plies, mated)).is_err() {
+                        break;
+                    }
+                })
+                .unwrap();
+        }
+        drop(tx);
+        // Reported as they finish.
+        for (i, plies, mated) in rx {
+            total += 1;
+            let c = &cases[i];
+            let (claim, flags) = mc_flags(&plies, mated);
+            let line: Vec<String> = plies
+                .iter()
+                .map(|p| {
+                    let was = match p.reported.filter(|&m| Some(m) != mc_mate(p.score)) {
+                        Some(m) => format!("(M{})", m),
+                        None => String::new(),
+                    };
+                    format!("{}{}/{}{}", mc_text(p.score), if p.proven && mc_mate(p.score).is_some() { "!" } else { "" }, p.depth, was)
+                })
+                .collect();
+            writeln!(out, "case {} | {}{}", c.id, line.join(" "), if mated { " #" } else { "" }).unwrap();
+            let kinds: std::collections::BTreeSet<&str> = flags.iter().map(|f| f.1).collect();
+            for kd in &kinds {
+                *counts.entry(kd).or_insert(0) += 1;
+            }
+            if let Some((k, n)) = claim {
+                claimed += 1;
+                if flags.iter().all(|f| f.1 == "EARLY") {
+                    clean += 1;
+                }
+                // A proven mate the line then failed to deliver would be a bug in the proof.
+                if plies[k].proven && kinds.contains("UNREALIZED") {
+                    proven_false += 1;
+                }
+                writeln!(out, "  claim ply {} mate {} ({}){}", k, n, if plies[k].black { "black" } else { "white" }, if plies[k].proven { " proven" } else { "" }).unwrap();
+            }
+            for (j, kind, detail) in &flags {
+                let act = plies.get(*j).map(|p| format!(" [played {}]", p.lan)).unwrap_or_default();
+                writeln!(out, "  {:<10} ply {:>2} {}{}", kind, j, detail, act).unwrap();
+            }
+            if let Some(w) = rec.as_mut() {
+                writeln!(w, "R {}\t{}\t{}", c.id, c.g, plies.iter().map(|p| p.uci.as_str()).collect::<Vec<_>>().join(";")).unwrap();
+                w.flush().unwrap();
+            }
+            out.flush().unwrap();
+        }
+    });
+    writeln!(out, "cases {} | mate claimed {} | consistent {} | flagged cases by kind {:?} | proven claims undelivered {} | {} nodes/search, {:.0}s", total, claimed, clean, counts, proven_false, nodes, t0.elapsed().as_secs_f64()).unwrap();
 }
