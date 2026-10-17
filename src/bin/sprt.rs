@@ -24,6 +24,12 @@
 //! the reported scale (`"eval_scale":3000`: internal units * 100 / 3000, see
 //! `kairos::engine::REPORT_SCALE`; mates as +-20000); records without `eval_scale` are older
 //! and hold internal units.
+//!
+//! An engine that exits (or stops answering) mid-game loses it with reason `protocol: <who>
+//! exited` (or `timed out ...`); its record keeps the moves played so far and adds
+//! `exit_status`, the engine's last `stderr` lines (a panic message: engines run with
+//! `RUST_BACKTRACE=1`), and the `last_position` / `last_go` commands it was given, to replay
+//! the crash. The same report goes to stderr.
 
 use kairos::core::action::{ExtMove, MoveSeq};
 use kairos::core::hypercuboid::{HcCursor, HcInfo};
@@ -33,11 +39,13 @@ use kairos::core::variants::{apply_uci_moves, position_from_uci};
 use kairos::engine::ab::{AlphaBeta, MATE};
 use kairos::engine::{report_cp, Limits, OptionValue, REPORT_SCALE};
 use kairos::misc::ordering::{AxisOrders, HcOrdering};
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 // ------------------------------------------------------------------ statistics
@@ -255,6 +263,20 @@ struct Proc {
     name: String,
     /// Last search score reported in an info line (mover's view; mates as +-20000).
     last_score: Option<i32>,
+    /// The engine's last `STDERR_TAIL` stderr lines, and the thread collecting them.
+    stderr: Arc<Mutex<VecDeque<String>>>,
+    stderr_reader: Option<JoinHandle<()>>,
+}
+
+/// Stderr lines kept per engine: a panic message with its backtrace.
+const STDERR_TAIL: usize = 50;
+
+/// What is known about an engine that failed mid-game.
+struct CrashReport {
+    /// Its exit status, or "still running" (a timeout).
+    status: String,
+    /// Its last stderr lines.
+    stderr: Vec<String>,
 }
 
 /// Score from an engine info line, on the reported scale: "score cp X" or "score mate N"
@@ -274,15 +296,16 @@ impl Proc {
     /// Start the engine and set `options` (`Name=Value`) on it.
     fn spawn(cmd: &str, name: &str, options: &[String]) -> Result<Proc, String> {
         let parts: Vec<&str> = cmd.split_whitespace().collect();
-        let mut child = Command::new(parts[0])
-            .args(&parts[1..])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("spawn {}: {}", cmd, e))?;
+        let mut command = Command::new(parts[0]);
+        command.args(&parts[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        // A panic then prints its backtrace (kept for the crash report).
+        if std::env::var_os("RUST_BACKTRACE").is_none() {
+            command.env("RUST_BACKTRACE", "1");
+        }
+        let mut child = command.spawn().map_err(|e| format!("spawn {}: {}", cmd, e))?;
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
+        let stderr_pipe = child.stderr.take().unwrap();
         let (tx, rx) = channel();
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
@@ -292,7 +315,23 @@ impl Proc {
                 }
             }
         });
-        let mut p = Proc { child, stdin, rx, name: name.into(), last_score: None };
+        let stderr = Arc::new(Mutex::new(VecDeque::new()));
+        let tail = stderr.clone();
+        let stderr_reader = std::thread::spawn(move || {
+            // Raw bytes: a dying engine's output need not be valid UTF-8.
+            let mut r = BufReader::new(stderr_pipe);
+            let mut buf = Vec::new();
+            while matches!(r.read_until(b'\n', &mut buf), Ok(n) if n > 0) {
+                let line = String::from_utf8_lossy(&buf).trim_end().to_string();
+                buf.clear();
+                let mut t = tail.lock().unwrap();
+                if t.len() == STDERR_TAIL {
+                    t.pop_front();
+                }
+                t.push_back(line);
+            }
+        });
+        let mut p = Proc { child, stdin, rx, name: name.into(), last_score: None, stderr, stderr_reader: Some(stderr_reader) };
         p.send("5duci")?;
         p.wait_for("5duciok", Duration::from_secs(30))?;
         p.send("setoption name debug value false")?;
@@ -325,6 +364,30 @@ impl Proc {
                 Err(RecvTimeoutError::Timeout) => return Err(format!("{} timed out waiting for {}", self.name, prefix)),
                 Err(RecvTimeoutError::Disconnected) => return Err(format!("{} exited", self.name)),
             }
+        }
+    }
+
+    /// After a failure: the exit status (waiting up to a second for the engine to exit) and
+    /// the last stderr lines, read to the end once it has exited.
+    fn crash_report(&mut self) -> CrashReport {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let status = loop {
+            match self.child.try_wait() {
+                Ok(Some(st)) => break Some(st),
+                Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+                _ => break None,
+            }
+        };
+        if status.is_some() {
+            // The pipe is closed: the reader is done once it has read the rest.
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while self.stderr_reader.as_ref().is_some_and(|h| !h.is_finished()) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        CrashReport {
+            status: status.map_or_else(|| "still running".to_string(), |s| s.to_string()),
+            stderr: self.stderr.lock().unwrap().iter().cloned().collect(),
         }
     }
 }
@@ -585,14 +648,37 @@ struct GameRecord {
     log: String,
     /// Each engine action's reported score, from the mover's view (reported scale).
     evals: Vec<Option<i32>>,
+    /// A game lost to an engine failure (exit or timeout): what is known about it.
+    crash: Option<Crash>,
 }
 
-/// `new_white`: whether NEW plays the side to move first in the opening position.
-fn play_game(cfg: &Config, procs: &mut [Option<Proc>; 2], op: &Opening, new_first: bool) -> Result<GameRecord, String> {
+struct Crash {
+    report: Option<CrashReport>,
+    /// The last `position` and `go` commands the failing engine was sent this game.
+    last_position: Option<String>,
+    last_go: Option<String>,
+}
+
+/// A game in play, as far as it got: kept when an engine fails mid-game.
+#[derive(Default)]
+struct Progress {
+    /// Every action so far (the opening's first), as in `GameRecord::log`.
+    history: String,
+    /// Engine actions so far.
+    actions: usize,
+    evals: Vec<Option<i32>>,
+    /// The last `position` and `go` commands each engine (NEW, BASE) was sent.
+    last_position: [Option<String>; 2],
+    last_go: [Option<String>; 2],
+}
+
+/// `new_first`: whether NEW plays the side to move first in the opening position. On an
+/// error (an engine failed), `prog` holds the game as far as it got.
+fn play_game(cfg: &Config, procs: &mut [Option<Proc>; 2], op: &Opening, new_first: bool, prog: &mut Progress) -> Result<GameRecord, String> {
+    *prog = Progress { history: op.moves.clone(), ..Progress::default() };
     let mut s = position_from_uci(&op.position)?;
     s.set_promotion_options(PromotionOptions(op.promo));
     apply_uci_moves(&mut s, &op.moves)?;
-    let mut history = op.moves.clone();
     for p in procs.iter_mut().flatten() {
         p.send("5ducinewgame")?;
         p.send("isready")?;
@@ -601,14 +687,13 @@ fn play_game(cfg: &Config, procs: &mut [Option<Proc>; 2], op: &Opening, new_firs
     let first_player = s.get_present().1;
     // Remaining clock (ms) of NEW and BASE in clock games.
     let mut clock = [cfg.clock.map(|c| c.base).unwrap_or(0); 2];
-    let mut n = 0usize;
-    let mut evals: Vec<Option<i32>> = Vec::new();
-    let finish = |res_for_mover_new: GameResult, reason: String, n: usize, history: &str, evals: &[Option<i32>]| GameRecord {
+    let finish = |res_for_mover_new: GameResult, reason: String, prog: &Progress| GameRecord {
         result: res_for_mover_new,
         reason,
-        actions: n,
-        log: history.to_string(),
-        evals: evals.to_vec(),
+        actions: prog.actions,
+        log: prog.history.clone(),
+        evals: prog.evals.clone(),
+        crash: None,
     };
     loop {
         let player = s.get_present().1;
@@ -624,25 +709,29 @@ fn play_game(cfg: &Config, procs: &mut [Option<Proc>; 2], op: &Opening, new_firs
                 (_, Some(loser)) => (new_result(loser != player), "exiled kings"),
                 _ => (GameResult::Draw, "stalemate"),
             };
-            return Ok(finish(r.0, r.1.into(), n, &history, &evals));
+            return Ok(finish(r.0, r.1.into(), prog));
         }
-        if n >= cfg.max_actions {
-            return Ok(finish(GameResult::Draw, "action limit".into(), n, &history, &evals));
+        if prog.actions >= cfg.max_actions {
+            return Ok(finish(GameResult::Draw, "action limit".into(), prog));
         }
         let proc = procs[side].as_mut().unwrap();
-        proc.send(&format!("position {} moves {}", op.position, history))?;
+        let position = format!("position {} moves {}", op.position, prog.history);
+        proc.send(&position)?;
+        prog.last_position[side] = Some(position);
         proc.last_score = None;
         // The delay of this action: from the active timelines at its start.
         let delay = cfg.clock.map_or(0, |c| c.delay_at(&s));
-        let t0 = Instant::now();
-        match cfg.clock {
+        let go = match cfg.clock {
             Some(c) => {
                 // `player` is the side to move (false = white); each engine keeps its own clock.
                 let (w, b) = if player { (clock[1 - side], clock[side]) } else { (clock[side], clock[1 - side]) };
-                proc.send(&c.go(w, b))?;
+                c.go(w, b)
             }
-            None => proc.send(&cfg.go)?,
-        }
+            None => cfg.go.clone(),
+        };
+        let t0 = Instant::now();
+        proc.send(&go)?;
+        prog.last_go[side] = Some(go);
         // A clock game allows one second of grace past the flag before the engine is dropped.
         let timeout = cfg.clock.map(|_| Duration::from_millis(clock[side] + delay + 1000)).unwrap_or(cfg.timeout);
         let reply = proc.wait_for("bestmove", timeout)?;
@@ -650,24 +739,82 @@ fn play_game(cfg: &Config, procs: &mut [Option<Proc>; 2], op: &Opening, new_firs
             let used = t0.elapsed().as_millis() as u64;
             match c.charge(clock[side], used, delay) {
                 Some(left) => clock[side] = left,
-                None => return Ok(finish(new_result(false), "time forfeit".into(), n, &history, &evals)),
+                None => return Ok(finish(new_result(false), "time forfeit".into(), prog)),
             }
         }
-        evals.push(proc.last_score);
+        prog.evals.push(proc.last_score);
         if reply.starts_with("nobestmove") {
-            return Ok(finish(new_result(false), "nobestmove with legal actions".into(), n, &history, &evals));
+            return Ok(finish(new_result(false), "nobestmove with legal actions".into(), prog));
         }
         let toks: Vec<String> = reply.split_whitespace().skip(1).map(|x| x.to_string()).collect();
         if let Err(e) = referee_apply(&mut s, &toks) {
-            return Ok(finish(new_result(false), format!("illegal action ({}): {}", e, toks.join(" ")), n, &history, &evals));
+            return Ok(finish(new_result(false), format!("illegal action ({}): {}", e, toks.join(" ")), prog));
         }
         for t in &toks {
-            history.push(' ');
-            history += t;
+            prog.history.push(' ');
+            prog.history += t;
         }
-        history += " submit";
-        n += 1;
+        prog.history += " submit";
+        prog.actions += 1;
     }
+}
+
+/// `x` as the contents of a JSON string.
+fn json_escape(x: &str) -> String {
+    let mut out = String::with_capacity(x.len());
+    for c in x.chars() {
+        match c {
+            '\\' => out += "\\\\",
+            '"' => out += "\\\"",
+            '\n' => out += "\\n",
+            '\r' => out += "\\r",
+            '\t' => out += "\\t",
+            c if (c as u32) < 0x20 => out += &format!("\\u{:04x}", c as u32),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Full crash reports printed per run (later ones get one line each): a broken engine fails
+/// every game.
+const CRASH_REPORTS: usize = 20;
+static CRASHES_REPORTED: AtomicUsize = AtomicUsize::new(0);
+
+/// An engine failure's report on stderr (the shard log), in one write so that workers do
+/// not interleave: the exit status, the engine's last stderr lines, the game so far and the
+/// commands that replay the failing search.
+fn print_crash(worker: usize, cfg: &Config, who: usize, err: &str, op: &Opening, prog: &Progress, crash: &Crash) {
+    let status = crash.report.as_ref().map_or("unknown", |r| r.status.as_str());
+    if CRASHES_REPORTED.fetch_add(1, Ordering::SeqCst) >= CRASH_REPORTS {
+        eprintln!("worker {}: {} ({}) after {} actions", worker, err, status, prog.actions);
+        return;
+    }
+    let (cmd, options) = if who == 0 { (&cfg.new_cmd, &cfg.new_options) } else { (&cfg.base_cmd, &cfg.base_options) };
+    let mut t = format!("==== worker {}: {} | exit status: {} ====\n", worker, err, status);
+    t += &format!("engine: {} {:?}\n", cmd, options);
+    t += &format!("game: {} actions | position {} moves {}\n", prog.actions, op.position, prog.history.trim());
+    match &crash.report {
+        Some(r) if !r.stderr.is_empty() => {
+            t += &format!("last {} stderr lines:\n", r.stderr.len());
+            for l in &r.stderr {
+                t += &format!("  | {}\n", l);
+            }
+        }
+        _ => t += "stderr: (empty)\n",
+    }
+    t += "replay (5DUCI on the engine's stdin):\n";
+    for o in options {
+        if let Some((k, v)) = o.split_once('=') {
+            t += &format!("  setoption name {} value {}\n", k.trim(), v.trim());
+        }
+    }
+    t += &format!(
+        "  {}\n  {}\n====",
+        crash.last_position.as_deref().unwrap_or("(no position sent this game)"),
+        crash.last_go.as_deref().unwrap_or("(no go sent this game)")
+    );
+    eprintln!("{}", t);
 }
 
 // ------------------------------------------------------------------ main
@@ -828,7 +975,8 @@ fn main() {
                             done.store(true, Ordering::SeqCst);
                             return;
                         }
-                        match play_game(&cfg, &mut procs, op, new_first) {
+                        let mut prog = Progress::default();
+                        match play_game(&cfg, &mut procs, op, new_first, &mut prog) {
                             Ok(rec) => {
                                 results.push(rec);
                                 break;
@@ -836,9 +984,17 @@ fn main() {
                             Err(e) => {
                                 // Protocol failure: the failing engine loses if identifiable.
                                 let who = if e.starts_with("NEW") { 0 } else if e.starts_with("BASE") { 1 } else { 2 };
+                                let crash = (who < 2).then(|| Crash {
+                                    report: procs[who].as_mut().map(|p| p.crash_report()),
+                                    last_position: prog.last_position[who].take(),
+                                    last_go: prog.last_go[who].take(),
+                                });
                                 procs = [None, None];
                                 shared.lock().unwrap().errors += 1;
-                                eprintln!("worker {}: {}", w, e);
+                                match &crash {
+                                    Some(c) => print_crash(w, &cfg, who, &e, op, &prog, c),
+                                    None => eprintln!("worker {}: {}", w, e),
+                                }
                                 attempt += 1;
                                 if who < 2 || attempt >= 2 {
                                     let result = match who {
@@ -846,7 +1002,11 @@ fn main() {
                                         1 => GameResult::Win,
                                         _ => GameResult::Draw,
                                     };
-                                    results.push(GameRecord { result, reason: format!("protocol: {}", e), actions: 0, log: String::new(), evals: Vec::new() });
+                                    // An engine's failure keeps the game so far; an
+                                    // unattributed one was replayed and keeps none.
+                                    let (actions, log, evals) =
+                                        if who < 2 { (prog.actions, prog.history, prog.evals) } else { (0, String::new(), Vec::new()) };
+                                    results.push(GameRecord { result, reason: format!("protocol: {}", e), actions, log, evals, crash });
                                     break;
                                 }
                             }
@@ -869,10 +1029,22 @@ fn main() {
                             GameResult::Draw => 0.5,
                             GameResult::Loss => 0.0,
                         };
-                        let esc = |x: &str| x.replace('\\', "\\\\").replace('"', "\\\"");
+                        let esc = json_escape;
+                        let opt = |x: Option<&str>| x.map_or("null".to_string(), |v| format!("\"{}\"", esc(v)));
+                        // An engine failure's report, after the usual fields.
+                        let crash = r.crash.as_ref().map_or(String::new(), |c| {
+                            let stderr = c.report.as_ref().map_or(&[][..], |r| &r.stderr[..]);
+                            format!(
+                                ",\"exit_status\":{},\"stderr\":[{}],\"last_position\":{},\"last_go\":{}",
+                                opt(c.report.as_ref().map(|r| r.status.as_str())),
+                                stderr.iter().map(|l| format!("\"{}\"", esc(l))).collect::<Vec<_>>().join(","),
+                                opt(c.last_position.as_deref()),
+                                opt(c.last_go.as_deref())
+                            )
+                        });
                         let _ = writeln!(
                             f,
-                            "{{\"game\":{},\"pair\":{},\"new_first\":{},\"score\":{},\"reason\":\"{}\",\"actions\":{},\"position\":\"{}\",\"book\":{},\"moves\":\"{}\",\"eval_scale\":{},\"evals\":[{}]}}",
+                            "{{\"game\":{},\"pair\":{},\"new_first\":{},\"score\":{},\"reason\":\"{}\",\"actions\":{},\"position\":\"{}\",\"book\":{},\"moves\":\"{}\",\"eval_scale\":{},\"evals\":[{}]{}}}",
                             2 * k + gi,
                             k,
                             gi == 0,
@@ -883,7 +1055,8 @@ fn main() {
                             op.book,
                             esc(r.log.trim()),
                             REPORT_SCALE,
-                            r.evals.iter().map(|e| e.map(|v| v.to_string()).unwrap_or("null".into())).collect::<Vec<_>>().join(",")
+                            r.evals.iter().map(|e| e.map(|v| v.to_string()).unwrap_or("null".into())).collect::<Vec<_>>().join(","),
+                            crash
                         );
                         let _ = f.flush();
                     }
@@ -995,6 +1168,13 @@ mod tests {
             Clock::parse("20/d1/t0.5").unwrap().go(1, 2),
             "go wtime 1 btime 2 winc 0 binc 0 wdelay 1000 bdelay 1000 wtldelay 500 btldelay 500"
         );
+    }
+
+    #[test]
+    fn json_strings() {
+        assert_eq!(json_escape("(0T1)e2e4 submit"), "(0T1)e2e4 submit");
+        assert_eq!(json_escape("a \"b\" \\c"), "a \\\"b\\\" \\\\c");
+        assert_eq!(json_escape("panicked at\n\tsrc/x.rs\r\u{1b}"), "panicked at\\n\\tsrc/x.rs\\r\\u001b");
     }
 
     #[test]

@@ -432,7 +432,9 @@ export class Analysis {
     const box = $('#moves');
     const frag = document.createDocumentFragment();
     const ml = this.mainline();
-    if (ml.length === 1) {
+    // Empty only with no actions at all (a forced first action leaves the main line empty but
+    // is shown as a variation below).
+    if (!this.node(0).children.length) {
       box.replaceChildren(el('div', { class: 'moves-empty', text: 'No actions yet. Make a move on the board, load a game, or open one from the Games tab.' }));
       if (this.node(0).comments.length) box.prepend(el('div', { class: 'mv-comment', text: this.node(0).comments.join(' ') }));
       return;
