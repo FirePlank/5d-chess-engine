@@ -970,6 +970,38 @@ fn step(b: Bitboard, (m, s): Step) -> Bitboard {
     if s >= 0 { (b & m) << s } else { (b & m) >> -s }
 }
 
+/// A step `d` squares at once in direction (dx, dy) (dx, dy in -1..=1).
+const fn step_n(dx: i32, dy: i32, d: i32) -> Step {
+    let mut edge = 0;
+    let mut i = 0;
+    while i < d {
+        edge |= if dx > 0 { H_FILE >> i } else { A_FILE << i };
+        i += 1;
+    }
+    let m = if dx != 0 { !edge } else { !0 };
+    (m, d * (dx + 8 * dy))
+}
+
+/// `BACK9`'s directions as steps of 1, 2 and 4 squares, for `fill`.
+const BACK_FILL: [[Step; 3]; 9] = {
+    let mut a = [[(0, 0); 3]; 9];
+    let mut i = 0;
+    while i < 9 {
+        let (dx, dy) = (-XY9[i].0, -XY9[i].1);
+        a[i] = [step_n(dx, dy, 1), step_n(dx, dy, 2), step_n(dx, dy, 4)];
+        i += 1;
+    }
+    a
+};
+
+/// `b` and the squares up to seven steps from it in one direction (`BACK_FILL`'s).
+#[inline(always)]
+fn fill(b: Bitboard, st: [Step; 3]) -> Bitboard {
+    let b = b | step(b, st[0]);
+    let b = b | step(b, st[1]);
+    b | step(b, st[2])
+}
+
 
 /// Knight leaps (dx, dy, dt) into the past of the same timeline (dt < 0, turns).
 const KN_PAST: [(i32, i32, i32); 8] =
@@ -1001,25 +1033,40 @@ fn spread1(r: Bitboard) -> Bitboard {
 /// neighbouring line.)
 fn past_line(g: &Geo, l: i32, c: bool) -> [i32; 2] {
     let mut past = [0i32; 2];
-    let vs = src_v(g.end(l), c);
-    let Some(b0) = g.at(l, vs) else { return past };
+    // The latest board (`at(l, src_v(end, c))`) and the past boards before it.
+    let tl = g.m.timeline(l);
+    let Some(b0) = tl.boards.last() else { return past };
+    let vs = src_v(tl.end(), c);
     let mine = b0.hostile(!c);
     // The line's past boards and the landing squares next to an enemy royal on them.
     let mut boards: [&Board; 8] = [b0; 8];
     let mut zone = [0u64; 8];
     let mut hits = [0u64; 8];
     let mut n = 0;
+    let mut zones = 0;
     while n < 8 {
-        let Some(b) = g.at(l, vs - 2 * (n as i32 + 1)) else { break };
+        let k = vs - 2 * (n as i32 + 1) - tl.start;
+        if k < 0 {
+            break;
+        }
+        let b = &tl.boards[k as usize];
         boards[n] = b;
         let r = b.royal() & b.hostile(c);
         zone[n] = spread1(r) & !r & !b.friendly(c);
+        zones |= zone[n];
         n += 1;
+    }
+    if zones == 0 {
+        return past;
     }
     let comp = [b0.lrook() & mine, b0.lbishop() & mine, b0.lunicorn() & mine];
     if comp.iter().any(|&x| x != 0) {
         for (j, &(sx, sy)) in XY9.iter().enumerate() {
             let mut pos = comp[(sx != 0) as usize + (sy != 0) as usize];
+            // Only pieces on the line back from some zone square can land on one.
+            if pos & fill(zones, BACK_FILL[j]) == 0 {
+                continue;
+            }
             let st = STEP9[j];
             for k in 0..n {
                 pos = step(pos, st);
@@ -1053,23 +1100,52 @@ fn past_line(g: &Geo, l: i32, c: bool) -> [i32; 2] {
     past
 }
 
-/// Identity of everything `past_line(g, l, c)` reads: the line's boards it can reach.
+/// Identity of everything `past_line(g, l, c)` reads: `c`'s movers on the latest board and the
+/// past boards they reach (so a move by the other color there leaves it unchanged).
 fn past_key(g: &Geo, l: i32, c: bool) -> u64 {
-    let tl = g.m.timeline(l);
-    let end = g.end(l);
-    let vs = src_v(end, c);
-    // Board keys already depend on the line and half-turn, so XOR combines them safely.
-    let mut k = 0;
-    for &x in &tl.keys()[((vs - 16 - tl.start).max(0)) as usize..] {
-        k ^= x;
+    #[inline(always)]
+    fn mix(h: u64, x: u64) -> u64 {
+        let h = (h ^ x).wrapping_mul(0xbf58476d1ce4e5b9);
+        h ^ h >> 31
     }
-    k ^= ((vs as u64) << 1 | c as u64).wrapping_mul(0xd6e8feb86659fd93);
-    k ^ k >> 29
+    let tl = g.m.timeline(l);
+    let Some(b0) = tl.boards.last() else { return 0 };
+    let mine = b0.hostile(!c);
+    let mut k = mix(0x9e3779b97f4a7c15 ^ c as u64, b0.lrook() & mine);
+    k = mix(k, b0.lbishop() & mine);
+    k = mix(k, b0.lunicorn() & mine);
+    k = mix(k, b0.lknight() & mine);
+    // Board keys already depend on the line and half-turn, so XOR combines them safely.
+    let vs = src_v(tl.end(), c);
+    let keys = tl.keys();
+    let mut i = vs - 2 - tl.start;
+    let last = vs - 16 - tl.start;
+    let mut p = 0;
+    while i >= 0 && i >= last {
+        p ^= keys[i as usize];
+        i -= 2;
+    }
+    mix(k, p)
 }
 
 /// Lines whose latest boards' attack maps `sides_with` keeps for `royal_5d` (the terms of
 /// further lines are looked up again).
 const ATT_LINES: usize = 32;
+
+/// `t` stepped back m + 1 times along each `XY9` direction j (m = 0..3): where a slider
+/// stands that reaches `t` in m + 1 steps of j (`royal_5d`'s filter).
+#[inline]
+fn rays_from(t: Bitboard) -> [[Bitboard; 9]; 3] {
+    let mut out = [[t; 9]; 3];
+    let mut s = [t; 9];
+    for m in 0..3 {
+        for j in 1..9 {
+            s[j] = step(s[j], BACK9[j]);
+        }
+        out[m] = s;
+    }
+    out
+}
 
 /// 5D danger terms of each side's royals (`si::TRAVEL_PAST` ..= `si::INACTIVE_ROYAL_ATT`).
 fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitboard; 4]; ATT_LINES]) {
@@ -1078,12 +1154,11 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
     let (l0_min, l0_max) = s.get_initial_lines_range();
     let (w, h) = s.get_board_size();
     let g = Geo { m: s.multiverse(), lo, hi };
-    for ci in 0..2 {
-        let c = ci == 1;
-        let d = 1 - ci;
-        // Time travel into the past: walk every source line's pieces backwards.
-        let mut past = [0i32; 2];
-        for l in lo..=hi {
+    // Time travel into the past: walk every source line's pieces backwards.
+    let mut past = [[0i32; 2]; 2];
+    for l in lo..=hi {
+        for ci in 0..2 {
+            let c = ci == 1;
             let key = past_key(&g, l, c);
             let p = match src.past_get(key) {
                 Some(p) => p,
@@ -1093,35 +1168,64 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
                     p
                 }
             };
-            past[0] += p[0];
-            past[1] += p[1];
+            past[ci][0] += p[0];
+            past[ci][1] += p[1];
         }
-        let f = &mut sd.side[d];
-        f[si::TRAVEL_PAST] += past[0];
-        f[si::TRAVEL_BACKED] += past[1];
-        // Latest boards: lines to the enemy royals and landings next to them.
-        let mut royals_active = false;
-        let mut royals_any = false;
-        for l2 in lo..=hi {
-            let v2 = src_v(g.end(l2), c);
-            let b2 = g.at(l2, v2).unwrap();
-            let r = b2.royal() & b2.hostile(c);
+    }
+    for ci in 0..2 {
+        let f = &mut sd.side[1 - ci];
+        f[si::TRAVEL_PAST] += past[ci][0];
+        f[si::TRAVEL_BACKED] += past[ci][1];
+    }
+    // Latest boards: lines to the enemy royals and landings next to them.
+    let mut royals_active = [false; 2];
+    let mut royals_any = [false; 2];
+    for l2 in lo..=hi {
+        let tl2 = g.m.timeline(l2);
+        let end2 = tl2.end();
+        let b2 = tl2.boards.last().unwrap();
+        // Royals of the side under attack from each attacker color.
+        let rs = [b2.royal() & b2.hostile(false), b2.royal() & b2.hostile(true)];
+        if rs[0] | rs[1] == 0 {
+            continue;
+        }
+        let at4 = match atts.get((l2 - lo) as usize) {
+            Some(a) => *a,
+            None => {
+                let t = src.terms(b2, w, h);
+                [t.att[0], t.att[1], t.att_nr[0], t.att_nr[1]]
+            }
+        };
+        if l2 < amin || l2 > amax {
+            for ci in 0..2 {
+                if rs[ci] != 0 {
+                    royals_any[ci] = true;
+                    sd.side[1 - ci][si::INACTIVE_ROYAL_ATT] += (rs[ci] & at4[ci]).count_ones() as i32;
+                }
+            }
+            continue;
+        }
+        // The latest boards of the lines up to three away (by offset + 3) and their last
+        // half-turns.
+        let (omin, omax) = ((lo - l2).max(-3), (hi - l2).min(3));
+        let mut nb: [Option<(i32, &Board)>; 7] = [None; 7];
+        for o in omin..=omax {
+            if o != 0 {
+                let tl = g.m.timeline(l2 + o);
+                nb[(o + 3) as usize] = tl.boards.last().map(|b| (tl.end(), b));
+            }
+        }
+        for ci in 0..2 {
+            let r = rs[ci];
             if r == 0 {
                 continue;
             }
-            royals_any = true;
-            let (att_c, def_nr) = match atts.get((l2 - lo) as usize) {
-                Some(a) => (a[ci], a[2 + d]),
-                None => {
-                    let t = src.terms(b2, w, h);
-                    (t.att[ci], t.att_nr[d])
-                }
-            };
-            if l2 < amin || l2 > amax {
-                sd.side[d][si::INACTIVE_ROYAL_ATT] += (r & att_c).count_ones() as i32;
-                continue;
-            }
-            royals_active = true;
+            royals_any[ci] = true;
+            royals_active[ci] = true;
+            let c = ci == 1;
+            let d = 1 - ci;
+            let v2 = src_v(end2, c);
+            let (att_c, def_nr) = (at4[ci], at4[2 + d]);
             let zone = spread1(r) & !r & !b2.wall();
             let land = zone & !b2.friendly(c);
             let mut sp = 0u64;
@@ -1133,7 +1237,64 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
                 now[0] += weak.count_ones() as i32;
                 now[1] += (weak & att_c).count_ones() as i32;
             };
-            for &(sl, st) in &[(-1i32, 0i32), (1, 0), (-1, -1), (1, -1)] {
+            // Each line up to three away whose latest board `c` moves from at the right
+            // half-turn: its knights' landings, and whether its sliders can reach `land | r` at
+            // all (ignoring blockers; the walks below run only in directions where one can).
+            let tgt = land | r;
+            // Per direction below, the `XY9` steps (bits) to walk.
+            let mut walk = [0u16; 4];
+            let mut rays = None;
+            for o in omin..=omax {
+                let Some((end1, b1)) = nb[(o + 3) as usize] else { continue };
+                let m = o.abs();
+                // Half-turns from `v2` to where `c`'s pieces there move from.
+                let dv = src_v(end1, c) - v2;
+                let slide = dv == 0 || dv == 2 * m;
+                let leap = m <= 2 && (dv == 0 || dv == 6 - 2 * m);
+                if !slide && !leap {
+                    continue;
+                }
+                let mine = b1.hostile(!c);
+                let rays = rays.get_or_insert_with(|| rays_from(tgt));
+                if slide {
+                    // Sliders by axis count, from the time / timeline axes on.
+                    let st = (dv != 0) as usize;
+                    let kinds = [b1.lrook() & mine, b1.lbishop() & mine, b1.lunicorn() & mine, b1.ldragon() & mine];
+                    let ray = &rays[m as usize - 1];
+                    let mut bits = 0u16;
+                    for (j, &(sx, sy)) in XY9.iter().enumerate() {
+                        let a = kinds[st + (sx != 0) as usize + (sy != 0) as usize];
+                        bits |= ((ray[j] & a != 0) as u16) << j;
+                    }
+                    // Index into the (sl, st) directions below, where l1 = l2 - m * sl.
+                    walk[(o < 0) as usize + 2 * st] |= bits;
+                }
+                if leap {
+                    let kn = b1.lknight() & mine;
+                    // `KN_NOW`'s leaps for this line and half-turn: two squares, one square, or
+                    // none (`dv != 0`); knights landing on `land` stand among `from`.
+                    let orth = |m: usize| rays[m][1] | rays[m][2] | rays[m][3] | rays[m][4];
+                    let (from, leaps) = if dv != 0 {
+                        (tgt, KN_NOW[4].2)
+                    } else if m == 1 {
+                        (orth(1), KN_NOW[0].2)
+                    } else {
+                        (orth(0), KN_NOW[2].2)
+                    };
+                    if kn & from != 0 {
+                        for &(dx, dy) in leaps {
+                            let t = shift_xy(kn, dx, dy) & land;
+                            if t != 0 {
+                                count_landing(t, &mut sp);
+                            }
+                        }
+                    }
+                }
+            }
+            for (di, &(sl, st)) in [(-1i32, 0i32), (1, 0), (-1, -1), (1, -1)].iter().enumerate() {
+                if walk[di] == 0 {
+                    continue;
+                }
                 // The boards outward from the target along this (timeline, time) direction:
                 // what blocks there and the attacker's movable pieces by axis count.
                 // (Up to three timelines away; `near` collects attacker sliders within reach
@@ -1169,7 +1330,7 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
                 }
                 for (j, &(sx, sy)) in XY9.iter().enumerate() {
                     let axes = (sl != 0) as usize + (st != 0) as usize + (sx != 0) as usize + (sy != 0) as usize;
-                    if any[axes - 1] == 0 {
+                    if any[axes - 1] == 0 || walk[di] & 1 << j == 0 {
                         continue;
                     }
                     let (fwd, back) = (STEP9[j], BACK9[j]);
@@ -1203,26 +1364,10 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
                     }
                 }
             }
-            for &(dl, dt, leaps) in &KN_NOW {
-                let (l1, v1) = (l2 - dl, v2 - 2 * dt);
-                let Some(b1) = g.at(l1, v1) else { continue };
-                if v1 != src_v(g.end(l1), c) {
-                    continue;
-                }
-                let kn = b1.lknight() & b1.hostile(!c);
-                if kn == 0 {
-                    continue;
-                }
-                for &(dx, dy) in leaps {
-                    let t = shift_xy(kn, dx, dy) & land;
-                    if t != 0 {
-                        count_landing(t, &mut sp);
-                    }
-                }
-            }
             let f = &mut sd.side[d];
             f[si::TRAVEL_NOW] += now[0];
-            if src_v(g.end(l2), c) == g.end(l2) {
+            let hot = v2 == end2;
+            if hot {
                 sd.extra[d][ex::TRAVEL_HOT] += now[0];
             }
             f[si::TRAVEL_BACKED] += now[1];
@@ -1233,7 +1378,7 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
             let weak = (zone & !def_nr & hit).count_ones() as i32;
             f[si::WEAK_SQ] += weak;
             let e = &mut sd.extra[d];
-            if src_v(g.end(l2), c) == g.end(l2) {
+            if hot {
                 e[ex::WEAK_HOT] += weak;
             }
             e[ex::DMAX5] = e[ex::DMAX5].max(weak + now[0]);
@@ -1250,7 +1395,9 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
                 sd.extra[d][ex::K_FLIGHT] += flight.count_ones().min(3) as i32;
             }
         }
-        sd.side[d][si::EXILED] = (royals_any && !royals_active) as i32;
+    }
+    for ci in 0..2 {
+        sd.side[1 - ci][si::EXILED] = (royals_any[ci] && !royals_active[ci]) as i32;
     }
 }
 
@@ -1398,4 +1545,417 @@ pub fn linear(f: &Features, w: &Weights) -> f32 {
         acc += w[i] * f[i] as f32;
     }
     acc
+}
+
+#[cfg(test)]
+mod royal_tests {
+    use super::*;
+    use crate::core::hypercuboid::HcInfo;
+
+    /// `past_line` as it was before its fast paths.
+    fn past_line_ref(g: &Geo, l: i32, c: bool) -> [i32; 2] {
+        let mut past = [0i32; 2];
+        let vs = src_v(g.end(l), c);
+        let Some(b0) = g.at(l, vs) else { return past };
+        let mine = b0.hostile(!c);
+        // The line's past boards and the landing squares next to an enemy royal on them.
+        let mut boards: [&Board; 8] = [b0; 8];
+        let mut zone = [0u64; 8];
+        let mut hits = [0u64; 8];
+        let mut n = 0;
+        while n < 8 {
+            let Some(b) = g.at(l, vs - 2 * (n as i32 + 1)) else { break };
+            boards[n] = b;
+            let r = b.royal() & b.hostile(c);
+            zone[n] = spread1(r) & !r & !b.friendly(c);
+            n += 1;
+        }
+        let comp = [b0.lrook() & mine, b0.lbishop() & mine, b0.lunicorn() & mine];
+        if comp.iter().any(|&x| x != 0) {
+            for (j, &(sx, sy)) in XY9.iter().enumerate() {
+                let mut pos = comp[(sx != 0) as usize + (sy != 0) as usize];
+                let st = STEP9[j];
+                for k in 0..n {
+                    pos = step(pos, st);
+                    if pos == 0 {
+                        break;
+                    }
+                    hits[k] |= pos & zone[k];
+                    pos &= !boards[k].occupied();
+                }
+            }
+        }
+        let kn = b0.lknight() & mine;
+        if kn != 0 {
+            for &(dx, dy, dt) in &KN_PAST {
+                let k = (-dt - 1) as usize;
+                if k < n {
+                    hits[k] |= shift_xy(kn, dx, dy) & zone[k];
+                }
+            }
+        }
+        // Squares no other enemy piece defends, and those `c` also covers there.
+        for k in 0..n {
+            if hits[k] != 0 {
+                let weak = hits[k] & !side_attacks(boards[k], !c).attacks_nr;
+                if weak != 0 {
+                    past[0] += weak.count_ones() as i32;
+                    past[1] += (weak & side_attacks(boards[k], c).attacks).count_ones() as i32;
+                }
+            }
+        }
+        past
+    }
+
+    /// The past-travel memo `royal_5d` had before (per color), for timing the reference.
+    struct OldPast(Vec<(u64, [i32; 2])>);
+
+    impl OldPast {
+        fn new() -> OldPast {
+            OldPast(vec![(0, [0; 2]); 1 << 14])
+        }
+    }
+
+    /// `past_key` as it was (one color).
+    fn past_key_ref(g: &Geo, l: i32, c: bool) -> u64 {
+        let tl = g.m.timeline(l);
+        let end = g.end(l);
+        let vs = src_v(end, c);
+        let mut k = 0;
+        for &x in &tl.keys()[((vs - 16 - tl.start).max(0)) as usize..] {
+            k ^= x;
+        }
+        k ^= ((vs as u64) << 1 | c as u64).wrapping_mul(0xd6e8feb86659fd93);
+        k ^ k >> 29
+    }
+
+    /// `royal_5d` as it was before its fast paths: the reference the tests compare against
+    /// (with the old past memo when `old` is given).
+    fn royal_5d_ref(
+        s: &State,
+        sd: &mut Sides,
+        src: &mut impl TermSource,
+        atts: &[[Bitboard; 4]; ATT_LINES],
+        mut old: Option<&mut OldPast>,
+    ) {
+        let (lo, hi) = s.get_lines_range();
+        let (amin, amax) = s.get_active_range();
+        let (l0_min, l0_max) = s.get_initial_lines_range();
+        let (w, h) = s.get_board_size();
+        let g = Geo { m: s.multiverse(), lo, hi };
+        for ci in 0..2 {
+            let c = ci == 1;
+            let d = 1 - ci;
+            // Time travel into the past: walk every source line's pieces backwards.
+            let mut past = [0i32; 2];
+            for l in lo..=hi {
+                let p = match old.as_deref_mut() {
+                    Some(o) => {
+                        let key = past_key_ref(&g, l, c);
+                        let e = &mut o.0[(key >> 50) as usize];
+                        if e.0 == key && key != 0 {
+                            e.1
+                        } else {
+                            let p = past_line_ref(&g, l, c);
+                            *e = (key, p);
+                            p
+                        }
+                    }
+                    None => past_line_ref(&g, l, c),
+                };
+                past[0] += p[0];
+                past[1] += p[1];
+            }
+            let f = &mut sd.side[d];
+            f[si::TRAVEL_PAST] += past[0];
+            f[si::TRAVEL_BACKED] += past[1];
+            // Latest boards: lines to the enemy royals and landings next to them.
+            let mut royals_active = false;
+            let mut royals_any = false;
+            for l2 in lo..=hi {
+                let v2 = src_v(g.end(l2), c);
+                let b2 = g.at(l2, v2).unwrap();
+                let r = b2.royal() & b2.hostile(c);
+                if r == 0 {
+                    continue;
+                }
+                royals_any = true;
+                let (att_c, def_nr) = match atts.get((l2 - lo) as usize) {
+                    Some(a) => (a[ci], a[2 + d]),
+                    None => {
+                        let t = src.terms(b2, w, h);
+                        (t.att[ci], t.att_nr[d])
+                    }
+                };
+                if l2 < amin || l2 > amax {
+                    sd.side[d][si::INACTIVE_ROYAL_ATT] += (r & att_c).count_ones() as i32;
+                    continue;
+                }
+                royals_active = true;
+                let zone = spread1(r) & !r & !b2.wall();
+                let land = zone & !b2.friendly(c);
+                let mut sp = 0u64;
+                let mut now = [0i32; 2];
+                let mut open = [0i32; 3];
+                let mut count_landing = |t: Bitboard, sp: &mut Bitboard| {
+                    *sp |= t;
+                    let weak = t & !def_nr;
+                    now[0] += weak.count_ones() as i32;
+                    now[1] += (weak & att_c).count_ones() as i32;
+                };
+                for &(sl, st) in &[(-1i32, 0i32), (1, 0), (-1, -1), (1, -1)] {
+                    // The boards outward from the target along this (timeline, time) direction:
+                    // what blocks there and the attacker's movable pieces by axis count.
+                    // (Up to three timelines away; `near` collects attacker sliders within reach
+                    // of the target squares at all.)
+                    let mut occ = [0u64; 3];
+                    let mut block = [0u64; 3];
+                    let mut att = [[0u64; 4]; 3];
+                    let mut n = 0;
+                    let mut reg = land | r;
+                    let mut near = 0;
+                    while n < 3 {
+                        let i = n as i32 + 1;
+                        let (l1, v1) = (l2 - i * sl, v2 - 2 * i * st);
+                        let Some(b1) = g.at(l1, v1) else { break };
+                        occ[n] = b1.occupied();
+                        block[n] = b1.friendly(!c);
+                        reg = spread1(reg);
+                        if v1 == src_v(g.end(l1), c) {
+                            let mine = b1.hostile(!c);
+                            att[n] = [b1.lrook() & mine, b1.lbishop() & mine, b1.lunicorn() & mine, b1.ldragon() & mine];
+                            near |= (att[n][0] | att[n][1] | att[n][2] | att[n][3]) & reg;
+                        }
+                        n += 1;
+                    }
+                    if near == 0 {
+                        continue;
+                    }
+                    let mut any = [0u64; 4];
+                    for a in &att[..n] {
+                        for j in 0..4 {
+                            any[j] |= a[j];
+                        }
+                    }
+                    for (j, &(sx, sy)) in XY9.iter().enumerate() {
+                        let axes = (sl != 0) as usize + (st != 0) as usize + (sx != 0) as usize + (sy != 0) as usize;
+                        if any[axes - 1] == 0 {
+                            continue;
+                        }
+                        let (fwd, back) = (STEP9[j], BACK9[j]);
+                        // Walk outward from the target towards where an attacker would stand.
+                        let mut cand = land;
+                        let mut xr = r;
+                        for k in 0..n {
+                            cand = step(cand, back);
+                            xr = step(xr, back);
+                            if cand | xr == 0 {
+                                break;
+                            }
+                            let a = att[k][axes - 1];
+                            if a != 0 {
+                                let hc = cand & a;
+                                if hc != 0 {
+                                    let mut t = hc;
+                                    for _ in 0..=k {
+                                        t = step(t, fwd);
+                                    }
+                                    count_landing(t, &mut sp);
+                                }
+                                let hx = xr & a;
+                                if hx != 0 {
+                                    open[axes.min(3) - 1] += hx.count_ones() as i32;
+                                    xr &= !hx;
+                                }
+                            }
+                            cand &= !occ[k];
+                            xr &= !block[k];
+                        }
+                    }
+                }
+                for &(dl, dt, leaps) in &KN_NOW {
+                    let (l1, v1) = (l2 - dl, v2 - 2 * dt);
+                    let Some(b1) = g.at(l1, v1) else { continue };
+                    if v1 != src_v(g.end(l1), c) {
+                        continue;
+                    }
+                    let kn = b1.lknight() & b1.hostile(!c);
+                    if kn == 0 {
+                        continue;
+                    }
+                    for &(dx, dy) in leaps {
+                        let t = shift_xy(kn, dx, dy) & land;
+                        if t != 0 {
+                            count_landing(t, &mut sp);
+                        }
+                    }
+                }
+                let f = &mut sd.side[d];
+                f[si::TRAVEL_NOW] += now[0];
+                if src_v(g.end(l2), c) == g.end(l2) {
+                    sd.extra[d][ex::TRAVEL_HOT] += now[0];
+                }
+                f[si::TRAVEL_BACKED] += now[1];
+                f[si::OPEN_ORTH5] += open[0];
+                f[si::OPEN_DIAG5] += open[1];
+                f[si::OPEN_MULTI5] += open[2];
+                let hit = att_c | sp;
+                let weak = (zone & !def_nr & hit).count_ones() as i32;
+                f[si::WEAK_SQ] += weak;
+                let e = &mut sd.extra[d];
+                if src_v(g.end(l2), c) == g.end(l2) {
+                    e[ex::WEAK_HOT] += weak;
+                }
+                e[ex::DMAX5] = e[ex::DMAX5].max(weak + now[0]);
+                let home = if d == 0 { 0 } else { h - 1 };
+                let created = l2 < l0_min || l2 > l0_max;
+                for k in marked_pos(r) {
+                    if k >> 3 != home {
+                        f[si::KING_OFF] += 1;
+                        f[si::KING_OFF_NEW] += created as i32;
+                    }
+                    let near = king_attack(k);
+                    let flight = near & !b2.friendly(d == 1) & !hit;
+                    f[si::LOW_FLIGHT] += (flight.count_ones() <= 1 && (near | pmask(k)) & hit != 0) as i32;
+                    sd.extra[d][ex::K_FLIGHT] += flight.count_ones().min(3) as i32;
+                }
+            }
+            sd.side[d][si::EXILED] = (royals_any && !royals_active) as i32;
+        }
+    }
+
+    /// Positions to compare on: a sample of `games/allpos.g` (when present), each with its
+    /// null-move position and, on at most two timelines (where actions are quick to list),
+    /// some of its children (as the search evaluates them).
+    fn positions(step: usize, kids: usize) -> Vec<State> {
+        let Ok(text) = std::fs::read_to_string("games/allpos.g") else { return Vec::new() };
+        let mut out = Vec::new();
+        for line in text.lines().filter(|l| l.starts_with("G ")).step_by(step) {
+            let Ok(s) = crate::core::perft::parse_g_line(line) else { continue };
+            if kids > 0 {
+                let (lo, hi) = s.get_lines_range();
+                if hi - lo < 2 {
+                    let (w, ss) = HcInfo::build_hc(&s);
+                    for mv in w.search(&s, ss).take(kids) {
+                        let mut t = s.clone();
+                        for &m in &mv {
+                            t.apply_move::<true>(m);
+                        }
+                        t.submit::<true>();
+                        out.push(t);
+                    }
+                }
+                let mut t = s.clone();
+                t.make_null();
+                out.push(t);
+            }
+            out.push(s);
+        }
+        out
+    }
+
+    fn atts_of(s: &State, src: &mut impl TermSource) -> [[Bitboard; 4]; ATT_LINES] {
+        let (l_min, l_max) = s.get_lines_range();
+        let (w, h) = s.get_board_size();
+        let mut atts = [[0u64; 4]; ATT_LINES];
+        for l in l_min..=l_max {
+            let (t, c) = s.get_timeline_end(l);
+            let bt = src.terms(s.board(l, t, c), w, h);
+            if let Some(a) = atts.get_mut((l - l_min) as usize) {
+                *a = [bt.att[0], bt.att[1], bt.att_nr[0], bt.att_nr[1]];
+            }
+        }
+        atts
+    }
+
+    fn zero() -> Sides {
+        Sides { side: [[0; si::COUNT]; 2], heavy: 0, active: 0, inactive: 0, mandatory: 0, extra: [[0; ex::COUNT]; 2] }
+    }
+
+    #[test]
+    fn royal_5d_matches_reference() {
+        let ps = positions(2, 8);
+        if ps.is_empty() {
+            eprintln!("games/allpos.g not found: skipped");
+            return;
+        }
+        let mut cache = TermCache::default();
+        let mut cache_ref = TermCache::default();
+        let mut old = OldPast::new();
+        let mut nonzero = [0usize; si::INACTIVE_ROYAL_ATT - si::TRAVEL_PAST + 1];
+        for (i, s) in ps.iter().enumerate() {
+            let atts = atts_of(s, &mut cache);
+            let (mut a, mut b, mut c) = (zero(), zero(), zero());
+            royal_5d(s, &mut a, &mut cache, &atts);
+            royal_5d_ref(s, &mut b, &mut cache_ref, &atts, None);
+            royal_5d(s, &mut c, &mut Direct(BoardTerms::ZERO), &atts);
+            assert!(a.side == b.side && a.extra == b.extra && b.side == c.side && b.extra == c.extra, "position {i}");
+            let mut e = zero();
+            royal_5d_ref(s, &mut e, &mut cache_ref, &atts, Some(&mut old));
+            assert!(e.side == b.side && e.extra == b.extra, "position {i}");
+            for (k, n) in nonzero.iter_mut().enumerate() {
+                *n += (b.side[0][si::TRAVEL_PAST + k] | b.side[1][si::TRAVEL_PAST + k] != 0) as usize;
+            }
+        }
+        // How many positions exercise each term (`si::TRAVEL_PAST` ..= `si::INACTIVE_ROYAL_ATT`).
+        eprintln!("{} positions agree; nonzero per term: {:?}", ps.len(), nonzero);
+    }
+
+    /// `cargo test --release royal_5d_speed -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn royal_5d_speed() {
+        let ps = positions(2, 0);
+        let mut cache = TermCache::default();
+        let mut old = OldPast::new();
+        let atts: Vec<_> = ps.iter().map(|s| atts_of(s, &mut cache)).collect();
+        let lines = |s: &State| {
+            let (lo, hi) = s.get_lines_range();
+            (hi - lo + 1) as usize
+        };
+        // Modes: 0/1 reference/new with the past cache warm, 2/3 without it.
+        let modes: Vec<usize> = std::env::var("ROYAL_MODES")
+            .unwrap_or("0,1,2,3".into())
+            .split(',')
+            .map(|x| x.trim().parse().unwrap())
+            .collect();
+        // Line counts in a search (abbench, bench_ab.g) per bucket 1..=8.
+        let weight = [364.0, 114.0, 30.0, 46.0, 1.0, 122.0, 10.0, 1.5];
+        let mut wsum = vec![0f64; modes.len()];
+        for bucket in [1usize, 2, 3, 4, 5, 6, 7, 8] {
+            let idx: Vec<usize> = (0..ps.len()).filter(|&i| lines(&ps[i]).min(8) == bucket).collect();
+            if idx.is_empty() {
+                continue;
+            }
+            let mut best = vec![f64::MAX; modes.len()];
+            for _round in 0..5 {
+                for (mi, &which) in modes.iter().enumerate() {
+                    // Each position several times in a row: in search the state is in cache.
+                    let reps: usize = std::env::var("ROYAL_REPS").ok().and_then(|x| x.parse().ok()).unwrap_or(8);
+                    let mut sink = 0i64;
+                    let t = std::time::Instant::now();
+                    for &i in &idx {
+                        for _ in 0..reps {
+                            let mut sd = zero();
+                            match which {
+                                0 => royal_5d_ref(&ps[i], &mut sd, &mut cache, &atts[i], Some(&mut old)),
+                                2 => royal_5d_ref(&ps[i], &mut sd, &mut Direct(BoardTerms::ZERO), &atts[i], None),
+                                3 => royal_5d(&ps[i], &mut sd, &mut Direct(BoardTerms::ZERO), &atts[i]),
+                                _ => royal_5d(&ps[i], &mut sd, &mut cache, &atts[i]),
+                            }
+                            sink += sd.side[0][si::WEAK_SQ] as i64;
+                        }
+                    }
+                    best[mi] = best[mi].min(t.elapsed().as_nanos() as f64 / (reps * idx.len()) as f64);
+                    std::hint::black_box(sink);
+                }
+            }
+            for mi in 0..modes.len() {
+                wsum[mi] += weight[bucket - 1] * best[mi];
+            }
+            eprintln!("lines {bucket}: {:>6} pos | {:?}", idx.len(), best.iter().map(|x| *x as i32).collect::<Vec<_>>());
+        }
+        let wt: f64 = weight.iter().sum();
+        eprintln!("search-weighted  | {:?} (modes {:?})", wsum.iter().map(|x| (x / wt) as i32).collect::<Vec<_>>(), modes);
+    }
 }
