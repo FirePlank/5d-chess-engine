@@ -152,6 +152,7 @@
         <div class="side-links">
           <button class="link-btn" id="btn-load" title="Load a game (L)"><svg><use href="#i-upload"/></svg>Load game</button>
           <button class="link-btn" id="btn-export"><svg><use href="#i-share"/></svg>Export</button>
+          <button class="link-btn" id="btn-save" title="Save this game and its analysis to Your games"><svg><use href="#i-save"/></svg>Save</button>
         </div>
       </div>
 
@@ -215,31 +216,26 @@
     </aside>
   </section>
 
-  <!-- ============================== Game browser -->
+  <!-- ============================== Your games (kept in this browser) -->
   <section class="browser hidden" id="browser">
-    <div class="panel files">
-      <div class="files-head"><h2 class="panel-title">Files</h2><input class="input sm" id="file-filter" placeholder="Filter" aria-label="Filter files"><button class="btn sm hidden" id="file-open" title="Open a JSONL or 5dpgn record file from this computer">Open…</button><input type="file" id="file-open-input" class="hidden" accept=".jsonl,.5dpgn,.txt,.json"></div>
-      <div class="file-list" id="file-list"></div>
-    </div>
     <div class="panel games-panel">
       <div class="games-head">
-        <h2 class="panel-title" id="browser-title">Games</h2>
+        <h2 class="panel-title" id="browser-title">Your games</h2>
         <div class="filters">
+          <select id="f-result" aria-label="Result"><option value="">All results</option><option value="win">Won</option><option value="loss">Lost</option><option value="draw">Drawn</option></select>
+          <select id="f-kind" aria-label="Kind"><option value="">Played and saved</option><option value="played">Played</option><option value="analysis">Saved analyses</option></select>
           <select id="f-variant" aria-label="Variant"><option value="">All variants</option></select>
-          <select id="f-result" aria-label="Result"><option value="">All results</option><option value="1-0">1-0</option><option value="0-1">0-1</option><option value="1/2-1/2">½-½</option><option value="decisive">Decisive</option></select>
-          <select id="f-reason" aria-label="Ending"><option value="">All endings</option></select>
-          <input class="input sm num" id="f-min" type="number" min="0" placeholder="Min actions" aria-label="Minimum actions">
-          <input class="input sm num" id="f-max" type="number" min="0" placeholder="Max actions" aria-label="Maximum actions">
-          <select id="f-sort" aria-label="Sort"><option value="">File order</option><option value="long">Longest first</option><option value="short">Shortest first</option></select>
+          <button type="button" class="btn sm" id="games-export" title="Download every game as JSONL records">Export</button>
+          <button type="button" class="btn sm danger" id="games-clear" title="Delete every game kept here">Clear all</button>
         </div>
       </div>
+      <p class="games-note">Games you finish against Kairos on the Play page (longer than one action) and analyses you save on the analysis board are kept here, in this browser. Click one to open it on the analysis board.</p>
       <div class="table-wrap">
         <table class="games">
-          <thead><tr><th class="num">#</th><th>Variant</th><th>White</th><th class="center">Result</th><th>Black</th><th>Ending</th><th class="num">Actions</th><th class="num">Book</th></tr></thead>
+          <thead><tr><th>Date</th><th>Game</th><th>Variant</th><th class="center">Result</th><th>Ending</th><th class="num">Actions</th><th>Time control</th><th>Engine</th><th></th></tr></thead>
           <tbody id="games-body"></tbody>
         </table>
       </div>
-      <div class="pager" id="pager"></div>
     </div>
   </section>
   <!-- ============================== Rules the engine plays by -->
@@ -374,6 +370,39 @@
   </form>
 </dialog>
 
+<dialog class="modal" id="dlg-edit">
+  <form method="dialog" class="modal-body">
+    <h2>Edit game</h2>
+    <label class="field"><span>Name</span><input class="input" id="edit-name" maxlength="120"></label>
+    <div class="field-row">
+      <label class="field"><span>White</span><input class="input" id="edit-white" maxlength="60"></label>
+      <label class="field"><span>Black</span><input class="input" id="edit-black" maxlength="60"></label>
+    </div>
+    <label class="field"><span>Notes</span><textarea class="input" id="edit-notes" rows="3" maxlength="2000"></textarea></label>
+    <div class="modal-actions">
+      <button class="btn" value="cancel">Cancel</button>
+      <button class="btn primary" id="edit-save" value="default">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="modal" id="dlg-save">
+  <form method="dialog" class="modal-body">
+    <h2>Save to Your games</h2>
+    <p class="muted">The whole analysis is saved in this browser: every variation and comment, and the position shown. Find it in the Games tab.</p>
+    <label class="field"><span>Name</span><input class="input" id="save-name" maxlength="120" required></label>
+    <div class="field-row">
+      <label class="field"><span>White</span><input class="input" id="save-white" maxlength="60"></label>
+      <label class="field"><span>Black</span><input class="input" id="save-black" maxlength="60"></label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" value="cancel">Cancel</button>
+      <button class="btn hidden" id="save-copy" value="copy">Save as new</button>
+      <button class="btn primary" id="save-go" value="default">Save</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog class="modal confirm" id="dlg-confirm">
   <form method="dialog" class="modal-body">
     <h2 id="confirm-title"></h2>
@@ -404,6 +433,7 @@
     <symbol id="i-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 5l7 7-7 7M4 12h15"/><path d="M4 5v4M4 15v4" opacity=".55"/></symbol>
     <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></symbol>
     <symbol id="i-book" viewBox="0 0 24 24"><rect width="24" height="24" rx="6" fill="#a88865"/><path d="M12 7.6c-1.6-1.1-3.7-1.6-6-1.6v10.6c2.3 0 4.4.5 6 1.6 1.6-1.1 3.7-1.6 6-1.6V6c-2.3 0-4.4.5-6 1.6Z" fill="#fff"/><path d="M12 7.6v10.6" stroke="#a88865" stroke-width="1.2"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8M7 3v5h8"/></symbol>
     <symbol id="i-flag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22V4M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
     <symbol id="i-first" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 5v14M17 6l-6 6 6 6"/></symbol>

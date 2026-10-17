@@ -86,6 +86,7 @@ async function showBuild() {
     const r = await fetch('version.json', { cache: 'no-store' });
     if (!r.ok) return;
     const v = await r.json();
+    app.build = v;
     const a = $('#build');
     a.textContent = v.sha.slice(0, 7);
     const when = v.date ? ' · ' + v.date.slice(0, 16).replace('T', ' ') : '';
