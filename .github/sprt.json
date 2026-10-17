@@ -1,0 +1,12 @@
+{
+  "name": "travel_checks_ply3",
+  "old": "57e97a5",
+  "games": 9000,
+  "shards": 40,
+  "tc": "tc 10+0.1",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}
