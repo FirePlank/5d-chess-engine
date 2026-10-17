@@ -122,14 +122,79 @@ impl Net {
 
     /// Residual in centipawns (side to move).
     pub fn residual(&self, x: &[f32; NI]) -> i32 {
+        #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+        let out = match (self.h1, self.h2) {
+            // SAFETY: the target has AVX2 (checked at compile time), and the layer
+            // sizes match the blob's (checked by `from_bytes`).
+            (64, 32) => unsafe { self.forward_avx::<8>(x) },
+            (96, 32) => unsafe { self.forward_avx::<12>(x) },
+            (128, 32) => unsafe { self.forward_avx::<16>(x) },
+            _ => self.forward(x),
+        };
+        #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
         let out = match (self.h1, self.h2) {
             (64, 32) => self.forward_fixed::<64, 32>(x),
+            (96, 32) => self.forward_fixed::<96, 32>(x),
+            (128, 32) => self.forward_fixed::<128, 32>(x),
             _ => self.forward(x),
         };
         (out * self.scale).clamp(-self.cap, self.cap) as i32
     }
 
+    /// `forward_fixed` with AVX2 intrinsics for a first layer of 8 * L units and a second of 32:
+    /// the first layer's accumulators stay in registers across the non-zero inputs. Same
+    /// operations in the same order (no fused multiply-adds), so the result is bit-identical.
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    #[inline]
+    unsafe fn forward_avx<const L: usize>(&self, x: &[f32; NI]) -> f32 {
+        use std::arch::x86_64::*;
+        unsafe {
+        let h1 = 8 * L;
+        let w1 = self.w1t.as_ptr();
+        let mut acc = [_mm256_setzero_ps(); L];
+        for (l, a) in acc.iter_mut().enumerate() {
+            *a = _mm256_loadu_ps(self.b1.as_ptr().add(8 * l));
+        }
+        for (i, &xi) in x.iter().enumerate() {
+            if xi != 0.0 {
+                let v = _mm256_set1_ps(xi);
+                let row = w1.add(i * h1);
+                for (l, a) in acc.iter_mut().enumerate() {
+                    *a = _mm256_add_ps(*a, _mm256_mul_ps(_mm256_loadu_ps(row.add(8 * l)), v));
+                }
+            }
+        }
+        let (zero, one) = (_mm256_setzero_ps(), _mm256_set1_ps(1.0));
+        let mut a1 = [0f32; 128];
+        for (l, a) in acc.iter().enumerate() {
+            _mm256_storeu_ps(a1.as_mut_ptr().add(8 * l), _mm256_min_ps(_mm256_max_ps(*a, zero), one));
+        }
+        let b2 = self.b2.as_ptr();
+        let mut a2 = [_mm256_loadu_ps(b2), _mm256_loadu_ps(b2.add(8)), _mm256_loadu_ps(b2.add(16)), _mm256_loadu_ps(b2.add(24))];
+        let w2 = self.w2t.as_ptr();
+        for (j, &aj) in a1[..h1].iter().enumerate() {
+            if aj != 0.0 {
+                let v = _mm256_set1_ps(aj);
+                let row = w2.add(j * 32);
+                for (k, a) in a2.iter_mut().enumerate() {
+                    *a = _mm256_add_ps(*a, _mm256_mul_ps(_mm256_loadu_ps(row.add(8 * k)), v));
+                }
+            }
+        }
+        let mut t = [0f32; 32];
+        for (k, a) in a2.iter().enumerate() {
+            _mm256_storeu_ps(t.as_mut_ptr().add(8 * k), _mm256_min_ps(_mm256_max_ps(*a, zero), one));
+        }
+        let mut out = self.b3;
+        for k in 0..32 {
+            out += self.w3[k] * t[k];
+        }
+        out
+        }
+    }
+
     /// `forward` with the layer sizes known at compile time (same operations, same order).
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     #[inline]
     fn forward_fixed<const H1: usize, const H2: usize>(&self, x: &[f32; NI]) -> f32 {
         let mut a1: [f32; H1] = self.b1[..H1].try_into().unwrap();
