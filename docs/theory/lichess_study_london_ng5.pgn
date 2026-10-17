@@ -1,0 +1,525 @@
+[Event "5d chess london Ng5: starting position"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "D02"]
+[Opening "Queen's Pawn Game: Symmetrical Variation"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "starting position"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/oWrDbm40"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+1. Nf3 Nf6 2. d4 d5 3. c3 c6 4. Bf4 Bf5 5. e3 e6 6. Bd3 Bxd3 7. Qxd3 Bd6 8. Ng5! { [%anno "obama_CAT", obama_cat] this is my study where i analyze this move
+i will write down there what do mean these sings
++= there is "unproved" winning position
++- its a winning position
+?! move that has to be considered more
+time trouble sign + blue arrow = travel
+i couldve put a wrong number (in comments where travel idea is)
+so read what comes after that
+i placed chapter in that order so you have to learn them in that order 2,11, 3-10
+TODO make some marks like initiative (up arrow) - phasing
+arrow means a direction and the phase square also goes up (down, any direction) that would clear up a comment section } *
+
+
+[Event "5d chess london Ng5: 8... Bxf4 (white is better) and travel to e6 must be somewhere around"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "8... Bxf4 (white is better) and travel to e6 must be somewhere around"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/OyT5KP0k"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn1qk2r/pp3ppp/2pbpn2/3p2N1/3P1B2/2PQP3/PP3PPP/RN2K2R b KQkq - 2 8"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+8... Bxf4 { [%csl Be6,Bh7] } 9. exf4 (9. Nxf7!? { [%anno "obama_CAT", obama_cat] (also could work) }) 9... Qe7 { [%csl Be5] } (9... Qb6 10. O-O $14 { [%anno "obama_CAT", obama_cat] todo other chapter }) (9... Qd7!? { [%csl Be5] } 10. Nd2 $14 { [%anno "obama_CAT", obama_cat] todo other chapter } 10... h6 (10... Ne4 11. Ndxe4 dxe4 12. Qxe4 Qd5 13. f5 Qxe4+ (13... Qxf5 14. Qxf5) 14. Nxe4 O-O 15. f6) 11. Nxf7 Qxf7 { [%csl Be3] } (11... O-O?? 12. Nxh6+ gxh6 13. Qg6+) (11... Kxf7? 12. Nf3) 12. Qe2 $13 Qd7 (12... Ne4!?) 13. Nf3 Qd6 (13... O-O?? 14. Ne5 Qe8 15. Ng6 Qxg6 16. Qxe6+) 14. Ne5 Nbd7 15. Qd3 Ne4 16. Qh3 Ndf6 $14 $138 { [%csl Be6][%cal Bh3e6] }) (9... Ne4?? 10. Nxe6 fxe6 11. Qh3 $18 { [%cal Gh3e6,Gh3h5] }) (9... Qc7!? $13 10. Nxe6! (10. Qe2 Ne4) (10. Nd2!? Qxf4 11. Qe2) (10. Qe3 Ne4 (10... Qe7 11. Qe2) 11. Nxe4 dxe4 12. Qg3 g6 13. Nd2 f5 { [%csl Gg7][%cal Gg3g7] }) 10... fxe6 11. Qe2 Qd7) (9... Qd6 10. Qe2 Ne4 11. Qh5 { [%cal Gh5f7] } 11... Qxf4 12. Nxe6) 10. Nd2! { [%csl Re4] } 10... Nbd7 { [%anno "obama_CAT", obama_cat] also check h6 } (10... h6!? { [%anno "obama_CAT", obama_cat] create another chapter for that } { [%csl Be4] } 11. Qe2 { [%csl Ge7,Gc8] } 11... hxg5 { [%cal Ge2e6,Gd2e4] } (11... e5 12. Ne6) (11... Qd7 12. Nxf7) 12. Ne4!! (12. fxg5 Qd7 { [%csl Gc8][%cal Gf6f5,Ge7d7,Gd7c8] }) 12... Qd7 $138 { [%anno "obama_CAT", obama_cat] check travel idea 3 } { [%csl Be6][%cal Be2e6] } (12... Qd8 13. Nxg5) (12... O-O $138 { [%anno "obama_CAT", obama_cat] still works Q>>xe6 Qe7 Qxh7 } { [%csl Be6][%cal Be2e6] }) (12... Rh4!? $138 { [%anno "obama_CAT", obama_cat] with a shitty countertravel, i suppose } { [%csl Be6][%cal Be2e6] }) (12... Nxe4 $138 { [%anno "obama_CAT", obama_cat] note: N>>e3 Qxe3 Nb8>xc8 Q>>xe3 with double threat } { [%cal Gc6d4] })) (10... Ne4 { [%anno "obama_CAT", obama_cat] TODO make the other chapter for this move } 11. Ndxe4 dxe4 (11... e5 12. Ne6 Qxe6 13. Nc5 (13. Nd6+ Qxd6 14. Qf5 (14. Qh3 Qd7) 14... Qe6 $13 $138 { [%csl Bc8][%cal Bf5c8] })) 12. Qxe4 { [%csl Ge1] } 12... Nd7 { [%anno "obama_CAT", obama_cat] position to travel to } { [%csl Be6] } (12... Na6 13. O-O) (12... h6 { [%csl Be6] } 13. Nf3 (13. Qe5!? Nd7 { [%csl Be4] } (13... hxg5 14. h4 (14. Qxg7)) 14. Qe2 hxg5 15. fxg5 Qxg5 { [%csl Be2,Be6][%cal Be2e6] }) 13... Nd7 { [%csl Be5] } 14. Qe2 O-O 15. Nh4 (15. Ne5 Nxe5 { [%csl Be3] } 16. fxe5 Qh4) 15... Qxh4 { [%csl Ge3] } (15... e5 16. Nf5) 16. g3 Qf6 { [%csl Ge2] } (16... Qh3)) 13. O-O { [%csl Ge2] } 13... h6 { [%csl Be6] } (13... Nf6) 14. Nf3 { [%csl Ge3] } (14. f5!? hxg5 { [%anno "obama_CAT", obama_cat] wait why did we consider }) (14. Nxf7 Qxf7 15. f5 Qxf5 16. Qxf5 exf5 17. Rae1+ Kf7 18. Re6 Kxe6 19. Re1+ Kf7 20. Re2 Rhe8) 14... Nf6 { [%csl Be5] } (14... f5!? 15. Qe2 (15. Qxf5?! exf5 16. Rfe1 Qe4) 15... O-O-O?? (15... Nf6 16. Ne5 $14 { [%anno "obama_CAT", obama_cat] there can be a travel N>>e6 well not sure }) (15... g6) 16. Ne5! { [%cal Ge5c6,Ge2h5] }) 15. Qe2 { [%anno "obama_CAT", obama_cat] the idea is to travel to e6 } 15... Nd5 { [%csl Be4] } (15... O-O 16. Ne5) (15... Ng4 { [%csl Be4] } 16. h3) 16. g3 e5 (16... Qf6 { [%csl Be3] } 17. Nh4) (16... Nxf4 { [%csl Be5] } 17. gxf4 e5) 17. Qxe5 O-O 18. Qxe7 Nxe7 { [%csl Gh4][%cal Gf3h4] } 19. Nh4 { [%anno "obama_CAT", obama_cat] white has a simple plan and 2 extra pawns } { [%cal Gf1e1,Ge1e8,Ga1e1,Ge1e2,Gh4f5] } (19. Rfe1) 19... g5 20. Rfe1 gxh4 21. Rxe7 Rfe8 22. Rae1 Rxe7 23. Rxe7) (10... Ng4 11. Qe2) 11. Qe2 e5 (11... Ng4 12. O-O Ne3 $14 $138 { [%csl Be6][%cal Be2e6] }) 12. Ne6 Qxe6 $18 $138 { [%anno "obama_CAT", obama_cat] Q>>e6[4] Qe7 Qxh7![3] Bxe3 fxe[2] (any blacks move) and either Qc8[1] or Qxh8[1] wins.
+travel idea 1 } { [%csl Be6,Ge3][%cal Be2e6] } *
+
+
+[Event "5d chess london Ng5: 8... Bxf4 9) exf / Qe7 10) Nd2 / Ne4"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "8... Bxf4 9) exf / Qe7 10) Nd2 / Ne4"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/yO4vhs4b"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn2k2r/pp2qppp/2p1pn2/3p2N1/3P1P2/2PQ4/PP1N1PPP/R3K2R b KQkq - 3 11"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+11... Ne4 12. Ndxe4 dxe4 13. Qxe4 h6 { [%csl Be6] } (13... Nd7 14. O-O h6 (14... Nf6 15. Qe5 (15. Qe2)) 15. Nf3 Nf6 (15... f5? 16. Qe2 O-O-O 17. Ne5 { [%csl Gc6,Gh5][%cal Ge5c6,Ge2h5] }) 16. Qe2 Nd5 17. g3) 14. Nf3 Nd7 { [%anno "obama_CAT", obama_cat] slow death } { [%csl Ge5] } 15. Qe2 Nf6 { [%csl Ge4] } (15... e5 16. Nxe5) 16. Ne5 Nd5 { [%csl Ge3] } 17. g3 (17. Nxc6 bxc6 $138 { [%anno "obama_CAT", obama_cat] make it blue } { [%csl Ge6][%cal Ge2e6] } (17... Ne3)) (17. h4 Ne3 18. Qxe3) 17... Ne3 18. fxe3 *
+
+
+[Event "5d chess london Ng5: 8... Bxf4 9) exf / Qd7 (new chapter)"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "8... Bxf4 9) exf / Qd7 (new chapter)"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/IJT0RBVS"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn1qk2r/pp3ppp/2pbpn2/3p2N1/3P1B2/2PQP3/PP3PPP/RN2K2R b KQkq - 2 8"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+8... Bxf4 { [%csl Be6] } 9. exf4 { [%csl Re3] } 9... Qd7 { [%csl Be5] } 10. Nd2 Ne4 (10... h6) (10... Ng4 { [%csl Be4] } 11. Qe2 { [%csl Re5] } 11... h5 { [%csl Be3] } (11... e5 { [%csl Be3] } 12. Ne6 Qxe6? $138 { [%csl Be6][%cal Be2e6] } (12... fxe6 13. Qxg4 Qf7 14. Nf3 $14)) 12. Nc4 dxc4 $13 $138 { [%anno "obama_CAT", obama_cat] maybe... Q>>xe6 Qe7 Qxe7 Ke7 exf
+travel idea 7 } { [%csl Be6][%cal Be2e6] }) (10... Nh5) 11. Ndxe4 dxe4 12. Qxe4 Qd5 { [%csl Be6] } (12... h6!? 13. Nf3) 13. Qe2 (13. Qxd5 cxd5) (13. O-O Qxe4 14. Nxe4 O-O 15. Nc5 (15. Nd6)) 13... h5 { [%csl Be5] } (13... Nd7 14. Qh5 Qf5 15. O-O Qg6 (15... O-O-O $138 { [%csl Bf7][%cal Bh5f7] }) 16. Qxg6 hxg6 $138 { [%anno "obama_CAT", obama_cat] didnt check but looks like 1-0 } { [%csl Bf5][%cal Bg5f5] }) (13... g6 14. Ne4) 14. Rf1 *
+
+
+[Event "5d chess london Ng5: 8... Qe7 9) Nxf7 Kxf7"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "8... Qe7 9) Nxf7 Kxf7"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/UKdPq5KC"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn1qk2r/pp3ppp/2pbpn2/3p2N1/3P1B2/2PQP3/PP3PPP/RN2K2R b KQkq - 2 8"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+8... Qe7 { [%csl Gg7] } 9. Bxd6 Qxd6 { [%csl Bf6,Gf5,Gg7,Gg6] } 10. Nxf7!? Kxf7 { [%csl Gf5,Gf4,Gg6,Gg5] } (10... Qf8 { [%anno "obama_CAT", obama_cat] Q>>h7, the king can not move, so Qxf7 is forced, Qh8 and i gotta be careful with the future white can choose from where to travel (c2,d3) lemme count a bit Qc2>>h75 Qf7 Qh84 Kd7 Qa63 Ng8 Qb7#2 => no pawn recapture, so travel from d3 would not work. (n) - distance from the future, didnt think that it would be good to show future interaction like that } { [%csl Ge6,Bf2,Gh7] } 11. Ne5 { [%anno "obama_CAT", obama_cat] yep f2, white should be faster since it takes several turns for black to phase and Q>>h7 is coming } { [%anno "Icemoe", icemoe] is Q>>h7 fatal in this postion? I didn't see that } { [%csl Bf2] } 11... Kd8 { [%csl Gg6] } 12. Qd1 (12. Qe2 { [%anno "obama_CAT", obama_cat] preventing Ne4, Qd1 could be better in the case of Qe8 and Qh5 and Q>>e2 but i dont think this will matter unless Qe8 Qc2 Qh5 (Nf7 is better) Nc6 Nxc6 this is just a showcase where it could matter } 12... g6 { [%csl Gf5][%cal Re2g4] } 13. Rf1 Ne4 14. Qg4 Qf6 (14... g5 15. Qxe6)) 12... g6 13. Qa4 b6 14. Qc2 { [%anno "obama_CAT", obama_cat] this matters so Qd1 is better for sure }) 11. Qf1 { [%anno "obama_CAT", obama_cat] note: Q>>b2 in this position is a threat, maybe
+Q>>b2 Kd1 } 11... Qc7!? { [%csl Bf4,Gg5,Gg4] } (11... Na6 { [%csl Gf3,Gf4,Gg5] } 12. f4!? (12. f3?! Nb4 { [%csl Gf2] } 13. Kd2 (13. Kd1 Nd3 14. Qxd3) (13. Na3) 13... Ne4+ 14. fxe4+ { [%csl Bf1] } (14. Kc1) 14... Kg8 15. Kc1 (15. Qf4 Qxf4 16. exf4 { [%anno "obama_CAT", obama_cat] N>>xb2 b2>xb2 Qxf4 idk } { [%csl Bb2][%cal Bb4b2] }) (15. e5 Rf8 16. exd6 Rxf1 17. Rxf1 { [%cal Gb4b2] }) 15... Rf8 (15... dxe4 16. Nd2 (16. cxb4 Rf8) 16... Rf8 (16... Nd3+ 17. Kb1 { [%anno "obama_CAT", obama_cat] todo consider N>>xc3 } { [%csl Bc3][%cal Bd3c3] } 17... Nf2 18. Qxf2 { [%csl Bf7][%cal Bf2f7] }) 17. Nf3 exf3 18. g3 { [%csl Bf7][%cal Bf1f7] }) 16. Qe2 (16. Qd1 Rf2) 16... c5!! { [%cal Gd6a6] } (16... Nd3+ 17. Qxd3 Rf2 18. Qd1 { [%anno "obama_CAT", obama_cat] im so sick of this } { [%csl Bh5] } (18. Rf1 Qxh2 19. Qd1 (19. Nd2 Qxg2) 19... Qxg2 20. Nd2 (20. Rxf2 Qxf2 21. Nd2) 20... Re2 (20... Rxd2 21. Rf7 Kxf7 22. Qh5+ g6 { [%csl Bf7][%cal Bh5f7] } 23. Qxg6+) (20... h5 21. Rg1 Re2) 21. Rf4 (21. Qb3?? Qxf1+ 22. Nxf1 Re1+) 21... Re1 (21... h5 22. Qf1 Re1+ 23. Qxe1) 22. Qxe1 { [%csl Gf2,Ge2,Gd2,Gc2,Gb2] }) 18... Qf8 (18... Rxb2?? 19. Qf1 { [%anno "obama_CAT", obama_cat] # } { [%cal Bf1f7] }) 19. Nd2 Rxd2 20. Qg4!! (20. Qxd2 { [%csl Bf1][%cal Bf8f1] }) 20... Rc2+ (20... Qf7 $138 { [%anno "obama_CAT", obama_cat] travel idea 8 } { [%csl Bg4] }) 21. Kxc2 $138 { [%anno "obama_CAT", obama_cat] proof: no way that this travel works. } { [%csl Bf1][%cal Bf8f1] } 21... Qf2+? 22. Kb3) (16... Rf2?? 17. Qxf2 { [%csl Bf7][%cal Bf2f7] }) (16... Rf7?! 17. cxb4!? Qf8 18. Nd2 Rf2 19. Qh5 { [%anno "obama_CAT", obama_cat] jurassic } { [%csl Bh5] }) 17. Rf1 (17. Qb5 a6 (17... dxe4) 18. Qxb7 Nd3+ 19. Kc2) (17. cxb4 cxb4 { [%csl Bc3][%cal Gc8c1] }) (17. a3 Rf2?? 18. Qxf2 { [%csl Bf7][%cal Bf2f7] }) (17. e5 Qa6 18. Qxa6) 17... cxd4! (17... dxe4 18. cxb4 (18. Rxf8+ Qxf8 19. cxb4) 18... cxb4 (18... cxd4) (18... Rxf1+ 19. Qxf1) 19. Rxf8+ Qxf8 (19... Kxf8 20. Qf1+ Ke8) 20. Qc4) (17... Qa6 18. Rxf8+ Kxf8 19. Qf2+ Ke8) 18. Rxf8+ Qxf8 19. cxb4 Qxb4 20. exd4 Qa5 { [%cal Ga5c7,Ga5e1] }) 12... Nb4 { [%csl Gf3,Gf2,Gg4] } (12... Qc7!? { [%csl Gg4] } 13. g4 { [%anno "obama_CAT", obama_cat] threatening >>f6 and Qg2 or Qg1 >>g7 } (13. f5 Qb6 14. fxe6+ Ke7 $138 { [%anno "obama_CAT", obama_cat] can work } { [%csl Bf6][%cal Bf1f6] })) (12... Ne4 13. Kd1 Qc7) 13. Kd2 { [%csl Be3] } 13... Ne4+ { [%csl Gf2,Gf1] } (13... Qc5 14. dxc5 Ne4+ 15. Kc1 $138 { [%csl Ge3][%cal Ge4e3] }) (13... Qxf4 $138 { [%anno "obama_CAT", obama_cat] IS THAT WORKING, ITS COMPLICATED AF
+THAT PARALLEL DEFENCE IS FREAKING ME OUT
+so Qxf4 can be forced } { [%csl Gf6][%cal Gf1f6] }) (13... Qe5 { [%anno "obama_CAT", obama_cat] https://cdn.discordapp.com/attachments/1488248960320802909/1488249005262508162/image.png?ex=69cc1765&is=69cac5e5&hm=9c458434b3652e11a268ec73e93ade18c84ed9fbfd01ac0efc6b5f661d6e4d53& }) 14. Kc1 { [%anno "obama_CAT", obama_cat] .
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+THERE ARE OTHER WAYS TO SETUP N>>E3 (TODO)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+. } 14... Nc2 { [%csl Gf1] } (14... Nd3+ 15. Qxd3 Kg8 16. Qe2 (16. f5 Rf8 { [%csl Gf4] }) 16... Rf8 (16... Qf8 17. Qh5 Nxc3 (17... Qf5) 18. Nxc3 Qb4 19. Qg4) 17. Qh5 Nf2 $138) (14... Nxc3 15. Nxc3 Kg8 16. f5) (14... Qe7) (14... Qc7) (14... Qc5) 15. Kxc2 $14 { [%anno "obama_CAT", obama_cat] if N>>e3 Na3 Nd1 N>d1!!! (i wont create a defending idea 1 coz there are travels between timelines) } { [%csl Be3][%cal Be4e3] }) (11... Ke8 12. g4 Qc7 (12... Qd8 13. g5 (13. Qg2 Qb6 $138 { [%csl Bg2,Bb6] }) 13... Ng4 (13... Rf8 14. Qh3 Qd7 15. gxf6 g6) (13... Nbd7 14. Qh3 Qe7 15. gxf6 Nxf6 16. Rg1) 14. Qg1 Nxe3 15. fxe3) 13. Qg2 (13. g5!? Rf8 (13... Qb6?? 14. Qg1!! { [%anno "obama_CAT", obama_cat] and now black cant jurassic } 14... Qa6 $138 { [%csl Bg7][%cal Bg1g7] }) (13... Ng4 14. Qg1 Nxe3 15. fxe3) 14. Qg1 { [%csl Be2] } (14. Qh3!? Qf7 15. gxf6 Qxf6 16. f4 { [%anno "obama_CAT", obama_cat] note Q>>h3 could be a threat } 16... Qf5 17. Qh4 { [%anno "obama_CAT", obama_cat] note: Q>>b1 could be a threat } 17... Rf6 18. Rg1 Rg6 19. Rg3 Qc2 (19... Rxg3 20. hxg3) 20. Nd2 Qxd2+ 21. Kxd2 Nd7 22. Rxg6 { [%csl Bc7,Bd8][%cal Bd7c7,Bh4d8] }) (14. gxf6 Qf7 15. Nd2 (15. fxg7!? { [%csl Bf2] } 15... Nd7 16. gxf8=Q+ Nxf8 17. f4 Qh5 18. h4 Ng6 (18... Qg4 19. Qh3) 19. Qe2 Qxe2+ 20. Kxe2 $138 { [%anno "obama_CAT", obama_cat] and idk what will happen after that } { [%csl Bg4][%cal Bg6g4] }) (15. Qh3?! Qxf6 16. f4 Qf5 { [%anno "obama_CAT", obama_cat] note: jurassic to h3 is strong } (16... Qg6 17. Nd2 Nd7 18. Nf3 Rxf4 19. Ng5 Rf6 (19... Rf5 20. Qxh7) 20. Rg1) 17. Qxf5 Rxf5 { [%cal Gb1d2] } 18. Nd2 Nd7 19. Nf3 (19. O-O-O Nf6 { [%cal Gh1g1] } 20. Rhg1 (20. Nf3 Ne4 21. Rdf1 (21. Rhf1)) 20... Kf8) 19... Nf6 20. O-O-O Kd7 (20... Kf8) 21. Ne5+ Rxe5 22. fxe5 Ne4 23. Rhf1) 15... Qxf6 16. f4 Qh4+ (16... Nd7 17. Nf3 Qf5) 17. Qf2 Rxf4 18. Qxh4 Rxh4 19. Nf3 Re4 (19... Rg4) 20. Ng5 Rxe3+ (20... Nd7 21. Nxe4 dxe4 22. O-O-O Nf6 23. Rhg1) 21. Kd2 Nd7 22. Kxe3) 14... Qb6 $138 { [%anno "obama_CAT", obama_cat] go to: jurassic theory } { [%csl Bg7][%cal Bg1g7] }) (13. f3) (13. Nd2 Nbd7 (13... Rf8 14. Nf3 Nbd7 15. Ng5 Qd6)) 13... Qb6 $13 $138 { [%csl Bg2,Bg7][%cal Bg2g7] } (13... Qa5?! { [%anno "obama_CAT", obama_cat] b6 travel should be better unless b6 loses and this is better by some fucking magic })) (11... Kg8 12. g4 Qc7 13. g5 Ng4 14. Qg1 Qb6 15. Qxg4 { [%anno "obama_CAT", obama_cat] n }) (11... Ke7 12. g4) (11... Kf8) (11... g5) (11... Ng4) 12. g4 Nbd7 (12... Qb6?? 13. Qg2!) 13. Qg2 Qb6 $13 *
+
+
+[Event "5d chess london Ng5: 8... Rf8 9) Qe2 / Bxf4"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "8... Rf8 9) Qe2 / Bxf4"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/vEn5hDBX"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn1qk2r/pp3ppp/2pbpn2/3p2N1/3P1B2/2PQP3/PP3PPP/RN2K2R b KQkq - 2 8"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+8... Rf8 { [%csl Be6] } (8... Bxf4 9. exf4) 9. Qe2 Bxf4 { [%csl Be5] } (9... Be7) (9... Qe7) 10. exf4 Qe7 { [%csl Be4] } (10... Ne4?? 11. Nxe6 fxe6 12. Qg4! { [%anno "obama_CAT", obama_cat] fork (Qxe6#, Qh5#) }) 11. Kd1!! (11. O-O $13 { [%anno "obama_CAT", obama_cat] maybe i need to dig deeper or find an another win } 11... Ne4 { [%csl Be3] } (11... Nh5 12. Qe1 Ng3 13. fxg3 { [%anno "obama_CAT", obama_cat] Q>>e6 still coming }) (11... h6 12. Qe1 hxg5 13. fxg5) 12. Qe1 Nxg5 { [%csl Be2] } 13. fxg5 { [%csl Gf4] } 13... Qxg5 $13 { [%anno "obama_CAT", obama_cat] travel Q>>e6 is not recommended here. white in danger } { [%cal Gg5c1] }) (11. Nd2 h6) 11... Ne4 { [%csl Be3] } (11... h6 12. Qe1 hxg5 13. fxg5 Ne4 $18 $138 { [%csl Be6][%cal Be1e6] } (13... Qd7 $18 { [%anno "obama_CAT", obama_cat] the "best" "countertravel", tho white can take the knight and then travel } 14. gxf6)) (11... e5!? 12. Qe1 e4 13. Nxe4 Qe6 (13... Nxe4 $138 { [%csl Be6][%cal Be1e6] }) 14. Nd6+ Ke7 15. Qxe6+ fxe6 16. Nxb7 $18) (11... Nbd7 12. Qe1 Ng4 13. Kc1) (11... Ng4 12. Qxg4?! (12. Qe1 Nd7 13. Nxe6 Qxe6) 12... Nd7 13. Nxe6!? fxe6 14. Re1 Nf6 15. Qh3 O-O-O (15... Kd8) 16. Rxe6 Qd7 { [%anno "obama_CAT", obama_cat] and >>e6 eventually }) 12. Qe1 Nxf2+ (12... Nxg5 { [%csl Be2] }) 13. Qxf2 e5 (13... Nd7 14. Qe1 e5 (14... Ne5 15. Nxe6 Qxe6 $138 { [%csl Be6][%cal Be1e6] }) (14... Qf6 15. Nxe6 Qxe6 $138 { [%csl Be6][%cal Be1e6] }) 15. Ne6 Qxe6 $18 $138 { [%csl Be6][%cal Be1e6] }) (13... Qf6 14. Qe1!? Qg6 15. Nxe6 fxe6 $138 { [%anno "obama_CAT", obama_cat] note:
+after Qg6>>d3 Qd2 has to be played } { [%csl Be6][%cal Be1e6] } (15... Qxe6)) (13... h6 14. Nxe6 fxe6 (14... Qxe6 15. Re1) 15. Qe1 Qf6 $138 { [%anno "obama_CAT", obama_cat] note: check a contertravel!!! } { [%csl Be6,Bf6][%cal Be1e6] } (15... Qd6 16. Qe2! g6 17. Qg4 Rf7 18. Qxg6 Qf8 19. Qxe6+)) 14. Qe1 (14. Re1 e4 (14... Kd8 { [%anno "obama_CAT", obama_cat] question: is Q>>e2 a threat } 15. Nxf7+ (15. Rxe5) 15... Qxf7 { [%anno "obama_CAT", obama_cat] TODO } (15... Rxf7 16. Rxe5 Qd7 17. Qh4+) 16. Qh4+ Qf6 17. Qg4 Qxf4 $138 { [%csl Bc8][%cal Bg4c8] } (17... Qf5!?)) 15. Rxe4!? { [%anno "obama_CAT", obama_cat] its not played to prevent a travel its played to stall a bit coz there is c8 weak } (15. Qh4!?) 15... dxe4 16. Qe3 f5 (16... Nd7 17. Qh3 h6 18. Ne6 Qxe6 $138 { [%csl Bc8][%cal Bh3c8] }) 17. Qh3 g6 18. Qxh7 Qd6 (18... Qxh7 19. Ne6 $18) (18... Qf6 19. Qxb7 $18) 19. Qc7 (19. Qxb7 $18 { [%cal Gb7c8,Gg5e6] }) 19... Qd7 20. Qe5+) 14... e4 15. Ne6 Qxe6 $138 *
+
+
+[Event "5d chess london Ng5: 8... g6 (solved 1-0)"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "8... g6 (solved 1-0)"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/hfaMq81Z"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn1qk2r/pp3ppp/2pbpn2/3p2N1/3P1B2/2PQP3/PP3PPP/RN2K2R b KQkq - 2 8"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+8... g6 { [%csl Bg6] } (8... Bxf4) 9. Nxf7! (9. Bxd6!? $13 Qxd6 { [%csl Ge2][%cal Gd3e2] } 10. Nxf7 (10. Qe2 Qe7) 10... Kxf7 11. Qe2!? $13 (11. Qc2!? { [%anno "obama_CAT", obama_cat] a travel Qd3>>g6 does not work, but Qc2>>g6 works, but there is still Qc7 Qb6 and Q>>b6 } 11... Qc7) (11. Qd1) 11... Qc7 12. Qf3 Qb6 { [%anno "obama_CAT", obama_cat] its kinda sharp, there is a travel (Q>>e2 Kxe2 Ne4) }) 9... Kxf7 { [%csl Bf5] } 10. Bg5! { [%anno "obama_CAT", obama_cat] bishop bound a queen } 10... Ke8 { [%csl Be4,Bg6] } (10... Na6 11. Qc2 Nb4 12. Bxf6 Qxf6 $138 { [%csl Bg6][%cal Bc2g6] }) (10... Qb6 11. Bxf6 Kxf6 12. Qe2 Kg7 (12... Bf4 13. exf4 Qc7 14. f5 { [%anno "obama_CAT", obama_cat] fork (Qe6 and Qf3) }) 13. Qf3 Rf8 $138 { [%anno "obama_CAT", obama_cat] after a counter travel the knight on f6 is gonna take a queen on f6, check to prevent that } { [%csl Bf6][%cal Bf3f6] }) (10... Bf4 { [%anno "obama_CAT", obama_cat] it prevents Qc2 but there is still a travel to g6 } { [%csl Bg6] } 11. exf4 { [%anno "obama_CAT", obama_cat] wins faster }) (10... Be7 11. Qc2 Qb6 12. Bxf6 Bxf6 $138 { [%csl Bg6][%cal Bc2g6] }) (10... Nbd7 11. Qc2 Qb6 12. Bxf6 Nxf6 $138 { [%csl Bg6][%cal Bc2g6] }) 11. Qc2! { [%anno "obama_CAT", obama_cat] Qd3>>g6 doesn't work, Qc2>>g6 does. } 11... Rf8 { [%csl Bd3,Bf5] } (11... Bf4 12. exf4) 12. Bxf6 Qb6 { [%anno "obama_CAT", obama_cat] its better to not give a chance by not traveling } { [%csl Bc2,Bb6,Be4] } (12... Qxf6 $18 $138 { [%anno "obama_CAT", obama_cat] (Q>>g6 L+1 hxg Qxg6) (Q>>f2 L-1 Kxf2) N(L-1)>(L+1)xg6 (Qxg6 L-1, Nxe6 L+1)# } { [%csl Bg6][%cal Bc2g6] }) 13. Bg5 { [%anno "obama_CAT", obama_cat] should be winning since another Q>>g6 is coming } 13... Qa6 { [%csl Bd3] } 14. Bd8 Kxd8 $18 $138 { [%anno "obama_CAT", obama_cat] note:
+if Q>>e2 then L-1 Qxe2 Qg4 Q>>e6#
+if Q>>f1 L-1 Rxf1 N>xg6 Qe2 Qf6 Bxf6 Kxf6 Qf3# } { [%csl Bg6,Bf1][%cal Bc2g6,Ba6f1] } *
+
+
+[Event "5d chess london Ng5: 8... Rf8 9) Qe2 / Qe7 10) Bxd6 / Qxd6 11) e4"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "8... Rf8 9) Qe2 / Qe7 10) Bxd6 / Qxd6 11) e4"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/9KHLP9sB"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn1qk2r/pp3ppp/2pbpn2/3p2N1/3P1B2/2PQP3/PP3PPP/RN2K2R b KQkq - 2 8"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+8... Rf8 { [%csl Be6] } 9. Qe2 Qe7 { [%csl Be5] } 10. Bxd6 Qxd6 { [%csl Be4] } 11. e4 (11. Nd2 { [%csl Ge6] }) 11... Qf4 { [%anno "obama_CAT", obama_cat] Q>>e6 Kd8 Qxf7 Rxf7 Ne6# } { [%csl Ge6,Gb8,Be3,Gc1][%cal Ge8d8,Gf4c1] } (11... dxe4 { [%csl Be3] } 12. g3! { [%anno "obama_CAT", obama_cat] is there a travel to e6? i will check that later } { [%cal Rd6f4] } 12... Qd5 $13 $138 { [%anno "obama_CAT", obama_cat] is that working? 90% yes
+travel line 2 } { [%csl Be6][%cal Be2e6] }) (11... Nxe4!? { [%csl Be3] } 12. Nxe4 Qf4!? $13 { [%csl Gc1][%cal Gf4c1] } (12... dxe4 $14 $138 { [%csl Be6][%cal Be2e6] }) 13. Nbd2 (13. Ned2 Nd7) 13... dxe4 14. Qxe4 Qxe4+ 15. Nxe4 { [%csl Gd6][%cal Ge4d6] }) 12. Nd2 Qxg5 { [%csl Be5,Re3,Ge6][%cal Ge6f7,Gg5g2] } (12... dxe4 13. Ndxe4 Nxe4 14. Nxe4) (12... Qg4?! 13. Qxg4 Nxg4 14. h3 (14. exd5!? { [%anno "obama_CAT", obama_cat] this can work as well it can be even better but its too late
+TODO consider N>>f4 in a couple turns } 14... exd5 (14... cxd5 15. Nge4 dxe4 16. Nxe4 Na6) 15. Nde4 dxe4 16. Nxe4 Kd7 (16... Ke7? 17. Nc5 Ke8 18. Nxb7 Na6 (18... Nd7 { [%anno "obama_CAT", obama_cat] same as Na6 }) 19. Nd6+ Ke7 $138 { [%csl Be6][%cal Bd6e6] }) 17. Nc5+ (17. O-O-O!?) (17. d5! Re8?! (17... Na6? 18. dxc6+ Kc7 19. Nd6 Kxd6 20. O-O-O+ Kxc6 $14 $138 { [%anno "obama_CAT", obama_cat] >> 2 moves bxc Rxd6 } { [%csl Bd1] }) (17... Ne5 18. dxc6+) (17... c5!? 18. Nxc5+ Kc8 19. O-O Nd7 20. Ne4 Kb8) 18. dxc6+ Kxc6 (18... Kc7?! 19. O-O-O Rxe4 20. cxb7 Kxb7 21. Rd8 Re5 (21... Re2 $138 { [%anno "obama_CAT", obama_cat] R>>xd8 Kxd8 } { [%csl Bd8] })) 19. O-O-O Rxe4 20. Rd8 Re5 (20... Re2 { [%anno "obama_CAT", obama_cat] R>>xd8 Kxd8 Nxf7 Rxf7 Bxd6# } { [%csl Bd8] })) 17... Kc8 18. O-O Nd7 (18... Nf6 19. Rfe1 Nbd7 20. Re7 Nxc5) (18... Na6 19. Rfe1 Nxc5 20. Re7 Nd3) 19. Ne4) 14... h6 (14... Nf6 15. e5 Nh5 (15... Nfd7 16. Nxh7 (16. Nc4 dxc4 17. Ne4 Ke7 18. Nd6) 16... Rh8 17. Ng5 $16) (15... h6!? 16. exf6 hxg5 17. fxg7 Rg8 18. h4 g4 (18... gxh4 19. Rxh4 Nd7) 19. h5 Rxg7 20. h6 Rh7) 16. Nc4 dxc4 17. Ne4 Ke7 (17... Nf4 18. Nd6+ Ke7 19. Nxb7 Nxg2+ (19... Nd3+) 20. Kf1) 18. Nc5) (14... Nh6!?) 15. exd5! hxg5 (15... exd5 16. Nge4! (16. Nh7!? { [%anno "obama_CAT", obama_cat] (better position) } 16... Nf6 17. Nxf8 Kxf8) 16... dxe4 17. Nxe4 Kd7 (17... Na6) 18. Nc5+ Kc8 19. hxg4 Re8+ 20. Kd2 Na6 21. Rae1 Nxc5 22. Rxe8+ Kd7 23. Rxa8 Ne4+ 24. Ke1) (15... cxd5 16. Nge4 dxe4 17. Nxe4 Kd7 18. Nc5+ Kc8 (18... Kd8)) 16. Ne4 Kd7 17. dxe6+ fxe6 18. hxg4! (18. Nc5+!? Kc8 19. hxg4 Nd7 20. Nxe6 Re8 (20... Rg8) 21. Rh8) 18... Na6 (18... b6 19. Rh7 Kc7 20. Nxg5) 19. Rh7 Rf7 (19... Rae8 20. Rxg7+ Re7 21. Rxe7+ Kxe7 $138 { [%csl Be5][%cal Be4e5] }) 20. Rxg7 Rxg7 21. Nf6+ Ke7 $138 { [%csl Bf7][%cal Bf6f7] }) (12... Nbd7!? 13. exd5 O-O-O 14. dxc6) 13. exd5 Qxg2 { [%csl Be4] } (13... Qh5 14. Qxh5 (14. f3 Ng4 (14... Nxd5) 15. g3) 14... Nxh5 { [%anno "obama_CAT", obama_cat] either Nc4 or Ne4
+Nc4 has an advantage in a way that you can play N>> and Ne5 checking e7
+e5 isnt controled by a black knight } 15. Ne4 (15. Nc4 Nf4 (15... Kd7) 16. Nd6+ Ke7) 15... Kd7 (15... Nf4 16. Nd6+ Ke7 17. Nxb7 Nd3+ 18. Kf1) (15... Na6 16. Nd6+ Ke7 17. Ne4) 16. dxe6+ (16. Nc5+ { [%cal Gd5d6] } 16... Kc8 17. O-O-O cxd5) 16... fxe6 17. Nc5+ (17. O-O-O Nf4 18. Rhe1) 17... Kc8 18. O-O-O { [%csl Gf4][%cal Gh5f4] } (18. Ne4 Rd8) 18... Nf4 (18... Re8 19. Rhe1) 19. Rhe1 (19. g3 { [%csl Ge2][%cal Gf4e2] } 19... Ne2+ { [%csl Rc3][%cal Re2c3,Re2d4,Re2f4,Re2g3,Gh1e1,Ge1e2,Gc1b1] } (19... Nd5 20. Nxe6 { [%csl Bd6][%cal Be6d6] } 20... Rf3)) 19... Nd7 (19... Na6 20. Ne4 Rd8) 20. Ne4 (20. Nxe6 Nxe6 21. Rxe6 Kc7 22. Re7 Rae8 $13 $138 { [%csl Be7] }) (20. g3 Nxc5 21. dxc5 Nd5 22. Rxe6 Kc7 23. Rxd5 cxd5 24. Re7+ $138 { [%csl Be7] }) 20... Kb8 21. Nd6 Nb6) (13... Nxd5 { [%csl Be4,Rf4] } 14. Ne4 Qe7 { [%csl Gd6,Be3][%cal Ge4d6] } (14... Ne3 15. Qxe3 Qe7 (15... Qh5 16. Nd6+ Ke7 17. Nxb7) 16. Qg3) 15. Nd6+ Qxd6 $138 { [%csl Be6][%cal Be2e6] }) (13... Qxd5 { [%csl Be4] } 14. Nc4 Nbd7 { [%csl Be3] } (14... Ne4 15. Nd6+ Qxd6) 15. Nd6+ Qxd6 $138 { [%csl Be2,Be6][%cal Be2e6] }) (13... Kd8 14. dxe6 (14. Nc4 Qxd5 15. Nd6 Qxd6) 14... Re8 { [%csl Ge3] } 15. Ne4 Qd5 { [%csl Ge2] } (15... Rxe6 16. Nxg5 Rxe2+ 17. Kxe2 Nbd7)) (13... Qg4 14. Qxg4 Nxg4 { [%csl Gc4,Gd6,Ge4,Ge5][%cal Gd2c4,Gc4d6,Gd6e4,Ge4e5] } 15. Nc4 Na6 (15... Ke7 16. Na5 (16. h3) 16... Na6 (16... Kf6 17. Nxb7 Kg6) 17. Nxb7 Nc7 18. d6+) (15... Kd7 16. dxe6+ (16. Na5 Kc8) 16... fxe6 17. O-O-O (17. Ne5+ Nxe5 18. dxe5 Kc7 19. O-O-O Nd7 20. Rd6) (17. f3 Nf6) (17. Na5 Kc8 18. Nc4 Rd8)) 16. Nd6+ Ke7 17. Ne4 Rac8 $138 { [%csl Ge5][%cal Ge4e5] }) 14. Rf1 (14. O-O-O? { [%csl Gf5,Gd3,Ge4] } 14... Qg6 { [%csl Gg6,Be3] } (14... Qg4 15. f3 (15. Qxg4 Nxg4 16. Nc4 { [%csl Gd6][%cal Gc4d6] } (16. Ne4)) 15... Qf5) 15. dxe6 Ne4 { [%csl Be2,Gc4][%cal Ge6e7,Ge2c4] } 16. exf7+ { [%csl Gf5,Ge5][%cal Gf8f7] } (16. Rhg1 Nxc3 17. bxc3 { [%csl Bc2][%cal Bg6c2] }) 16... Kd7 { [%csl Ge4] } (16... Kd8 17. Qc4) 17. Nxe4 { [%csl Bc2][%cal Bg6c2] } (17. Qxe4 { [%csl Gg6] })) 14... Qg4 { [%csl Ge2] } (14... Qxd5 { [%csl Be3] } 15. Nc4 Qd7 $14 $138 { [%csl Be6][%cal Be2e6] } (15... Qe4?? 16. Nd6+)) (14... Nxd5 15. Ne4 (15. Nc4 Ne3 16. Nxe3 (16. fxe3 Qh3 17. Nd6+ (17. Qf2) 17... Ke7)) 15... Ne3) (14... Nbd7) 15. Qxg4 Nxg4 16. Nc4! (16. Ne4?! { [%anno "obama_CAT", obama_cat] in that context it can be coz Ng4 protects e5 and Na6 is gonna protect c7 } 16... Na6! (16... Kd7 17. dxe6+ fxe6 { [%csl Gd7] } 18. Nc5+ Kc8 19. O-O-O Nxf2 20. Rxf2 (20. Ne4! { [%anno "obama_CAT", obama_cat] sure this works as well } 20... Nd3+ 21. Kc2) 20... Rxf2 { [%csl Gf7] } 21. Re1! { [%anno "obama_CAT", obama_cat] (we need to make sure that there are no jurassic) there arent 97% } (21. Ne4!? Kd7 (21... Re2 22. Nd6+ Kc7 $138 { [%csl Bc6][%cal Bd6c6] }) 22. Nc5+ Kc8 23. Ne4 Kd7) (21. Nxe6 Re2 22. Rf1 { [%csl Be2] } (22. Nc7)) 21... Rf6 22. Ne4! { [%csl Gd6][%cal Ge4d6] } 22... Kd7 23. Nxf6+ (23. Nc5+) 23... gxf6 24. Rg1 Na6 25. Rg7+ Kd6 26. c4 c5 (26... Nb4?? 27. c5+ { [%csl Gd7][%cal Gg7d7] } 27... Kd5 28. Rd7+ { [%csl Bd7] }) 27. Rf7 Rg8 $138 { [%csl Bf7] }) 17. dxe6?! (17. dxc6 bxc6 18. h3 Nf6 (18... O-O-O 19. hxg4 f5)) (17. Nd6+ Ke7) 17... O-O-O 18. e7 Rfe8 19. exd8=Q+ Kxd8) 16... Kd7 (16... Ke7 17. Na5 Nxh2 (17... Na6 18. Nxb7 Nc7 (18... Nxh2))) 17. dxe6+ (17. h3 cxd5 (17... Nf6) 18. Na5 Kc8 19. hxg4) 17... fxe6 18. Rg1! (18. Ne5+ Nxe5 19. dxe5 Kc7 (19... Rf4 20. O-O-O+ Kc7 21. Rd6 Re4 22. Rxe6) 20. O-O-O Nd7 21. Rd6) (18. O-O-O) 18... h5 (18... b5 19. Na5 Kc8 20. Rxg4) (18... Rxf2? 19. Rxg4) 19. Rxg4 hxg4 20. Ne5+ Kd8 (20... Ke8 21. Nc4 Kd7 22. Ne5+ Ke8 23. f4 Rf5 24. Ng6 Rh5 25. h4) 21. Nc4 Kd7 22. Ne5+ Kd8 $138 { [%anno "obama_CAT", obama_cat] 1) N>>xe6 Ke8 2)Nc4 e6>xe6 3)Nd6#
+Kc8 2)Nxc6# } *
+
+
+[Event "5d chess london Ng5: 8... Rf8 9) Qe2 / h6 (unstable yet)"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "8... Rf8 9) Qe2 / h6 (unstable yet)"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/3iGgiTDM"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn1qk2r/pp3ppp/2pbpn2/3p2N1/3P1B2/2PQP3/PP3PPP/RN2K2R b KQkq - 2 8"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+8... Rf8 9. Qe2 h6 { [%csl Gf7][%cal Gg5e6] } 10. Nxe6 { [%anno "obama_CAT", obama_cat] i feel that black can have enough time to do something } 10... fxe6 { [%anno "obama_CAT", obama_cat] travel to g7 can be a thing } { [%csl Gg7] } 11. Qf3 Bxf4 { [%anno "obama_CAT", obama_cat] N's cant move
+Q cant move (bc Bxd6 next)
+R move cant move (Qh3)
+Bf4 is left } { [%csl Be5] } (11... Qe7 { [%csl Bf5] } 12. Bxd6 (12. Qg3) 12... Qxd6 { [%csl Bg4] } 13. Qh3 Nbd7 $14 $138 { [%csl Bh3,Be6][%cal Bh3e6] }) (11... Qb6 12. Qh3 Kf7 13. Bxd6 $18) (11... g5 12. Qh3 Qe7 13. Bxd6 Qf7 $16 $138 { [%anno "obama_CAT", obama_cat] MAYBE } { [%csl Be6][%cal Bh3e6] }) 12. exf4 Qe7 { [%csl Be4] } (12... Qb6 13. Qe2 c5 14. Qc2 { [%csl Gg6,Ga4][%cal Gc2g6,Gc2a4] }) (12... Qd7) (12... Rf7!? { [%anno "obama_CAT", obama_cat] has to be considered } 13. Qe2 Re7) 13. Qe2 Nbd7 (13... Ng4 14. O-O) (13... g6!?) (13... e5 14. fxe5 (14. O-O exd4) 14... Nbd7) 14. O-O e5 $16 $138 { [%anno "obama_CAT", obama_cat] travel idea 6
+i am not gonna consider smarter attempts to counter travel like Qe7 Qe2 Qd6 or smth like, maybe later } { [%csl Be6][%cal Be2e6] } *
+
+
+[Event "5d chess london Ng5: 8... Qe7 9) Bd6 / Qxd6 10) Nxf7 Qe7 (not finished)"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "8... Qe7 9) Bd6 / Qxd6 10) Nxf7 Qe7 (not finished)"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/Aacmipcq"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn2k2r/pp3ppp/2pqpn2/3p2N1/3P4/2PQP3/PP3PPP/RN2K2R w KQkq - 0 10"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+{ [%anno "obama_CAT", obama_cat] disclaimer:
+this is not a solution its just a template to build a solution
+
+i remember some ways for black to make it tricky or even better (unlikely but...). }
+10. Nxf7 { [%csl Gf2] } 10... Qe7 { [%anno "obama_CAT", obama_cat] Qd3>>h7[4] Qxf7 Qxh8[3] Kd7 Qa6[2] Ng8 (???check <- does it exist???)[1] and Qb7[0] so the travel has to be done from c2 Qc2>>h7 and Qb7# just in time and remember that any attempts to capture the queen on b7 should be followed with Qb5 N>xb7 Qxb7 or Qa6 and Qxb7 and Q>> } { [%csl Gh7] } (10... Qf8 11. Qxh7 (11. Nxh8 Ne4 12. Qe2 Qf5 13. Qf3) 11... Nxh7 12. Ne5 Qf5 $13 { [%anno "Icemoe", icemoe] white should be wining here } (12... Qxf2+ 13. Kxf2 Rf8+ 14. Ke1 Ng5 15. Nd2)) 11. Nxh8 Nbd7 { [%csl Gg6] } (11... Kd8!? { [%csl Gg6] } 12. Qd1 (12. Nd2 Qf8 { [%csl Gf5] } 13. Ng6 hxg6 { [%csl Ge4][%cal Gc4d6] } 14. Nc4 dxc4 { [%anno "obama_CAT", obama_cat] blue arrow plz instead of green, and i kinda forgot is it working maybe yes, it should be in travel ideas (if not then create)
+wait is it working } { [%csl Gd3,Gh7][%cal Gd3h7] }) 12... b6 { [%csl Gf5] } (12... g6 { [%csl Gf5][%cal Gf6e4] } 13. Qa4 b6 { [%csl Ge4] }) 13. Na3 { [%csl Ga6] } (13. Ng6 hxg6 14. Qd3 Kc8 { [%anno "obama_CAT", obama_cat] replacement for b7 pawn } (14... Qc7)) 13... Ne4 (13... Na6 { [%csl Ge4] } 14. Qc2 Nb4 { [%csl Gd3] } 15. Nf7+ Qxf7 $138 { [%anno "obama_CAT", obama_cat] Qc2>>h7 }) 14. Qf3 Nf6 15. Nc4 dxc4 16. d5 { [%anno "obama_CAT", obama_cat] phase }) (11... Ne4? 12. Qe2 Qh4 13. Qh5+ Qxh5 $138 { [%csl Bg8][%cal Bh8g8] }) (11... Qf8? 12. Ng6 Qf7 13. Ne5 Qh5 14. g4 Qh4 15. Qg6+ hxg6 $138 { [%csl Be6][%cal Be5e6] }) (11... g6?! 12. Nxg6 { [%csl Gf4] } 12... Qg7 (12... Qf7 13. Nf4 { [%csl Gf5] } 13... Ne4) 13. Nf4 (13. Ne5 Nbd7 14. Qf5 exf5)) (11... Kd7) (11... Ng4?? 12. Qxh7 Nxe3 13. fxe3 { [%cal Gh7g6,Gh7g8] }) (11... Na6!? { [%csl Gb4][%cal Ga6b4] } 12. Qc2 (12. a3 e5 13. Ng6 Qf7 14. Nxe5) 12... Nb4) 12. Qc2! { [%anno "obama_CAT", obama_cat] this move makes Q>>xh7 working, is there a name of this tactic "you prolong your travel to make it working" i've used this tactic before. } (12. Ng6 Qf7 { [%csl Gf5] } 13. Nf4 (13. Nh8 Qh5 { [%csl Ge4] }) 13... Ne4) (12. Na3 e5) (12. g4 e5 13. g5 e4 14. gxf6 Qxf6 15. Qe2) (12. Qd1 e5 { [%csl Gf5] }) 12... e5 { [%csl Gf5] } (12... Ne4 13. Qe2 Qh4 (13... g6) 14. Qh5+ Qxh5 $138 { [%csl Bg8][%cal Bh8g8] }) (12... Nc5 { [%csl Gf5] } 13. dxc5 Qxc5 { [%csl Ge4] } 14. Ng6) 13. Ng6 Qf7 { [%csl Ge4] } 14. Nh8 (14. Ne7 Kxe7 { [%csl Gd3] } 15. dxe5 Qg6 (15... Ne4 $138 { [%anno "obama_CAT", obama_cat] travel idea 9 } { [%csl Bh7][%cal Bc2h7] }) (15... Qh5 16. exf6+ Nxf6 17. Qa4 Qe2+ 18. Kxe2 Ne4 19. Qxe4+ dxe4 20. Nd2) 16. Qxg6 hxg6 17. exf6+ gxf6 { [%csl Gg1,Ge5,Gh8,Ga3,Gc1][%cal Ge1g1,Gd7e5,Ga8h8,Gh8h2,Gb1a3,Ge1c1] }) (14. Qf5!? hxg6 { [%csl Gd3] } (14... O-O-O 15. Nxe5 Qe7 { [%cal Gb1d2,Gd2b3,Gb3a5] } 16. Nxc6 (16. Nd2 Ne4 17. Nxd7 Rxd7 18. Nxe4 dxe4) 16... bxc6 17. Qd3 Nb8 { [%csl Gf5,Gd7][%cal Gd3f5,Ge7d7] } 18. Qf5+ Qd7) 15. Qc2) 14... Qh5 15. Nf7! Qh4 { [%cal Gf7d6] } (15... Qg4 16. Nd6+ Ke7 17. Nxb7) (15... Qg6 16. Qxg6 hxg6 17. Nd6+) (15... Kxf7 { [%anno "obama_CAT", obama_cat] no counter travel }) 16. Nd6+ Kf8 $138 { [%cal Gh8f8,Gd6e6] } *
+
+
+[Event "5d chess london Ng5: travel idea 1 (Q>>e6, unprotected c8, len >= 4)"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "travel idea 1 (Q>>e6, unprotected c8, len >= 4)"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/RIvHPJp6"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn1qk2r/pp3ppp/2p1Qn2/3p2N1/3P1b2/2PQP3/PP3PPP/RN2K2R b KQkq - 0 9"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+9... Qe7 10. Qxh7 Bxe3 (10... Rxh7 11. Qc8+) 11. fxe3 { [%anno "obama_CAT", obama_cat] double attack (Qc8#,Qh8#) } { [%cal Ge6c8,Gh7h8] } 11... Rxh7 (11... Qxe6 12. Qxh8+) 12. Qc8+ *
+
+
+[Event "5d chess london Ng5: travel idea 2 (Q>>e6, R on f8, B on d6, len >= 4)"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "travel idea 2 (Q>>e6, R on f8, B on d6, len >= 4)"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/4107UYHY"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn1qkr2/pp3ppp/2pbQn2/3p2N1/3P1B2/2PQP3/PP3PPP/RN2K2R b KQq - 0 9"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+9... Qe7 (9... Be7 10. Qxf7+ Rxf7 11. Ne6) 10. Qc8+ Qd8 { [%csl Be7] } 11. Qxd8+ Kxd8 { [%csl Be6] } 12. Nxf7+ Rxf7 { [%csl Be5] } 13. Bxd6 { [%anno "obama_CAT", obama_cat] N(L0)f6x>(L+1)d6 and go to travel idea 2.1 } *
+
+
+[Event "5d chess london Ng5: travel idea 2.1 after >>xd6"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "travel idea 2.1 after >>xd6"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/QWinI6tt"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn1k4/pp3rpp/2pn1n2/3p4/3P4/2PQP3/PP3PPP/RN2K2R w KQ - 0 13"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+{ [%anno "obama_CAT", obama_cat] (Q) N>xd6 } { [%csl Be4] }
+13. e4 Ndxe4 { [%csl Be3] } 14. Qe2 { [%anno "obama_CAT", obama_cat] softmate } { [%csl Be8][%cal Be2e8] } *
+
+
+[Event "5d chess london Ng5: travel idea 3 (Qe2>>e6, protected c8, w Ne4 L0)"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "travel idea 3 (Qe2>>e6, protected c8, w Ne4 L0)"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/wkyRACmq"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn1qk2r/pp3ppp/2p1Qn2/3p2N1/3P1b2/2PQP3/PP3PPP/RN2K2R b KQkq - 0 9"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+{ [%anno "obama_CAT", obama_cat] Q>>xe6 Qe7 Qc8 Ne6 fxe Qg6 hxg Qe6 Q>e6 N>e6 }
+9... Qe7 10. Qc8+ Qd8 11. Ne6 fxe6 12. Qg6+! { [%anno "obama_CAT", obama_cat] prevents a parallel defence with a pawn } 12... hxg6 13. Qxe6+ { [%anno "obama_CAT", obama_cat] Q>xe6 N>e6# } *
+
+
+[Event "5d chess london Ng5: travel idea 4 (Q>>g6, Qg6 checks f7 king)"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "travel idea 4 (Q>>g6, Qg6 checks f7 king)"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/p3IfVkUx"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn1qk2r/pp3p1p/2pbpnQ1/3p2N1/3P1B2/2PQP3/PP3PPP/RN2K2R b KQkq - 0 9"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+{ [%anno "obama_CAT", obama_cat] checks f7 king } { [%cal Gg6f7] }
+9... hxg6 (9... fxg6 10. Nxe6) 10. Nxe6 fxe6 11. Qxg6+ *
+
+
+[Event "5d chess london Ng5: travel idea 5 (Q>>g6, no f7 pawn)"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "travel idea 5 (Q>>g6, no f7 pawn)"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/7whiKWzg"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn1qk2r/pp5p/2pbpnQ1/3p2B1/3P4/2PQP3/PP3PPP/RN2K2R b KQ - 2 11"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+11... hxg6 (11... Kf8 12. Qh6+ Kg8 13. Bxf6) (11... Kd7 12. Qf7+) (11... Ke7 12. Qxf6+) 12. Qxg6+ Kd7 13. Bxf6 { [%anno "obama_CAT", obama_cat] softmate } *
+
+
+[Event "5d chess london Ng5: travel idea 6 (9... h6, Q>>e6, g6 unprotected)"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "travel idea 6 (9... h6, Q>>e6, g6 unprotected)"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/KbwMn6P4"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn1qkr2/pp4p1/2pbQn1p/3p4/3P1B2/2P1P3/PP2QPPP/RN2K2R b KQq - 0 11"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+11... Qe7 (11... Be7 12. Qh5+ Nxh5 (12... Rf7 13. Qhxf7#) 13. Qg6+) 12. Qh5+ Rf7 (12... Nxh5 13. Qg6+) (12... Kd8 13. Qg6 (13. Qc8+ { [%anno "obama_CAT", obama_cat] in case if you want a hard mate } 13... Kxc8 14. Bxd6)) (12... g6 13. Qxg6+) 13. Qhxf7+ *
+
+
+[Event "5d chess london Ng5: travel idea 7 (Qe2>>e6, protected c8) (recall what line was it)"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "travel idea 7 (Qe2>>e6, protected c8) (recall what line was it)"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/GDSYyRdI"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn1qk2r/pp3ppp/2p1Qn2/3p2N1/3P1b2/2PQP3/PP3PPP/RN2K2R b KQkq - 0 9"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+9... Qe7 10. Qxe7+ { [%anno "obama_CAT", obama_cat] sussy } 10... Kxe7 { [%csl Ge7] } 11. exf4 $13 Ne4 (11... Kd8 12. Ne6+ fxe6 13. c4) 12. Nxf7 Kxf7 13. Qh3 Nf6 14. Qe3 { [%anno "obama_CAT", obama_cat] softmate# } { [%csl Ge7][%cal Ge3e7] } *
+
+
+[Event "5d chess london Ng5: travel idea 8 Q>>g4 (Qe7 is a last black's move)"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "travel idea 8 Q>>g4 (Qe7 is a last black's move)"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/kJZJrQeC"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn2k2r/pp2qppp/2pbpn2/3p2N1/3P1BQ1/2PQP3/PP3PPP/RN2K2R b KQkq - 3 9"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+{ [%anno "obama_CAT", obama_cat] remember the king is on f7 (L0) } { [%csl Gf7] }
+9... Rg8 (9... Nxg4 10. Qxh7 Qf8 (10... Rxh7 11. Nxh7 { [%anno "obama_CAT", obama_cat] # } { [%csl Bf7][%cal Bh7f7] }) 11. Nxe6 fxe6 12. Qg6+) (9... Bxf4 10. Nxe6 Qxe6 (10... fxe6 11. Qgg6+ hxg6 12. Qxg6+) 11. Qxg7 { [%csl Bf7][%cal Bg7f7] }) (9... g6 10. Nxh7 { [%cal Bh7f7] } 10... Nxh7 11. Qgxg6 { [%cal Bg6f7] } 11... fxg6 12. Qxg6+) 10. Nxh7 Nxh7 11. Qxh7 Qf8 12. Qxe6+ fxe6 13. Qg6+ *
+
+
+[Event "5d chess london Ng5: travel idea 9 (Qc2>>h7)"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "travel idea 9 (Qc2>>h7)"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/3p13AFwo"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn2k2r/pp2qNpQ/2p1pn2/3p4/3P4/2PQP3/PP3PPP/RN2K2R b KQkq - 1 11"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+11... Qxf7 (11... Rxh7 12. Nd6+ Qxd6 13. Qg6+) (11... Kd7 12. Qa6 Qxf7 13. Qxb7+) (11... Kf8 12. Nxh8) (11... Kxf7 12. Qdg6+) 12. Qxh8+ Kd7 (12... Ng8 13. Qxg8+ Qxg8 14. Qg6+) (12... Ke7 13. Qc8) (12... Qf8 13. Qg6+) (12... Qg8 13. Qg6+) 13. Qa6 Ng8 14. Qxb7+ *
+
+
+[Event "5d chess london Ng5: jurassic theory 1: Q>>b6"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "jurassic theory 1: Q>>b6"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/0hCFgAd3"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rnbqkbnr/pppppppp/1q6/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+{ [%anno "obama_CAT", obama_cat] note: black will have a travel to b4 mating along quadragonal, so it has to be covered at some point
+note 2: black can not do the (10th or 11th im confused a bit) move due to softmate }
+1. e3 Qxe3+!? (1... e6?! { [%anno "obama_CAT", obama_cat] (is 10-11 turns enough?) } 2. Nf3 { [%anno "obama_CAT", obama_cat] ~~and its kinda boring for black, isnt it?
+white will play Nc3 and black has not enough time to find a strong attack~~ <- it was my lazyness to look at these lines lol }) 2. fxe3 { [%csl Bf3] } (2. dxe3 { [%csl Bf3,Bd1] } 2... e6 3. Qh5!? { [%csl Bf4,Bd2] } (3. Qf3 { [%csl Bf4] } 3... Qh4 4. Nc3 { [%csl Bf5] } (4. c3 { [%csl Bf5] }) 4... f5 5. Bc4 { [%csl Bf6] } 5... Ne7 6. Bxe6 { [%csl Bf7] } 6... Qxf2+ 7. Kxf2 $138 { [%anno "obama_CAT", obama_cat] this is the main threat
+how do we } { [%csl Bf8,Bf2][%cal Bf8f2] }) (3. Qd4 { [%csl Bf4] } 3... Nc6 4. Qf4 { [%csl Bf5] } 4... f5) (3. f4?? Bb4+ 4. c3 Qh4+) (3. Qg4) 3... g6 (3... Qe7 4. Nc3 { [%csl Bf5] } 4... g6 5. Qg4 f5 { [%csl Bf7] } 6. Bb5 fxg4 { [%csl Bf8] } 7. Bxd7+ Bxd7 8. Nf3 gxf3 9. g3) (3... Nf6) 4. Qf5 { [%csl Bd3] } 4... gxf5 5. Nc3 { [%csl Bd4] } 5... Qh4 6. Nf3 { [%csl Bd5] } 6... Bd6 7. Nxh4 { [%csl Bd6][%cal Bd6d1] }) 2... e6 (2... g6!?) 3. Qh5 { [%csl Bf4] } 3... g6 { [%anno "obama_CAT", obama_cat] well black is gonna phase f5 since Qf6 and Q>>f2 shouldnt work coz a queen on h5 protects some squares, and when they will have Qh4+ check i didnt like it } 4. g3 (4. Nf3 { [%csl Bf5] } 4... gxh5 (4... f5) 5. g3 { [%csl Bf6] } 5... f5 6. Nd4 Qe7 7. Nxe6 dxe6 8. Nc3 $17 $138 { [%anno "obama_CAT", obama_cat] (blue arrow) } { [%csl Gf1][%cal Gf8f1] }) 4... gxh5 (4... f5 5. Nc3 (5. Be2) 5... Nf6 (5... Qf6 6. Bc4) 6. Bb5 Nxh5) (4... Qf6) 5. Be2 Qg5 { [%cal Gg1f3] } (5... Bd6 6. Bxh5 Bxg3+ 7. hxg3 Qe7 8. Bxf7+ Qxf7 9. Rxh7) 6. Nf3 Qg6 (6... Qg4 7. Nc3) 7. Nc3!? { [%anno "obama_CAT", obama_cat] sure it covers the quadragonal b4-e1, but is it forced? } (7. Nd4 Qe4 8. Nxe6 dxe6 (8... fxe6 9. Bxh5+) (8... Qxe6 9. Bf1) 9. Bb5+) 7... Bd6 8. Ng5 (8. Nd4) 8... Qxg5 9. Bxh5 { [%anno "obama_CAT", obama_cat] Q>xg7 Bxf7+ Kxf7 yep black does capture that knight... } { [%csl Gg7,Gf7][%cal Gg5g7,Gh5f7] } *
+
+
+[Event "5d chess london Ng5: jurassic theory 1.1: B>>f2"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "jurassic theory 1.1: B>>f2"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/D1teqLji"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rnbqkbnr/pppppppp/1q6/8/8/4P3/PPPP1KPP/RNBQ1BNR b kq - 0 1"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+1... Qxe3+ 2. dxe3 { [%csl Bf3,Bg3] } 2... e6 (2... Nf6 3. Ke1 { [%csl Be1,Bf4,Bh4] } 3... Ng4 4. Qd5 { [%csl Bf5] } 4... e6 5. Qxd7+ { [%csl Bf6] } 5... Bxd7 6. Nf3 c6 7. b4 Bc5 8. Be2 Bxe3 9. Bd2 Bxd2+ 10. Nbxd2 Ne3) (2... Nh6!) 3. Qg4! { [%csl Bf4] } 3... Bd6! (3... Qf6+ 4. Qf4 { [%csl Bf5] } 4... Be7 5. Qxf6 { [%csl Gf6] } 5... Bxf6 6. e4 Nh6 { [%anno "obama_CAT", obama_cat] softmate } (6... Bh4+ 7. g3 Bf6 { [%anno "obama_CAT", obama_cat] its too long isnt it
+so regular Qf6>>f2 shouldnt work } { [%csl Bf2][%cal Bf6f2] }) 7. Ke1 e5 (7... Ng4)) 4. Qf4 Bxf4 5. exf4 Qh4+ { [%anno "obama_CAT", obama_cat] Qx>h4 maybe } *
+
+
+[Event "5d chess london Ng5: jurassic theory 1.2: >>d1 (K on e1 L-1)"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "jurassic theory 1.2: >>d1 (K on e1 L-1)"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/XUhwwhgv"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rnbqkbnr/pppppppp/8/8/8/4P3/PPP2PPP/RNBqKBNR w KQkq - 0 2"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+2. Kxd1 { [%csl Bd1] } 2... e6 3. Nf3 { [%csl Bd2] } (3. Ne2 { [%csl Bd2] } 3... Qh4 4. g3 { [%csl Bd3] } 4... Qf6 5. Nf4 { [%csl Bd4] } 5... Qd4+ 6. exd4 { [%csl Bd5] } 6... Bd6) 3... Qh4 { [%anno "obama_CAT", obama_cat] threat: Qxf2# (checking >>e1) } 4. Nxh4 { [%csl Bd3] } (4. Bd3?? Qxf2 { [%anno "obama_CAT", obama_cat] checkmate (L-1)e1 }) 4... b5 5. Bc4 { [%csl Bd4] } (5. Bxb5 { [%csl Bd4] } 5... Bd6) (5. Nc3 { [%csl Bd4] } 5... Bb7 6. Nf5 { [%csl Bd5] } 6... exf5 7. Nxb5 Bd5) (5. Bd3 { [%csl Bd4] } 5... Bd6 6. Nc3 { [%csl Bd5] } 6... Bb7 { [%csl Bd1][%cal Bd6d1] }) 5... bxc4 6. Nf5 (6. e4 { [%csl Bd5] } 6... Bd6 { [%csl Bd1][%cal Bd6d1] }) 6... exf5 (6... e5) 7. Nc3 Bd6 { [%cal Bd6d1] } *
+
+
+[Event "5d chess london Ng5: jurassic theory 2: R>>h4"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "jurassic theory 2: R>>h4"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/iUukbTfE"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rnbqkbnr/pppppppp/8/8/7r/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+1. Nf3 Rf4 2. e3 e6 3. Bd3 Nc6 (3... Rxf3 4. Qxf3 Qh4 5. Qg3 Qxg3 6. hxg3) 4. Qe2 Rxf3 5. Qxf3 Ne5 6. Qg3 Nxd3+ 7. cxd3 Nf6 8. Nc3 *
+
+
+[Event "5d chess london Ng5: 8... Bxf4 9) Nxf7"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "D02"]
+[Opening "Queen's Pawn Game: Symmetrical Variation"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "8... Bxf4 9) Nxf7"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/deTn2FRE"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+1. Nf3 Nf6 2. d4 d5 3. c3 c6 4. Bf4 Bf5 5. e3 e6 6. Bd3 Bxd3 7. Qxd3 Bd6 8. Ng5 Bxf4 9. Nxf7 Kxf7 10. exf4 { [%csl Gd3] } 10... Ng4 11. Qe2 h5 12. Nd2 Ne3 { [%csl Ge2] } 13. Qxe3 { [%csl Ge5] } 13... e5 { [%anno "obama_CAT", obama_cat] phase } 14. Qxe5 Re8 { [%cal Ge8e1] } 15. Nf3 { [%cal Gf3e5,Ge8e5,Ge5f5] } 15... Kg8 { [%cal Gf3g5] } 16. Ng5 { [%cal Gf3g5,Gg5g6] } 16... Rxe5+ { [%cal Gd4e5,Gd8g5] } 17. dxe5 { [%anno "obama_CAT", obama_cat] ot } { [%cal Gd4e5,Gg5g6] } 17... Qb6 { [%csl Gf2,Gb6][%cal Gg5g6,Gb6f2] } 18. O-O Qb5 { [%csl Ge2][%cal Gb5d3,Gd3e2] } 19. Rfe1 Qd3 { [%anno "obama_CAT", obama_cat] cursed i did not analyzed that thorouly } *
+
+
+[Event "5d chess london Ng5: analyzing chapter"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "analyzing chapter"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/yCJUo5pS"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[FEN "rn1qk2r/pp3ppp/2p1pn2/3p2N1/3P1b2/2PQP3/PP3PPP/RN2K2R w KQkq - 0 9"]
+[SetUp "1"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+9. exf4 Qe7 10. Nd2 Ne4 11. Ndxe4 dxe4 12. Qxe4 Nd7 { [%csl Be6] } 13. O-O Nf6 { [%csl Be5] } (13... h6 14. Nf3 (14. f5 { [%cal Ge7g5,Gf5e6] } 14... Qxg5 { [%csl Gc7,Be8] } (14... Nf6 15. Qe2 hxg5) 15. fxe6 O-O-O { [%csl Be7] } 16. exd7+ Rxd7 { [%csl Be6] } 17. Rae1 (17. c4 Qg6 18. Qe3) 17... Qd5 { [%csl Be5] } (17... f5 { [%csl Be5] } 18. Qe5 (18. f4 fxe4 19. fxg5 Re8 20. g6 Rd6 21. Rf7 Rxg6)) 18. Qf4 (18. Qh7 Rdd8) (18. Qg4 { [%csl Be4] }) (18. Qe3 Qe6) 18... Rhd8 { [%csl Be4] } 19. Qe3 Qd6 { [%csl Be3][%cal Be3e8] })) 14. Qe5 Nd7 { [%csl Be4] } 15. Qe2 e5 { [%csl Be3] } 16. Ne6 Qxe6 { [%csl Be2] } *
+
+
+[Event "5d chess london Ng5: analyzing chapter 2"]
+[Date "2026.10.17"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5d chess london Ng5"]
+[ChapterName "analyzing chapter 2"]
+[ChapterURL "https://lichess.org/study/NF2z9qKZ/ha2Hk58y"]
+[Annotator "https://lichess.org/@/PlankfullFire"]
+[UTCDate "2026.10.17"]
+[UTCTime "19:16:35"]
+
+ *
+
+
