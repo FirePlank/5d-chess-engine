@@ -503,7 +503,7 @@ export class MultiverseView {
           else {
             this.revealed.add(badge);
             // Bring the check into view: the attacker's board and the board it captures on.
-            const boards = this.shownChecks().filter((ch) => ch.to[0] === badge).flatMap((ch) => [[ch.from[0], 2 * ch.from[1] + ch.c], [ch.to[0], 2 * ch.to[1] + ch.c]]);
+            const boards = this.shownChecks().filter((ch) => this.checkLines(ch).includes(badge)).flatMap((ch) => [[ch.from[0], 2 * ch.from[1] + ch.c], [ch.to[0], 2 * ch.to[1] + ch.c]]);
             if (boards.length) this.showBoards(boards, true);
           }
           this.redraw();
@@ -885,13 +885,28 @@ export class MultiverseView {
 
   /**
    * The checks drawn: while an action is being built, every check it leaves (as 5dcol shows
-   * a pending move's checks); otherwise only those of timelines whose "!" was clicked.
+   * a pending move's checks), and at checkmate all of them; otherwise only those of timelines
+   * whose "!" was clicked.
    */
   shownChecks() {
     const v = this.view;
     const checks = (v && v.checks) || [];
-    if (v.draft && v.draft.length) return checks;
-    return checks.filter((ch) => this.revealed.has(ch.to[0]));
+    // At checkmate every check is shown, to see why and how it is mate.
+    if ((v.draft && v.draft.length) || v.status === 'checkmate') return checks;
+    return checks.filter((ch) => this.checkLines(ch).some((l) => this.revealed.has(l)));
+  }
+
+  /**
+   * The timelines whose "!" badge stands for check `ch`: the attacker's and the royal's, each
+   * only if its latest board is the side to move's (not moving there is what lets the check
+   * happen, as 5dcol's pass warnings).
+   */
+  checkLines(ch) {
+    const v = this.view;
+    return [...new Set([ch.from[0], ch.to[0]])].filter((l) => {
+      const tl = this.timelines.get(l);
+      return tl && tl.end[1] === v.player;
+    });
   }
 
   /**
@@ -902,8 +917,8 @@ export class MultiverseView {
   drawCheckBadges() {
     const { ctx, view: v } = this;
     this.badges = [];
-    if (!v || (v.draft && v.draft.length)) return;
-    const lines = [...new Set((v.checks || []).map((ch) => ch.to[0]))];
+    if (!v || (v.draft && v.draft.length) || v.status === 'checkmate') return;
+    const lines = [...new Set((v.checks || []).flatMap((ch) => this.checkLines(ch)))];
     for (const l of lines) {
       const tl = this.timelines.get(l);
       if (!tl) continue;
