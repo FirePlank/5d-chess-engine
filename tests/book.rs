@@ -49,9 +49,15 @@ fn positions_are_found_however_they_were_reached() {
         t = play_action(&t, &parse_lan_moves(act).unwrap()).unwrap();
     }
     assert_eq!(t.hash(), s.hash());
-    // The book is Turn Zero only: other variants are never in it.
-    assert!(Book::theory().probe(&position("Standard", "")).is_none());
-    assert!(Book::theory().probe(&position("Standard", "(0T1)g1f3 submit (0T1)g8f6 submit (0T2)d2d4 submit")).is_none());
+    // Standard has its own section: White plays 1. Nf3 (the London study's line), Black answers
+    // everything with Nf6 (the f7 sac defences), and the Turn Zero positions are not Standard ones.
+    let std_start = Book::theory().probe(&position("Standard", "")).expect("Standard start");
+    assert!(std_start.iter().all(|m| m.play == (m.lan == "(0T1)g1f3")), "{:?}", std_start.iter().map(|m| &m.lan).collect::<Vec<_>>());
+    let std_nf6 = Book::theory().probe(&position("Standard", "(0T1)e2e3 submit")).expect("Standard 1. e3");
+    assert!(std_nf6.iter().any(|m| m.play && m.lan == "(0T1)g8f6"));
+    let std_d4 = Book::theory().probe(&position("Standard", moves)).expect("Standard 1. Nf3 Nf6 2. d4");
+    assert!(std_d4.iter().any(|m| m.play && m.lan == "(0T2)d7d5" && m.weight == 10));
+    assert!(!std_d4.iter().any(|m| m.lan == "(0T2)c7c5"), "Sarp's is Turn Zero theory only");
     // Out of book.
     assert!(Book::theory().probe(&position("Standard - Turn Zero", "(0T1)h2h4 submit (0T1)h7h5 submit")).is_none());
 }
@@ -119,9 +125,10 @@ fn own_book_plays_book_moves_only_when_on() {
     assert!(["(0T1)g1f3", "(0T1)e2e3", "(0T1)e2e4"].contains(&best.as_str()), "{}", best);
     assert_eq!(lines.len(), 1);
     assert!(lines[0].starts_with(&format!("string book {}", best)), "{}", lines[0]);
-    // On, but the book is Turn Zero only: a normal search in Standard.
-    let (_, lines) = search(Some(true), "Standard", "");
-    assert!(lines.iter().all(|l| !l.contains("book")) && lines.iter().any(|l| l.starts_with("depth")));
+    // On in Standard: its own book (1. Nf3).
+    let (best, lines) = search(Some(true), "Standard", "");
+    assert_eq!(best, "(0T1)g1f3");
+    assert!(lines.len() == 1 && lines[0].starts_with("string book (0T1)g1f3"), "{:?}", lines);
     // On, out of book: a normal search.
     let (_, lines) = search(Some(true), "Standard - Turn Zero", "(0T1)h2h4 submit (0T1)h7h5 submit");
     assert!(lines.iter().all(|l| !l.contains("book")) && lines.iter().any(|l| l.starts_with("depth")));
@@ -143,4 +150,53 @@ fn api_book_hint_and_book_search() {
     assert!(["(0T1)g1f3", "(0T1)e2e3", "(0T1)e2e4"].iter().any(|m| r.contains(&format!("\"bestmove\":\"{}\"", m))), "{}", r);
     let r = api.call(&format!(r#"{{"cmd":"book","position":"{} moves (0T1)h2h4 submit"}}"#, pos), &mut info);
     assert!(r.contains("\"moves\":[]"), "{}", r);
+}
+
+/// 5DUCI moves of the London line 1. Nf3 Nf6 2. d4 d5 3. c3 c6 4. Bf4 Bf5 5. e3 e6 6. Bd3 Bxd3
+/// 7. Qxd3 Bd6 8. Ng5, followed by `more`.
+fn london(more: &str) -> String {
+    let main = "(0T1)g1f3 submit (0T1)g8f6 submit (0T2)d2d4 submit (0T2)d7d5 submit (0T3)c2c3 submit (0T3)c7c6 submit                 (0T4)c1f4 submit (0T4)c8f5 submit (0T5)e2e3 submit (0T5)e7e6 submit (0T6)f1d3 submit (0T6)f5d3 submit                 (0T7)d1d3 submit (0T7)f8d6 submit (0T8)f3g5 submit";
+    format!("{} {}", main, more)
+}
+
+#[test]
+fn london_ng5_study_in_both_variants() {
+    for variant in ["Standard - Turn Zero", "Standard"] {
+        let b = Book::theory();
+        // 8...Bxf4: 9. exf4 is the main line, 9. Nxf7!? a sideline.
+        let after_bxf4 = b.probe(&position(variant, &london("(0T8)d6f4 submit"))).expect("8...Bxf4");
+        assert!(after_bxf4.iter().any(|m| m.play && m.weight == 10 && m.lan == "(0T9)e3f4"), "{}", variant);
+        assert!(after_bxf4.iter().any(|m| m.play && m.weight == 3 && m.lan == "(0T9)g5f7"), "{}", variant);
+        // Black's 8th moves are known, not played (the study is White's repertoire).
+        let after_ng5 = b.probe(&position(variant, &london(""))).expect("8. Ng5");
+        assert!(after_ng5.iter().all(|m| !m.play) && after_ng5.len() >= 4, "{}", variant);
+        // Travel idea 1: after 9. exf4 Qe7 10. Nd2 Nbd7 11. Qe2 e5 12. Ne6 Qxe6 the queen goes
+        // from e2 to the T9 board's e6.
+        let s = position(
+            variant,
+            &london("(0T8)d6f4 submit (0T9)e3f4 submit (0T9)d8e7 submit (0T10)b1d2 submit (0T10)b8d7 submit (0T11)d3e2 submit (0T11)e6e5 submit (0T12)g5e6 submit (0T12)e7e6 submit"),
+        );
+        let m = b.choose(&s, 0).expect("travel idea 1");
+        assert_eq!(m.lan, "(0T13)e2(0T9)e6", "{}", variant);
+    }
+}
+
+#[test]
+fn bg5_bg4_e3_black_avoids_ne4_and_bxf3() {
+    let pre = "(0T1)g1f3 submit (0T1)g8f6 submit (0T2)d2d4 submit (0T2)d7d5 submit (0T3)c2c3 submit (0T3)c7c6 submit (0T4)c1g5 submit (0T4)c8g4 submit (0T5)e2e3 submit";
+    for variant in ["Standard - Turn Zero", "Standard"] {
+        let b = Book::theory();
+        let s = position(variant, pre);
+        assert!(b.probe(&s).unwrap().iter().any(|m| !m.play && m.lan == "(0T5)f6e4"), "{}", variant);
+        for seed in 0..200 {
+            let m = b.choose(&s, seed).unwrap();
+            assert!(m.lan == "(0T5)e7e6" || m.lan == "(0T5)b8d7", "{} {}", variant, m.lan);
+        }
+        // After 5...Ne4 6. h3 the bishop retreats; Bxf3 is known, not played.
+        let s = position(variant, &format!("{} (0T5)f6e4 submit (0T6)h2h3 submit", pre));
+        for seed in 0..50 {
+            assert_eq!(b.choose(&s, seed).unwrap().lan, "(0T6)g4h5", "{}", variant);
+        }
+        assert!(b.probe(&s).unwrap().iter().any(|m| !m.play && m.lan == "(0T6)g4f3"));
+    }
 }
