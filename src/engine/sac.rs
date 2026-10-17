@@ -22,10 +22,12 @@
 //! and of the latest boards of created timelines; `PROOF` every position of a local mate proof
 //! with its distance, so the evaluation can follow a sac line in progress move by move.
 
+use crate::core::action::FullMove;
 use crate::core::bitboard::*;
 use crate::core::board::Board;
 use crate::core::hypercuboid::has_physical_check;
-use crate::core::multiverse::{board_key, Multiverse};
+use crate::core::multiverse::{board_key, MoveList, Multiverse};
+use crate::core::vec4::Vec4;
 use crate::core::piece::*;
 use crate::core::state::State;
 use std::cell::RefCell;
@@ -955,6 +957,57 @@ pub fn root_terms(m: &Multiverse, rt: &RootTravels) -> ([i32; 2], [i32; 2]) {
         open[e.c as usize] += (if q != 0 { e.queen_open & empty } else { 0 } | if b != 0 { e.bishop_open & empty } else { 0 }).count_ones() as i32;
     }
     (now, open)
+}
+
+// ------------------------------------------------------------------ the f-sac signature
+
+/// Turns up to which a travel's target board makes the f-sac signature.
+pub const SIG_TURN: i32 = 6;
+
+/// The f-sac signature travels of the side to move: a queen or bishop on a board it can play
+/// travelling onto a past board of turn `SIG_TURN` at most (so creating a timeline), next to an
+/// enemy royal there, capturing or giving check (a queen always does next to the royal, a bishop
+/// on the diagonals). Ordered: onto f7/f2 first, queens before bishops.
+pub fn signature_travels(s: &State) -> Vec<FullMove> {
+    let m = s.multiverse();
+    let c = s.get_present().1;
+    let (lo, hi) = m.get_lines_range();
+    let mut out: Vec<(i32, FullMove)> = Vec::new();
+    let mut ml = MoveList::new();
+    for l in lo..=hi {
+        let (t, col) = m.get_timeline_end(l);
+        if col != c {
+            continue;
+        }
+        let b = m.board(l, t, c);
+        for sq in marked_pos((b.queen() | b.bishop()) & b.hostile(!c)) {
+            let queen = b.queen() & pmask(sq) != 0;
+            let p = Vec4::from_xy(sq, Vec4::new(0, 0, t, l));
+            ml.clear();
+            m.gen_superphysical_moves(p, c, &mut ml);
+            for &(q0, bb) in &ml {
+                if q0.t() > SIG_TURN || m.get_timeline_end(q0.l()) == (q0.t(), c) {
+                    continue;
+                }
+                let Some(tb) = m.get_board_ptr(q0.l(), q0.t(), c) else { continue };
+                let royals = tb.royal() & tb.hostile(c);
+                let mut zone = 0;
+                for r in marked_pos(royals) {
+                    zone |= king_attack(r);
+                }
+                for dst in marked_pos(bb & zone) {
+                    let capture = tb.hostile(c) & pmask(dst) != 0;
+                    let check = queen || marked_pos(royals & king_attack(dst)).any(|r| (r & 7) != (dst & 7) && (r >> 3) != (dst >> 3));
+                    if capture || check {
+                        let f_square = (dst & 7) == 5 && (dst >> 3 == 1 || dst >> 3 == 6);
+                        out.push(((!f_square) as i32 * 2 + (!queen) as i32, FullMove::new(p, Vec4::from_xy(dst, q0))));
+                    }
+                }
+            }
+        }
+    }
+    out.sort_by_key(|x| x.0);
+    out.into_iter().map(|x| x.1).collect()
 }
 
 // ------------------------------------------------------------------ the search's use

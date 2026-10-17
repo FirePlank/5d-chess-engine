@@ -400,6 +400,9 @@ pub struct AlphaBeta {
     /// `OwnBook`: play a book action (`book::Book::theory`) without searching when the root
     /// is a book position with one.
     own_book: bool,
+    /// `SacBot` (testing): play an f-sac signature travel (`sac::signature_travels`) whenever
+    /// one is legal, without a search: the opponent of the sac gauntlet.
+    sac_bot: bool,
     /// Lazy SMP helper threads (started by the first search that needs them).
     helpers: Vec<Helper>,
     /// Nodes of the helpers in the last search.
@@ -667,6 +670,7 @@ impl AlphaBeta {
             threads: 1,
             multipv: 1,
             own_book: false,
+            sac_bot: false,
             helpers: Vec::new(),
             helper_nodes: 0,
             helper_results: 0,
@@ -2180,6 +2184,14 @@ impl AlphaBeta {
     /// Returns true when the option was recognized: `Hash` (MB), `Threads`, `MultiPV` or
     /// `OwnBook` (true/false, or a number: non-zero is on).
     pub fn set_option(&mut self, key: &str, value: &OptionValue) -> bool {
+        if key == "SacBot" {
+            self.sac_bot = match value {
+                OptionValue::Bool(b) => *b,
+                OptionValue::Str(s) => s.eq_ignore_ascii_case("true"),
+                v => v.as_f64().is_some_and(|x| x != 0.0),
+            };
+            return true;
+        }
         if key == "OwnBook" {
             self.own_book = match value {
                 OptionValue::Bool(b) => *b,
@@ -2255,6 +2267,19 @@ impl AlphaBeta {
                 info(format!("string book {} ; {} (weight {} of {})", m.lan, m.pgn, m.weight, book.play_weight(root)));
                 self.last_score = 0;
                 return Some(m.action.clone());
+            }
+        }
+        if self.sac_bot {
+            let mut work = root.clone();
+            work.enable_undo();
+            for fm in super::sac::signature_travels(root) {
+                let seq: MoveSeq = MoveSeq::from(&[fm][..]);
+                if let Some(mark) = Self::make_checked(&mut work, &seq) {
+                    work.unmake(mark);
+                    info(format!("string sacbot {}", fm));
+                    self.last_score = 0;
+                    return Some(Action::from_moveseq(&seq, root));
+                }
             }
         }
         let start = Instant::now();
