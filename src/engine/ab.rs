@@ -59,7 +59,7 @@ const ROOT_WIDEN_CAP: usize = 256;
 const TRAVEL_MATE_PLY: usize = 2;
 /// Hypercuboids the search for an evasion of such a check may look at (an evasion is usually
 /// found in a few; past this the check counts as no mate).
-const TRAVEL_MATE_STEPS: u32 = 128;
+const TRAVEL_MATE_STEPS: u32 = 64;
 /// Hypercuboids the cursor may take on a capturing travel (`travel_captures`) before it gives
 /// it up (when most of its combinations with the other boards' moves are illegal, finding one
 /// can take thousands).
