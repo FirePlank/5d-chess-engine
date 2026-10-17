@@ -21,7 +21,7 @@
 //!
 //! `--games-out` appends one JSON object per game; games 2k and 2k+1 form pair k. Its moves
 //! start with the opening's `book` actions. Its `evals` are the engines' reported scores on
-//! the reported scale (`"eval_scale":3000`: internal units * 100 / 3000, see
+//! the reported scale (`"eval_scale":4800`: internal units * 100 / 4800, see
 //! `kairos::engine::REPORT_SCALE`; mates as +-20000); records without `eval_scale` are older
 //! and hold internal units.
 //!

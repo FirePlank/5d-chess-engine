@@ -70,14 +70,14 @@ fn threaded_searches_report_mates() {
 #[test]
 fn reported_scale() {
     // +100 reported is about a 75% expected score, +200 about 90%, +400 about 99%.
-    assert_eq!(report_cp(3000), 100);
-    assert_eq!(report_cp(-6000), -200);
-    assert_eq!(internal_cp(100), 3000);
-    assert_eq!(wdl(3000), (752, 0, 248));
-    assert_eq!(wdl(6000).0, 902);
-    assert_eq!(wdl(12000).0, 988);
+    assert_eq!(report_cp(4800), 100);
+    assert_eq!(report_cp(-9600), -200);
+    assert_eq!(internal_cp(100), 4800);
+    assert_eq!(wdl(4800), (751, 0, 249));
+    assert_eq!(wdl(9600).0, 901);
+    assert_eq!(wdl(19200).0, 988);
     assert_eq!(wdl(0), (500, 0, 500));
     assert_eq!(score_text(MATE - 5), "mate 3 wdl 1000 0 0");
     assert_eq!(score_text(-(MATE - 4)), "mate -2 wdl 0 0 1000");
-    assert_eq!(score_text(142), "cp 5 wdl 513 0 487");
+    assert_eq!(score_text(142), "cp 3 wdl 508 0 492");
 }
