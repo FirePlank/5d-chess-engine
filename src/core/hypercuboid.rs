@@ -1885,6 +1885,15 @@ pub struct BestFirstCursor {
     sc: PointScratch,
     checks: CheckBuf,
     lone: Option<LoneWalk>,
+    /// Class of the last action found.
+    last_class: i32,
+    /// Classes below this one (`limit_classes`) are dropped after `limit_steps` hypercuboids
+    /// without an action.
+    limit_below: i32,
+    limit_steps: u32,
+    /// The limited class being enumerated and the hypercuboids it has taken.
+    limit_class: i32,
+    limit_taken: u32,
 }
 
 /// The first class of a context with one playable board: the coordinates of its axis 0 still
@@ -2000,6 +2009,11 @@ impl Default for BestFirstCursor {
             sc: PointScratch::default(),
             checks: CheckBuf::default(),
             lone: None,
+            last_class: 0,
+            limit_below: 0,
+            limit_steps: 0,
+            limit_class: -1,
+            limit_taken: 0,
         }
     }
 }
@@ -2019,6 +2033,8 @@ impl BestFirstCursor {
 
     /// Enumerate `ss` (of the context `info`) from the start under the current ordering.
     pub fn restart(&mut self, info: &HcInfo, ss: SearchSpace) {
+        self.limit_below = 0;
+        self.limit_class = -1;
         self.heap.heap.clear();
         self.heap.seq = 0;
         self.heap.universe.clone_from(info.get_universe());
@@ -2047,6 +2063,27 @@ impl BestFirstCursor {
         self.next_with(info, s, &mut |_, _| {}).expect("branch entries built")
     }
 
+    /// The class of the last action found: the initial hypercuboid it came from, counted from
+    /// the last one (0) back.
+    pub fn last_class(&self) -> i32 {
+        self.last_class
+    }
+
+    /// Until the next `restart`, each of the classes below `classes` (the first ones) is
+    /// dropped once `steps` of its hypercuboids gave no action.
+    pub fn limit_classes(&mut self, classes: i32, steps: u32) {
+        self.limit_below = classes;
+        self.limit_steps = steps;
+        self.limit_class = -1;
+    }
+
+    /// Drop the rest of the actions of class `class`, the one being enumerated.
+    pub fn drop_class(&mut self, class: i32) {
+        while self.heap.heap.peek().is_some_and(|it| it.key.0 == -class) {
+            self.heap.heap.pop();
+        }
+    }
+
     /// `next`, ordering pending branch axes with `fill` once needed; stops with `NeedBranch`
     /// (and no progress) when the next hypercuboid needs the branch entries `info` deferred.
     pub fn next_with(&mut self, info: &HcInfo, s: &State, fill: &mut BranchFill) -> Result<Option<MoveSeq>, NeedBranch> {
@@ -2064,6 +2101,7 @@ impl BestFirstCursor {
                 }
                 walk.point[0] = i;
                 if info.lone_point_legal(s, &walk.point, &mut self.checks) {
+                    self.last_class = 0;
                     return Ok(Some(info.to_action(&walk.point)));
                 }
             }
@@ -2081,6 +2119,17 @@ impl BestFirstCursor {
                 return Err(NeedBranch);
             }
             let class = -key.0;
+            if class < self.limit_below {
+                if class != self.limit_class {
+                    self.limit_class = class;
+                    self.limit_taken = 0;
+                }
+                self.limit_taken += 1;
+                if self.limit_taken > self.limit_steps {
+                    self.drop_class(class);
+                    continue;
+                }
+            }
             self.heap.need_branch(&hc, true, fill);
             if !info.take_point(&mut hc, &self.heap.order, &mut self.sc) {
                 continue;
@@ -2091,6 +2140,7 @@ impl BestFirstCursor {
                 None => {
                     let act = info.to_action(pt);
                     hc.remove_point_with(pt, |h| heap.push(h, class, fill));
+                    self.last_class = class;
                     return Ok(Some(act));
                 }
                 Some(problem) => {

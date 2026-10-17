@@ -60,6 +60,10 @@ const TRAVEL_MATE_PLY: usize = 2;
 /// Hypercuboids the search for an evasion of such a check may look at (an evasion is usually
 /// found in a few; past this the check counts as no mate).
 const TRAVEL_MATE_STEPS: u32 = 64;
+/// Hypercuboids the cursor may take on a capturing travel (`travel_captures`) before it gives
+/// it up (when most of its combinations with the other boards' moves are illegal, finding one
+/// can take thousands).
+const TRAVEL_CAPTURE_STEPS: u32 = 8;
 /// Aspiration windows (Apeiron's scheme): from depth ASP_MIN_DEPTH, after a completed depth
 /// with a non-mate score `prev`, the root is searched in [prev - w, prev + w], w starting at
 /// ASP_WINDOW; a fail low or high multiplies w by ASP_FAIL_MULT and moves that bound to
@@ -985,6 +989,97 @@ impl AlphaBeta {
         None
     }
 
+    /// Capturing travels a node would search late or never: a travel onto a board's end that
+    /// leaves or reaches a board the side to move need not play (`without_future` leaves those
+    /// out; after a sac, the main timeline's pieces jumping back onto the attacked one), and
+    /// captures a queen, princess or rook, or a piece giving check. Each gets a hypercuboid of
+    /// its own, with the other optional boards unplayed and no timeline branching off,
+    /// appended to `first` (so they come first, the most valuable capture first: see
+    /// `BestFirstCursor`); returns their number.
+    fn travel_captures(&mut self, s: &State, info: &HcInfo, ss: &SearchSpace, first: &mut SearchSpace) -> usize {
+        let dim = info.dimension();
+        let fba = info.first_branch_axis();
+        let present = s.get_present();
+        let player = present.1;
+        let (amin, amax) = s.get_active_range();
+        let (lo, hi) = s.get_lines_range();
+        let optional: Vec<usize> = (lo..=hi)
+            .filter(|&l| !(l >= amin && l <= amax && s.get_timeline_end(l) == present))
+            .filter_map(|l| info.line_to_axis(l))
+            .collect();
+        if optional.is_empty() {
+            return 0;
+        }
+        // (priority, departure axis, departure coordinate, arrival axis, arrival coordinate)
+        let mut travels: Vec<(i32, usize, Index, usize, Index)> = Vec::new();
+        // The pieces giving check (where they stand: the boards to play), once needed.
+        let mut checkers: Option<Vec<(i32, i32)>> = None;
+        let u = info.get_universe();
+        for n in 0..fba {
+            let wanted = optional.contains(&n);
+            for i in u[n].iter() {
+                let Entry::Arriving { m, idx, fa, victim, .. } = info.entry(n, i) else { continue };
+                let fa = *fa as usize;
+                if *victim == NO_PIECE || !(wanted || optional.contains(&fa)) {
+                    continue;
+                }
+                let priority = if matches!(*victim, QUEEN_W | PRINCESS_W | ROOK_W) {
+                    piece_value(*victim)
+                } else {
+                    let c = checkers.get_or_insert_with(|| {
+                        if self.in_check(s) {
+                            CheckPosition::for_phantom(s).checks(!player, true).iter().map(|m| (m.from.l(), m.from.xy())).collect()
+                        } else {
+                            Vec::new()
+                        }
+                    });
+                    if !c.contains(&(m.to.l(), m.to.xy())) {
+                        continue;
+                    }
+                    CHECK_BONUS
+                };
+                travels.push((priority, fa, *idx, n, i));
+            }
+        }
+        // The last hypercuboid comes first.
+        travels.sort_by_key(|t| t.0);
+        let k = first.hcs.len();
+        for &(_, fa, dep, n, i) in &travels {
+            for hc in &ss.hcs {
+                if !hc[fa].contains(dep)
+                    || !hc[n].contains(i)
+                    || optional.iter().any(|&p| p != fa && p != n && !hc[p].contains(0))
+                    || (fba..dim).any(|b| !hc[b].contains(0))
+                {
+                    continue;
+                }
+                let mut h: Hc = hc.clone();
+                for &p in &optional {
+                    h[p].assign_singleton(0);
+                }
+                for b in fba..dim {
+                    h[b].assign_singleton(0);
+                }
+                h[fa].assign_singleton(dep);
+                h[n].assign_singleton(i);
+                first.hcs.push(h);
+            }
+        }
+        first.hcs.len() - k
+    }
+
+    /// Whether the action `cursor` just found is a capturing travel's (its class is one of the
+    /// first `travels`, see `travel_captures`): a travel is searched in one action, so the
+    /// rest of its class is dropped.
+    fn travel_class(cursor: &mut BestFirstCursor, travels: usize) -> bool {
+        let class = cursor.last_class();
+        if class as usize >= travels {
+            return false;
+        }
+        cursor.drop_class(class);
+        true
+    }
+
     /// Whether the side to move has a legal action (each evades the check), as far as
     /// `TRAVEL_MATE_STEPS` hypercuboids show (past them: yes).
     fn has_evasion(&mut self, s: &State) -> bool {
@@ -1584,11 +1679,14 @@ impl AlphaBeta {
                 return v;
             }
         }
-        let first = Self::without_future(s, &nb.info, &ss);
+        let mut first = Self::without_future(s, &nb.info, &ss);
+        // Capturing travels first: the first classes of the cursor (see `travel_class`).
+        let travels = self.travel_captures(s, &nb.info, &ss, &mut first);
         let mut full = Some(ss);
         {
             let NodeBufs { info, cursor, order, .. } = &mut *nb;
             self.start_actions(s, info, cursor, order, first, true);
+            cursor.limit_classes(travels as i32, TRAVEL_CAPTURE_STEPS);
         }
         let mut generated = 0usize;
         let mut exhausted = false;
@@ -1629,8 +1727,13 @@ impl AlphaBeta {
                         }
                         Ok(Some(act)) => {
                             generated += 1;
+                            let travel = full.is_some() && Self::travel_class(&mut nb.cursor, travels);
                             if pre_tried.contains(&act) {
                                 continue;
+                            }
+                            if travel {
+                                // (One creating a timeline comes again among those actions.)
+                                pre_tried.push(act.clone());
                             }
                             if tt_action.as_ref() == Some(&act) {
                                 // Only reached when the TT action failed validation (searched
@@ -2193,7 +2296,11 @@ impl AlphaBeta {
             self.future_mate_in_one(root, &hc, &ss)
         };
         let mut agen = BestFirstCursor::default();
-        self.start_actions(root, &hc, &mut agen, &mut OrderScratch::default(), Self::without_future(root, &hc, &ss), false);
+        let mut first = Self::without_future(root, &hc, &ss);
+        let travels = self.travel_captures(root, &hc, &ss, &mut first);
+        let mut travel_acts: Vec<MoveSeq> = Vec::new();
+        self.start_actions(root, &hc, &mut agen, &mut OrderScratch::default(), first, false);
+        agen.limit_classes(travels as i32, TRAVEL_CAPTURE_STEPS);
         let mut full = Some(ss);
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
         // Enumerating every root action can take seconds with many timelines: spend at most
@@ -2220,7 +2327,14 @@ impl AlphaBeta {
                 None => agen.next(&hc, root),
             };
             match next {
-                Some(a) => roots.push((self.action_score(root, &a, 0), a)),
+                Some(a) => {
+                    if full.is_some() && Self::travel_class(&mut agen, travels) {
+                        travel_acts.push(a.clone());
+                        roots.push((self.action_score(root, &a, 0), a));
+                    } else if !travel_acts.contains(&a) {
+                        roots.push((self.action_score(root, &a, 0), a));
+                    }
+                }
                 // Out of time: with no action found yet, none can be played.
                 None if interrupted() => break,
                 None if roots.is_empty() && full.is_some() => agen.restart(&hc, full.take().unwrap()),
