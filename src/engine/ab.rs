@@ -1262,7 +1262,9 @@ impl AlphaBeta {
                     gain += super::local::capture_gain(s.board(l, t, c), c, height, &self.local_vals);
                 }
             }
-            return stand + gain;
+            // A royal en prise is worth `local::ROYAL_VALUE` per board, so the sum can reach
+            // the mate range: it is kept below it (a leaf estimate is never a mate).
+            return (stand + gain).min(MATE - 1000);
         }
         // In check: the evasion that failed high here last first, before building the rest.
         let mut best = -INF;
@@ -1739,7 +1741,9 @@ impl AlphaBeta {
     /// the transposition table's actions, each checked legal, up to that length, never past
     /// a position already on the line.
     fn report_pv(&self, root: &State, pv: &[MoveSeq], score: i32, depth: i32) -> Vec<MoveSeq> {
-        let len = if score.abs() > MATE - 1000 { (MATE - score.abs()) as usize } else { depth.max(0) as usize };
+        // (A score past MATE is no mate distance: a line of none is asked for, not one of
+        // a wrapped-around length, which aborted the engine.)
+        let len = if score.abs() > MATE - 1000 { (MATE - score.abs()).max(0) as usize } else { depth.max(0) as usize };
         let mut line: Vec<MoveSeq> = Vec::with_capacity(len.max(pv.len()));
         let mut s = root.clone();
         s.enable_undo();
@@ -2732,5 +2736,35 @@ mod tests {
         let a = e.find_best_move(&s, &Limits { depth: Some(3), ..Default::default() }, &stop, &mut |_| {}).unwrap();
         let seq: MoveSeq = a.moves().iter().map(|m| m.fm).collect();
         assert!(seq.as_slice() != [losing], "played {:?}", seq);
+    }
+
+    /// A quiescent leaf adds the captures pending on each board to the static evaluation, a
+    /// royal en prise counting `local::ROYAL_VALUE`: with two of them the sum went past MATE.
+    /// That score read as a mate (the search stopped at depth 1) and aborted the engine when
+    /// its line was reported (`report_pv` asked for a line of MATE - score plies, wrapped
+    /// around to a huge length: "capacity overflow"). SPRT engine exits, "protocol: NEW exited".
+    #[test]
+    fn leaf_with_royals_en_prise_is_no_mate() {
+        // White to move on two timelines, with Black's king en prise to a rook on both.
+        let b = "4k3/4R3/8/8/8/8/8/4K3";
+        let mut s = crate::core::variants::position_from_uci(&format!("size 8x8 even fen [{b}:-0:1:w][{b}:+0:1:w]")).unwrap();
+        let mut e = AlphaBeta::new();
+        let stop = AtomicBool::new(false);
+        e.begin_search(&stop, None, None);
+        assert!(!e.in_check(&s));
+        let v = e.qsearch(&mut s, 2, -INF, INF, QDEPTH, None);
+        assert!(v <= MATE - 1000, "a leaf scored {} (mate range from {})", v, MATE - 1000);
+    }
+
+    /// A score past MATE (none should reach the root now) is reported with no extended line
+    /// instead of aborting.
+    #[test]
+    fn report_pv_survives_scores_past_mate() {
+        let s = crate::core::variants::startpos();
+        let e = AlphaBeta::new();
+        for score in [MATE + 774, -(MATE + 774), INF, -INF, MATE, -MATE] {
+            assert!(e.report_pv(&s, &[], score, 1).is_empty(), "{}", score);
+        }
+        assert!(score_text(MATE - 1000).starts_with("cp "));
     }
 }
