@@ -926,9 +926,8 @@ impl AlphaBeta {
     /// leaves or reaches a board the side to move need not play (`without_future` leaves those
     /// out), played alone (the other boards unplayed). With another board to play that takes a
     /// travel moving the present back (a new active timeline in the past). A check with no
-    /// evasion within `TRAVEL_MATE_STEPS` hypercuboids is a mate. The checking travels tried
-    /// (each alone, as an action) are added to `checks` when given.
-    fn travel_mate(&mut self, s: &mut State, info: &mut HcInfo, ss: &SearchSpace, scratch: &mut OrderScratch, mut checks: Option<&mut Vec<MoveSeq>>) -> Option<MoveSeq> {
+    /// evasion within `TRAVEL_MATE_STEPS` hypercuboids is a mate.
+    fn travel_mate(&mut self, s: &mut State, info: &mut HcInfo, ss: &SearchSpace, scratch: &mut OrderScratch) -> Option<MoveSeq> {
         let dim = info.dimension();
         let fba = info.first_branch_axis();
         let present = s.get_present();
@@ -987,9 +986,6 @@ impl AlphaBeta {
             h[n].assign_singleton(i);
             let mut probe = HcCursor::new(SearchSpace::from_vec(vec![h]), HcOrdering::Natural);
             let Some(act) = probe.next(info, s) else { continue };
-            if let Some(c) = checks.as_deref_mut() {
-                c.push(act.clone());
-            }
             let mark = Self::make(s, &act);
             let mate = self.in_check(s) && !self.has_evasion(s);
             s.unmake(mark);
@@ -1680,7 +1676,7 @@ impl AlphaBeta {
         if ply <= TRAVEL_MATE_PLY {
             let mate = {
                 let NodeBufs { info, order, .. } = &mut *nb;
-                self.travel_mate(s, info, &ss, order, None)
+                self.travel_mate(s, info, &ss, order)
             };
             if let Some(act) = mate {
                 self.bufs.push(nb);
@@ -2353,12 +2349,10 @@ impl AlphaBeta {
         // A checkmate in one by a travel the root's actions come to late or never (one creating
         // a timeline comes after every other action, and the root takes at most ROOT_CAP), as
         // interior nodes look for it (`travel_mate`).
-        // The checking travels it tries are root actions too (see below).
-        let mut travel_checks: Vec<MoveSeq> = Vec::new();
         let future_mate = future_mate.or_else(|| {
             let mut s = root.clone();
             s.enable_undo();
-            self.travel_mate(&mut s, &mut hc, &ss, &mut OrderScratch::default(), Some(&mut travel_checks))
+            self.travel_mate(&mut s, &mut hc, &ss, &mut OrderScratch::default())
         });
         let mut agen = BestFirstCursor::default();
         let mut first = Self::without_future(root, &hc, &ss);
@@ -2417,14 +2411,6 @@ impl AlphaBeta {
         // A forced action on the clock is played at once.
         if complete && roots.len() == 1 && plan.as_ref().is_some_and(|p| p.clock) && future_mate.is_none() {
             return Some(Action::from_moveseq(&roots[0].1, root));
-        }
-        // A checking travel the root's actions come to late or never (one creating a timeline
-        // that moves the present back, so that it is an action alone, comes after every action
-        // creating none) is searched as a root action: it can start a mate in more than one.
-        for a in travel_checks {
-            if !roots.iter().any(|r| r.1 == a) {
-                roots.push((self.action_score(root, &a, 0), a));
-            }
         }
         roots.sort_by(|a, b| b.0.cmp(&a.0));
         // The probe's mate is a root action, searched first: every depth's line (and a
@@ -3170,29 +3156,5 @@ mod tests {
         let seq: MoveSeq = a.moves().iter().map(|m| m.fm).collect();
         assert_eq!(AlphaBeta::child(&s, &seq).get_mate_type(), MateType::Checkmate, "played {:?}", seq);
         assert_eq!(e.last_score(), MATE - 1);
-    }
-
-    /// Turn Zero game, after 15...Qf6>x(1T10)f3: 16. (1T11)Bg5>>x(1T9)e5* creates a timeline and
-    /// moves the present back (an action alone, after every action creating none) and mates in 2
-    /// with 17. (-3T9)Qg4d7#. The root searches such checking travels.
-    #[test]
-    fn checking_travel_starts_a_mate_in_two() {
-        let s = crate::core::perft::parse_g_line(
-            "G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:0:b] [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w] moves \
-             (0T1)g1f3 submit (0T1)g8f6 submit (0T2)d2d4 submit (0T2)d7d5 submit (0T3)c2c3 submit \
-             (0T3)c7c6 submit (0T4)c1g5 submit (0T4)c8g4 submit (0T5)e2e3 submit (0T5)f6e4 submit \
-             (0T6)h2h3 submit (0T6)g4f3 submit (0T7)d1f3 submit (0T7)e4g5 submit (0T8)f3f4 submit \
-             (0T8)e7e5 submit (0T9)f4(0T6)f7 submit (1T6)e8f7 submit (1T7)f3e5 submit (1T7)f7e8 submit \
-             (1T8)d1g4 submit (0T9)e5(1T8)e5 submit (1T9)g4h5 submit (1T9)g7g6 submit \
-             (0T10)a2a4 (1T10)h5f3 submit (0T10)d8(0T9)e7 submit (-1T10)h3h4 submit (-1T10)e7(0T9)f6 submit \
-             (-2T10)d4e5 submit (-2T10)f6(1T10)f3 submit",
-        )
-        .unwrap();
-        let mut e = AlphaBeta::new();
-        let stop = AtomicBool::new(false);
-        let a = e.find_best_move(&s, &Limits { depth: Some(3), ..Default::default() }, &stop, &mut |_| {}).unwrap();
-        let travel = FullMove::parse("(1T11)g5(1T9)e5").unwrap();
-        assert!(a.moves().iter().any(|m| m.fm == travel), "played {}", a);
-        assert_eq!(e.last_score(), MATE - 3);
     }
 }
