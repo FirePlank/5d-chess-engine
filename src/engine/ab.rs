@@ -2666,20 +2666,15 @@ impl AlphaBeta {
                 }
             }
             // A partially searched iteration still improves on the previous best, except that a
-            // mate an earlier depth found survives a depth that comes back longer, not mating
+            // mate an earlier depth proved survives a depth that comes back longer, not mating
             // or interrupted, and an interrupted depth's loss is not trusted (Stockfish's
-            // forgottenMate and abortedLossSearch). A mate that is not proven is only kept
-            // while this depth still finds a mate for its action (searched first): when the
-            // deeper search finds none, it refuted the mate (an escape, or a mate of the other
-            // side, that the shallower search pruned). A proven loss is final: no later score
-            // that is not a loss replaces it (it can only be a search that pruned the mate).
-            // (The kept mate is reported as proven or not, as it was found.)
-            let refuted = !best_proven && roots.first().is_some_and(|r| r.1 == best) && scores.first().is_some_and(|&v| v <= MATE - 1000);
+            // forgottenMate and abortedLossSearch).
+            // (The kept mate need not be proven: which action is played and how the next depth
+            // is ordered are search decisions, left as they were. It is reported as proven or
+            // not, as it was found.)
             let mut kept = false;
             if let Some((v, act, proven)) = iter_best {
-                let mate_kept = best_score > MATE - 1000 && v < best_score && !refuted;
-                let loss_kept = best_score < -(MATE - 1000) && v >= -(MATE - 1000) && best_proven;
-                kept = depth > 1 && (mate_kept || loss_kept || (self.aborted && v < -(MATE - 1000)));
+                kept = depth > 1 && ((best_score > MATE - 1000 && v < best_score) || (self.aborted && v < -(MATE - 1000)));
                 if !kept {
                     // An interrupted depth's line for the same action stops where the search
                     // did: the last depth's longer one stands.
