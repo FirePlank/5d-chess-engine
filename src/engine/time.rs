@@ -15,7 +15,7 @@ const MOVE_OVERHEAD: u64 = 20;
 const MOVES_TO_GO: u64 = 24;
 /// Own actions the base time is spread over on a delay clock: every later action also gets
 /// its delay, so running the base low costs much less than on a plain clock.
-const DELAY_MOVES_TO_GO: u64 = 24;
+const DELAY_MOVES_TO_GO: u64 = 16;
 /// Part of the delay kept back for latency (1/25 = 4%, at least `MOVE_OVERHEAD`).
 const DELAY_SAFETY_DIV: u64 = 25;
 /// Below this many increments on the clock, an action gets most of one increment.
