@@ -2316,7 +2316,7 @@ impl AlphaBeta {
         }
 
         // Root actions (all of them, up to the root cap), ordered heuristically.
-        let (mut hc, ss) = HcInfo::build_hc(root);
+        let (hc, ss) = HcInfo::build_hc(root);
         // The root (like every node) leaves out moves on optional boards: a mate in one by a
         // travel back from one of them is played unless the search finds a mate in one.
         let future_mate = {
@@ -2325,14 +2325,6 @@ impl AlphaBeta {
             let _probe = interrupt_on(stop, Some(deadline.map_or(end, |d| d.min(end))));
             self.future_mate_in_one(root, &hc, &ss)
         };
-        // A checkmate in one by a travel the root's actions come to late or never (one creating
-        // a timeline comes after every other action, and the root takes at most ROOT_CAP), as
-        // interior nodes look for it (`travel_mate`).
-        let future_mate = future_mate.or_else(|| {
-            let mut s = root.clone();
-            s.enable_undo();
-            self.travel_mate(&mut s, &mut hc, &ss, &mut OrderScratch::default())
-        });
         let mut agen = BestFirstCursor::default();
         let mut first = Self::without_future(root, &hc, &ss);
         let travels = self.travel_captures(root, &hc, &ss, &mut first);
@@ -3109,31 +3101,5 @@ mod tests {
             assert_eq!(a.moves().iter().map(|m| m.fm).collect::<MoveSeq>().as_slice(), [FullMove::parse("(0T5)b1(-1T4)b2").unwrap()]);
             assert!(!lines.is_empty() && lines.iter().all(|l| info_field(l, "score") == "mate 1 wdl 1000 0 0"), "{:#?}", lines);
         }
-    }
-
-    /// An even 8x8 game: Black mates in one only by (-1T15)Ne4>>(-1T13)e3, a travel creating a
-    /// timeline, which comes after the 178 thousand actions creating none (the root takes
-    /// 1000). The root probes such travels as interior nodes do (`travel_mate`).
-    #[test]
-    fn root_finds_a_timeline_creating_mate_in_one() {
-        let s = crate::core::perft::parse_g_line(
-            "G 1 size 8x8 even fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:-0:1:w]\
-             [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:+0:1:w] moves (-1T1)g1f3 (0T1)e2e4 submit \
-             (0T1)g8f6 (-1T1)e7e6 submit (-1T2)g2g3 (0T2)b1c3 submit (0T2)b8c6 (-1T2)b8c6 submit (-1T3)d2d4 (0T3)g1f3 submit \
-             (0T3)d7d6 (-1T3)f8b4 submit (-1T4)c2c3 (0T4)d1e2 submit (0T4)c8g4 (-1T4)b4f8 submit (-1T5)b1d2 (0T5)h2h3 submit \
-             (0T5)g4h5 (-1T5)g8f6 submit (-1T6)d1c2 (0T6)a2a3 submit (0T6)d8c8 (-1T6)f6g4 submit (-1T7)d2e4 (0T7)e2e3 submit \
-             (0T7)c8d7 (-1T7)d7d5 submit (-1T8)c1g5 (0T8)g2g4 submit (0T8)h5(-1T8)g5 submit (-1T9)e4g5 (0T9)e3g5 submit \
-             (0T9)c6e5 (-1T9)d8f6 submit (-1T10)f1h3 (0T10)f3e5 submit (0T10)d6e5 (-1T10)g4f2 submit (-1T11)g5e6 (0T11)f1c4 \
-             submit (0T11)e7e6 (-1T11)c8e6 submit (-1T12)h3e6 (0T12)g5e5 submit (0T12)f8d6 (-1T12)f7e6 submit (-1T13)h1f1 \
-             (0T13)e5b5 submit (0T13)e8g8 (-1T13)f2e4 submit (-1T14)f3d2 (0T14)b5d7 submit (0T14)f6d7 (-1T14)f6f1 submit \
-             (0T15)e1(0T14)f1 submit (1T14)d7b5 submit (-1T15)d2f1 (1T15)c4b5 submit",
-        )
-        .unwrap();
-        let mut e = AlphaBeta::new();
-        let stop = AtomicBool::new(false);
-        let a = e.find_best_move(&s, &Limits { depth: Some(2), ..Default::default() }, &stop, &mut |_| {}).unwrap();
-        let seq: MoveSeq = a.moves().iter().map(|m| m.fm).collect();
-        assert_eq!(AlphaBeta::child(&s, &seq).get_mate_type(), MateType::Checkmate, "played {:?}", seq);
-        assert_eq!(e.last_score(), MATE - 1);
     }
 }
