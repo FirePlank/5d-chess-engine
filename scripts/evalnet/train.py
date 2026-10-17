@@ -9,7 +9,6 @@ residual r (centipawns, capped) and is trained so that sigmoid((base + r) / K) m
 lam * sigmoid(teacher / K) + (1 - lam) * result (just the result where there is no score).
 Validation holds out whole games. A file given as `path@w` weighs its records by w (e.g. to
 favour games of the newest engines); files are memory-mapped and streamed to the device.
-The current net: --half --bce --early 12 --early-w 0.3, files weighted 1/2/3/4 by age group.
 """
 import argparse
 import struct
@@ -67,9 +66,6 @@ def main():
     ap.add_argument('--scale', type=float, default=400.0, help='net output to centipawns')
     ap.add_argument('--cap', type=float, default=3000.0)
     ap.add_argument('--seed', type=int, default=1)
-    ap.add_argument('--early', type=int, default=0, help='down-weight the first n records of each game')
-    ap.add_argument('--early-w', type=float, default=0.0, help='their weight (0 drops them)')
-    ap.add_argument('--bce', action='store_true', help='cross-entropy loss instead of squared error')
     ap.add_argument('--half', action='store_true', help='keep the inputs as float16 on the device')
     a = ap.parse_args()
     torch.manual_seed(a.seed)
@@ -80,12 +76,6 @@ def main():
     base, teach, wdl = col(NI), col(NI + 1), col(NI + 2)
     game = np.concatenate([np.array(d[:, NI + 3], dtype=np.float64) + k * 1e6 for k, (d, _) in enumerate(parts)])
     weight = np.concatenate([np.full(len(d), w, dtype=np.float32) for d, w in parts])
-    if a.early > 0:
-        starts = np.r_[True, game[1:] != game[:-1]]
-        gid = np.cumsum(starts) - 1
-        ply = np.arange(len(game)) - np.nonzero(starts)[0][gid]
-        weight[ply < a.early] *= a.early_w
-        print(f'early records (< {a.early}): {np.mean(ply < a.early):.1%} weighted {a.early_w}')
     n_all = len(base)
     k = a.k
     if k == 0:
@@ -155,12 +145,7 @@ def main():
         perm = tr[torch.randperm(len(tr), device=dev)]
         for s in range(0, len(perm), a.batch):
             j = perm[s:s + a.batch]
-            if a.bce:
-                pj = torch.clamp(predict(j), 1e-6, 1 - 1e-6)
-                lj = -(Y[j] * torch.log(pj) + (1 - Y[j]) * torch.log(1 - pj))
-            else:
-                lj = (predict(j) - Y[j]) ** 2
-            loss = torch.sum(W[j] * lj) / W[j].sum()
+            loss = torch.sum(W[j] * (predict(j) - Y[j]) ** 2) / W[j].sum()
             opt.zero_grad()
             loss.backward()
             opt.step()
