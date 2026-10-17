@@ -14,12 +14,12 @@ use crate::core::bitboard::{marked_pos, pmask};
 use crate::core::board::Board;
 use crate::core::check_position::{BoardOverlay, CheckBuf, CheckKind, CheckPosition, SpReach};
 use crate::core::hypercuboid::{has_physical_check, interrupt_on, interrupted, plays_wasted_move, BestFirstCursor, Entry, HcCursor, HcInfo, NeedBranch};
-use crate::core::multiverse::next_turn;
+use crate::core::multiverse::{active_range_for, next_turn};
 use crate::core::piece::*;
 use crate::core::state::promotion_rank;
 use crate::core::state::{Mark, MateType, State};
 use crate::misc::geometry::SearchSpace;
-use crate::misc::integer_set::Index;
+use crate::misc::integer_set::{Index, IntegerSet};
 use crate::misc::ordering::{AxisOrders, HcOrdering};
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -50,6 +50,9 @@ const ROOT_LMR_MIN_INDEX: usize = 6;
 const ROOT_FUTURE_MATE_PROBE: usize = 16;
 /// Time for that probe without a time plan (with one: a 32nd of the optimum).
 const ROOT_FUTURE_MATE_MS: u64 = 50;
+/// Up to this ply (the root is 0) a travel from an optional board whose new timeline changes
+/// the timeline activity is searched (`future_activate`).
+const FUTURE_ACTIVATE_PLY: usize = 2;
 /// Aspiration windows (Apeiron's scheme): from depth ASP_MIN_DEPTH, after a completed depth
 /// with a non-mate score `prev`, the root is searched in [prev - w, prev + w], w starting at
 /// ASP_WINDOW; a fail low or high multiplies w by ASP_FAIL_MULT and moves that bound to
@@ -868,6 +871,89 @@ impl AlphaBeta {
         out
     }
 
+    /// The actions `without_future` leaves out that are worth a move on an optional board: a
+    /// single travel from one (ahead of the present, or on an inactive timeline) that branches
+    /// off a new timeline changing the timeline activity, i.e. activating a timeline that was
+    /// inactive (the opponent's: the active range widens as our count goes up) or moving the
+    /// present back. Other optional boards stay unplayed and no other timeline branches off.
+    fn future_activate(s: &State, info: &HcInfo, ss: &SearchSpace) -> SearchSpace {
+        let mut out = SearchSpace::default();
+        let fba = info.first_branch_axis();
+        if fba >= info.dimension() {
+            return out;
+        }
+        let present = s.get_present();
+        let (amin, amax) = s.get_active_range();
+        let (lo, hi) = s.get_lines_range();
+        // Both need the new timeline active: our count may exceed the opponent's by one at most.
+        let nl = s.new_line();
+        let (na, nb) = active_range_for(s.multiverse().layout(), lo.min(nl), hi.max(nl));
+        if nl < na || nl > nb {
+            return out;
+        }
+        let optional_line = |l: i32| !(l >= amin && l <= amax && s.get_timeline_end(l) == present);
+        let optional: Vec<usize> = (lo..=hi).filter(|&l| optional_line(l)).filter_map(|l| info.line_to_axis(l)).collect();
+        if optional.is_empty() {
+            return out;
+        }
+        // Qualifying branch arrivals, grouped by departure (axis, coordinate).
+        let mut travels: Vec<(usize, Index, IntegerSet)> = Vec::new();
+        let mut work: Option<State> = None;
+        for i in 1..info.axis_len(fba) as Index {
+            let Some((m, dep, fa)) = info.branch_departure(i) else { break };
+            if !optional_line(m.from.l()) {
+                continue;
+            }
+            // Exactly: play the travel on a scratch state and compare.
+            let w = work.get_or_insert_with(|| {
+                let mut w = s.clone();
+                w.enable_undo();
+                w
+            });
+            let mark = w.mark();
+            if !w.apply_move::<true>(m) {
+                w.unmake(mark);
+                continue;
+            }
+            let (a2, b2) = w.get_active_range();
+            let changes = (a2..=b2).any(|l| l != nl && (l < amin || l > amax)) || w.get_present().0 < present.0;
+            w.unmake(mark);
+            if !changes {
+                continue;
+            }
+            match travels.iter_mut().find(|t| t.0 == fa && t.1 == dep) {
+                Some(t) => t.2.insert(i),
+                None => travels.push((fa, dep, IntegerSet::singleton(i))),
+            }
+        }
+        for (fa, dep, arrivals) in &travels {
+            for hc in &ss.hcs {
+                if !hc[*fa].contains(*dep) || optional.iter().any(|&p| p != *fa && !hc[p].contains(0)) || !hc[fba].intersects(arrivals) {
+                    continue;
+                }
+                if (fba + 1..info.dimension()).any(|n| !hc[n].contains(0)) {
+                    continue;
+                }
+                let mut h = hc.clone();
+                for &p in &optional {
+                    h[p].assign_singleton(if p == *fa { *dep } else { 0 });
+                }
+                // The travel branches: no arrival of it on a board's end.
+                for n in 0..fba {
+                    if !optional.contains(&n) {
+                        h[n].erase_if(|i| matches!(info.entry(n, i), Entry::Arriving { idx, fa: f, .. } if *f as usize == *fa && *idx == *dep));
+                    }
+                }
+                h[fba].and_assign(arrivals);
+                for n in fba + 1..info.dimension() {
+                    h[n].assign_singleton(0);
+                }
+                out.hcs.push(h);
+            }
+        }
+        out
+    }
+
     /// A checkmate in one among the root actions `without_future` leaves out: a piece that
     /// travels back from a board the side to move need not play (ahead of the present, or
     /// on an inactive timeline) and gives check on arrival, with moves on the boards that must
@@ -1411,7 +1497,10 @@ impl AlphaBeta {
 
         let mut nb = self.bufs.pop().unwrap_or_default();
         let ss = nb.info.rebuild(s, true);
-        let first = Self::without_future(s, &nb.info, &ss);
+        let mut first = Self::without_future(s, &nb.info, &ss);
+        if ply <= FUTURE_ACTIVATE_PLY {
+            first.concat(Self::future_activate(s, &nb.info, &ss));
+        }
         let mut full = Some(ss);
         {
             let NodeBufs { info, cursor, order, .. } = &mut *nb;
@@ -1939,7 +2028,9 @@ impl AlphaBeta {
             self.future_mate_in_one(root, &hc, &ss)
         };
         let mut agen = BestFirstCursor::default();
-        self.start_actions(root, &hc, &mut agen, &mut OrderScratch::default(), Self::without_future(root, &hc, &ss), false);
+        let mut first = Self::without_future(root, &hc, &ss);
+        first.concat(Self::future_activate(root, &hc, &ss));
+        self.start_actions(root, &hc, &mut agen, &mut OrderScratch::default(), first, false);
         let mut full = Some(ss);
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
         // Enumerating every root action can take seconds with many timelines: spend at most
