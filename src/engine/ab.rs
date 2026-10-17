@@ -31,7 +31,7 @@ pub const INF: i32 = 32000;
 const MAX_PLY: usize = 128;
 
 /// Actions searched at non-PV nodes by remaining depth (index = depth, last repeats).
-const LMP: [usize; 5] = [0, 20, 32, 44, 56];
+const LMP: [usize; 5] = [0, 24, 38, 52, 66];
 /// Multiplier for the PV-node action cap.
 const PV_CAP_MULT: usize = 3;
 /// Root actions considered.
