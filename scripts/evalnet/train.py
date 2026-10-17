@@ -7,7 +7,9 @@ Each record is NI + 4 float32: inputs (side to move's view), handcrafted score, 
 score or NaN, result (1/0.5/0 for the side to move), game number. The net predicts a
 residual r (centipawns, capped) and is trained so that sigmoid((base + r) / K) matches
 lam * sigmoid(teacher / K) + (1 - lam) * result (just the result where there is no score).
-Validation holds out whole games. A file given as `path@w` weighs its records by w (e.g. to
+Validation holds out whole games. Held-out test sets for comparing nets (e.g. with
+games/compare.py-style metrics) must be built with NETDATA_NO_CHECK=1 so that positions with
+the side to move in check are left out (see `ktools netdata`); training records keep them. A file given as `path@w` weighs its records by w (e.g. to
 favour games of the newest engines); files are memory-mapped and streamed to the device.
 """
 import argparse

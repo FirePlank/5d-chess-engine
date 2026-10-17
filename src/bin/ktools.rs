@@ -1626,6 +1626,11 @@ fn tactics(path: &str, ms: u64, threads: usize, out: &mut impl Write) {
 /// is in internal units (records on the reported scale are converted back).
 ///   ktools netdata out.bin games1.jsonl games2.jsonl ...
 /// Record: NI + 4 little-endian f32 (inputs, base, teacher or NaN, wdl, game).
+/// With `NETDATA_NO_CHECK` set, positions where the side to move is in check (5D, as
+/// `State::has_phantom_check`) are left out. Held-out test sets must be built this way: being
+/// in check predicts the result strongly, so terms correlated with it look far better offline
+/// than they play (the search resolves those positions by evasions, not by their evaluation;
+/// hce_exposure lost 27 Elo after a -0.005 log-loss "gain" from check terms).
 fn netdata(args: &[String], out: &mut impl Write) {
     use kairos::core::variants::{apply_uci_moves, position_from_uci};
     use kairos::engine::evalnet::{inputs, NI};
@@ -1637,6 +1642,7 @@ fn netdata(args: &[String], out: &mut impl Write) {
         lines.extend(text.lines().filter(|l| !l.trim().is_empty()).map(String::from));
     }
     let threads = 14;
+    let no_check = std::env::var_os("NETDATA_NO_CHECK").is_some();
     // Base score: the evaluation the search uses (the tuned feature HCE).
     let ep = tuned_weights();
     let chunks: Vec<Vec<f32>> = std::thread::scope(|sc| {
@@ -1690,7 +1696,7 @@ fn netdata(args: &[String], out: &mut impl Write) {
                             if i == opening {
                                 first_player = Some(s.get_present().1);
                             }
-                            if i >= opening {
+                            if i >= opening && !(no_check && s.has_phantom_check()) {
                                 let base = evaluate(&s, ep);
                                 let x = inputs(&s, base);
                                 let mut r = x.to_vec();
