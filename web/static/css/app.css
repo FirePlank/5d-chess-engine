@@ -453,6 +453,12 @@ table.games { width: 100%; border-collapse: collapse; font-size: 13px; }
 .modal p { margin: 0 0 var(--s3); font-size: 13px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: var(--s2); margin-top: var(--s4); }
 .modal.confirm { width: min(380px, calc(100vw - 2 * var(--s3))); }
+/* The move list's right-click menu. */
+.ctx-menu { position: fixed; z-index: 100; min-width: 190px; max-width: 280px; padding: 4px 0; background: var(--panel); border: 1px solid var(--border-strong); border-radius: 6px; box-shadow: var(--shadow); }
+.ctx-title { padding: 6px 12px 7px; margin-bottom: 4px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ctx-item { display: block; width: 100%; padding: 8px 12px; border: 0; background: none; text-align: left; font-size: 13.5px; color: var(--strong); cursor: pointer; }
+.ctx-item:hover, .ctx-item:focus-visible { background: var(--inset); outline: none; }
+.ctx-item.danger { color: var(--bad); }
 .modal.confirm p { margin: 0; }
 .load-row { display: flex; align-items: flex-end; gap: var(--s2); margin-top: var(--s3); }
 .load-row .field { margin: 0; }

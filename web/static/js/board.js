@@ -11,6 +11,9 @@ const PIECE_FILES = {
 };
 const GAP_X = 1.7;
 const GAP_Y = 2.4;
+// The user's markers (5dcol's default author colour, purple).
+const MARK_ARROW = 'rgba(155, 89, 182, 0.72)';
+const MARK_SQUARE = 'rgba(155, 89, 182, 0.5)';
 // Boards that an action adds slide in (and boards an undo removes slide out) over this long.
 const ENTER_MS = 240;
 const LEAVE_MS = 180;
@@ -85,6 +88,16 @@ export class MultiverseView {
     this.leaving = []; // {b, t0, dur, dy, off, alpha}: boards sliding out
     this.lastStep = 0;
     this.overlay = { selected: null, targets: [], pv: [], hover: null, readonly: false };
+    // Checks: timelines whose "!" badge was clicked (their checks are shown), the badges drawn
+    // last frame (for clicks), and the badge under the pointer.
+    this.revealed = new Set();
+    this.badges = [];
+    this.hoverBadge = null;
+    // The user's markers (as 5dcol): squares and arrows, by board (l, v) and square, kept
+    // until a new game; `pendingArrow` is a Ctrl+right-clicked square awaiting its end.
+    this.marks = { squares: new Map(), arrows: new Map() };
+    this.pendingArrow = null;
+    this.markDrag = null;
     this.colors = {};
     this.dirty = true;
     this.onSquare = null;
@@ -258,6 +271,7 @@ export class MultiverseView {
     const prev = this.view;
     const old = this.boards;
     this.view = view;
+    if (!prev || prev.position !== view.position) this.revealed.clear();
     this.boards = new Map();
     const [w, h] = view.size;
     for (const [l, t, c, fen] of view.boards) {
@@ -398,10 +412,16 @@ export class MultiverseView {
     const cv = this.canvas;
     let down = null, pinch = null;
     cv.addEventListener('pointerdown', (e) => {
-      cv.setPointerCapture(e.pointerId);
+      try { cv.setPointerCapture(e.pointerId); } catch (err) { /* not an active pointer */ }
       this.pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
       if (this.pointers.size === 1) {
         down = { x: e.offsetX, y: e.offsetY, cam: { ...this.cam }, moved: false, button: e.button };
+        if (e.button === 2) {
+          // Right button: markers, never the camera. With a piece selected it only deselects.
+          if (this.onRightPress && this.onRightPress()) { down = null; return; }
+          down.start = this.pick(e.offsetX, e.offsetY);
+          return;
+        }
         this.stopCamera();
       } else if (this.pointers.size === 2) {
         const [a, b] = [...this.pointers.values()];
@@ -422,6 +442,16 @@ export class MultiverseView {
         this.redraw();
         return;
       }
+      if (down && down.button === 2) {
+        if (!down.moved && Math.hypot(e.offsetX - down.x, e.offsetY - down.y) > 5) down.moved = true;
+        if (down.moved && down.start) {
+          const sq = this.pick(e.offsetX, e.offsetY);
+          const to = sq && !(sq.l === down.start.l && sq.v === down.start.v && sq.x === down.start.x && sq.y === down.start.y) ? sq : null;
+          this.markDrag = { from: down.start, to };
+          this.redraw();
+        }
+        return;
+      }
       if (down) {
         const dx = e.offsetX - down.x, dy = e.offsetY - down.y;
         if (!down.moved && Math.hypot(dx, dy) > 5) {
@@ -434,12 +464,17 @@ export class MultiverseView {
         }
         return;
       }
-      const sq = this.pick(e.offsetX, e.offsetY);
-      const key = sq ? `${sq.l},${sq.v},${sq.x},${sq.y}` : null;
+      const badge = this.badgeAt(e.offsetX, e.offsetY);
+      if (badge !== this.hoverBadge) {
+        this.hoverBadge = badge;
+        this.redraw();
+      }
+      const sq = badge == null ? this.pick(e.offsetX, e.offsetY) : null;
+      const key = badge != null ? `badge${badge}` : sq ? `${sq.l},${sq.v},${sq.x},${sq.y}` : null;
       if (key !== this.hoverKey) {
         this.hoverKey = key;
         this.overlay.hover = sq;
-        cv.classList.toggle('pointing', !!sq && ((!this.overlay.readonly && this.isInteresting(sq)) || this.isPeekable(sq)));
+        cv.classList.toggle('pointing', badge != null || (!!sq && ((!this.overlay.readonly && this.isInteresting(sq)) || this.isPeekable(sq))));
         if (this.onHover) this.onHover(sq);
         this.redraw();
       }
@@ -448,9 +483,38 @@ export class MultiverseView {
       this.pointers.delete(e.pointerId);
       cv.classList.remove('dragging');
       if (this.pointers.size < 2) pinch = null;
-      if (down && !down.moved && e.type === 'pointerup' && down.button === 0) {
+      if (down && down.button === 2 && e.type === 'pointerup') {
         const sq = this.pick(e.offsetX, e.offsetY);
-        if (this.onSquare) this.onSquare(sq, e);
+        const same = (a, b) => a && b && a.l === b.l && a.v === b.v && a.x === b.x && a.y === b.y;
+        if (down.moved && down.start && sq && !same(sq, down.start)) this.toggleArrowMark(down.start, sq);
+        else if (!down.moved && sq && e.ctrlKey) { this.pendingArrow = sq; this.redraw(); }
+        else if (!down.moved && sq && this.pendingArrow) {
+          // Ctrl+right-click a square, then right-click another: an arrow (across boards too).
+          if (!same(sq, this.pendingArrow)) this.toggleArrowMark(this.pendingArrow, sq);
+          this.pendingArrow = null;
+        } else if (down.start && (!down.moved || same(sq, down.start))) this.toggleSquareMark(down.start);
+        this.markDrag = null;
+        this.redraw();
+      } else if (down && !down.moved && e.type === 'pointerup' && down.button === 0) {
+        const badge = this.badgeAt(e.offsetX, e.offsetY);
+        if (badge != null) {
+          // The "!": show (or hide again) that timeline's check.
+          if (this.revealed.has(badge)) this.revealed.delete(badge);
+          else {
+            this.revealed.add(badge);
+            // Bring the check into view: the attacker's board and the board it captures on.
+            const boards = this.shownChecks().filter((ch) => ch.to[0] === badge).flatMap((ch) => [[ch.from[0], 2 * ch.from[1] + ch.c], [ch.to[0], 2 * ch.to[1] + ch.c]]);
+            if (boards.length) this.showBoards(boards, true);
+          }
+          this.redraw();
+        } else if (this.hasMarks()) {
+          // A single left click (not a drag: that pans) clears the marks, and only that, as
+          // on lichess: it does not also select a piece.
+          this.clearMarks();
+        } else {
+          const sq = this.pick(e.offsetX, e.offsetY);
+          if (this.onSquare) this.onSquare(sq, e);
+        }
       }
       down = null;
     };
@@ -618,8 +682,9 @@ export class MultiverseView {
     for (const a of this.leaving) {
       if (a.b.v >= vMin && a.b.v <= vMax) visible.push([a.b, a.alpha, null, false, a.off]);
     }
+    const shownLines = new Set(this.shownChecks().flatMap((ch) => [ch.from[0], ch.to[0]]));
     for (const b of this.phantom) {
-      if (b.v >= vMin && b.v <= vMax) visible.push([b, 0.35, null, true]);
+      if (b.v >= vMin && b.v <= vMax && shownLines.has(b.l)) visible.push([b, 0.35, null, true]);
     }
     for (const [b, alpha, tl, phantom, off] of visible) this.drawBoard(b, alpha, s, tl, phantom, off);
     this.drawHighlights();
@@ -629,6 +694,7 @@ export class MultiverseView {
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.drawLabels(vMin, vMax, lMin, lMax);
+    this.drawCheckBadges();
   }
 
   drawBoard(b, alpha, s, tl, phantom = false, off = null) {
@@ -732,8 +798,22 @@ export class MultiverseView {
       fill(m.from[0], 2 * m.from[1] + v.player, m.from[2], m.from[3], C.draft);
       fill(m.to[0], 2 * m.to[1] + v.player, m.to[2], m.to[3], C.draft);
     }
+    // The user's marked squares (purple, as 5dcol's markers).
+    for (const [, m] of this.marks.squares) {
+      if (!this.boards.has(`${m.l},${m.v}`)) continue;
+      const [x0, y0] = this.squareRect(m.l, m.v, m.x, m.y);
+      ctx.fillStyle = MARK_SQUARE;
+      ctx.fillRect(x0, y0, 1, 1);
+    }
+    if (this.pendingArrow && this.boards.has(`${this.pendingArrow.l},${this.pendingArrow.v}`)) {
+      const m = this.pendingArrow;
+      const [x0, y0] = this.squareRect(m.l, m.v, m.x, m.y);
+      ctx.strokeStyle = MARK_ARROW;
+      ctx.lineWidth = 0.08;
+      ctx.strokeRect(x0 + 0.04, y0 + 0.04, 0.92, 0.92);
+    }
     // A royal in check: a red glow under the piece, as on lichess.
-    for (const ch of v.checks || []) {
+    for (const ch of this.shownChecks()) {
       const [tl, tt, tx, ty] = ch.to;
       const vv = 2 * tt + ch.c;
       if (!this.boards.has(`${tl},${vv}`) && !this.phantom.some((b) => b.l === tl && b.v === vv)) continue;
@@ -791,18 +871,117 @@ export class MultiverseView {
       this.arrow(m.from, m.to, m.c, C.arPv, width);
     }
     this.ctx.globalAlpha = 1;
-    for (const ch of v.checks || []) this.arrow(ch.from, ch.to, ch.c, C.arCheck, width * 0.85);
+    for (const ch of this.shownChecks()) this.arrow(ch.from, ch.to, ch.c, C.arCheck, width * 0.85);
+    // The user's arrows, and the one being dragged.
+    const marks = [...this.marks.arrows.values()];
+    if (this.markDrag && this.markDrag.to) marks.push(this.markDrag);
+    for (const m of marks) {
+      if (!this.boards.has(`${m.from.l},${m.from.v}`) || !this.boards.has(`${m.to.l},${m.to.v}`)) continue;
+      const [x0, y0] = this.squareCenter(m.from.l, m.from.v, m.from.x, m.from.y);
+      const [x1, y1] = this.squareCenter(m.to.l, m.to.v, m.to.x, m.to.y);
+      this.arrowAt(x0, y0, x1, y1, m.from.l === m.to.l && m.from.v === m.to.v, MARK_ARROW, width * 1.15);
+    }
+  }
+
+  /**
+   * The checks drawn: while an action is being built, every check it leaves (as 5dcol shows
+   * a pending move's checks); otherwise only those of timelines whose "!" was clicked.
+   */
+  shownChecks() {
+    const v = this.view;
+    const checks = (v && v.checks) || [];
+    if (v.draft && v.draft.length) return checks;
+    return checks.filter((ch) => this.revealed.has(ch.to[0]));
+  }
+
+  /**
+   * The "!" badges (as 5dcol's): beside the playable board of each timeline where not moving
+   * would leave a royal in check; a click shows that check. None while building an action
+   * (its checks are shown).
+   */
+  drawCheckBadges() {
+    const { ctx, view: v } = this;
+    this.badges = [];
+    if (!v || (v.draft && v.draft.length)) return;
+    const lines = [...new Set((v.checks || []).map((ch) => ch.to[0]))];
+    for (const l of lines) {
+      const tl = this.timelines.get(l);
+      if (!tl) continue;
+      const vv = 2 * tl.end[0] + tl.end[1];
+      const [sx, sy] = this.toScreen(this.boardX(vv) + this.bw, this.boardTop(l, vv));
+      const r = 9, x = sx + 4, y = sy - 4;
+      if (x < -r || y < -r || x > this.w + r || y > this.h + r) continue;
+      this.badges.push({ l, x, y, r });
+      const on = this.revealed.has(l), hover = this.hoverBadge === l;
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,.45)';
+      ctx.shadowBlur = 4;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fillStyle = hover ? 'rgb(92,135,95)' : on ? 'rgb(150,70,52)' : 'rgb(212,105,80)';
+      ctx.fill();
+      ctx.shadowColor = 'transparent';
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = hover ? 'rgb(70,110,74)' : 'rgb(184,84,61)';
+      ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold 13px ${this.colors.font}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('!', x, y + 0.5);
+      ctx.restore();
+    }
+  }
+
+  /** The "!" badge at screen point (x, y), if any. */
+  badgeAt(x, y) {
+    const b = this.badges.find((b) => Math.hypot(b.x - x, b.y - y) <= b.r + 3);
+    return b ? b.l : null;
+  }
+
+  /** Toggle the marker on square `sq` ({l, v, x, y}). */
+  toggleSquareMark(sq) {
+    const key = `${sq.l},${sq.v},${sq.x},${sq.y}`;
+    if (this.marks.squares.has(key)) this.marks.squares.delete(key);
+    else this.marks.squares.set(key, { l: sq.l, v: sq.v, x: sq.x, y: sq.y });
+    this.redraw();
+  }
+
+  /** Toggle the arrow from square `a` to square `b`. */
+  toggleArrowMark(a, b) {
+    const key = `${a.l},${a.v},${a.x},${a.y}>${b.l},${b.v},${b.x},${b.y}`;
+    if (this.marks.arrows.has(key)) this.marks.arrows.delete(key);
+    else this.marks.arrows.set(key, { from: { l: a.l, v: a.v, x: a.x, y: a.y }, to: { l: b.l, v: b.v, x: b.x, y: b.y } });
+    this.redraw();
+  }
+
+  /** Whether any marker is drawn (or an arrow is awaiting its end). */
+  hasMarks() {
+    return this.marks.squares.size > 0 || this.marks.arrows.size > 0 || !!this.pendingArrow;
+  }
+
+  /** Remove every marker (a click, a move played, a new game). */
+  clearMarks() {
+    this.marks.squares.clear();
+    this.marks.arrows.clear();
+    this.pendingArrow = null;
+    this.markDrag = null;
+    this.redraw();
   }
 
   /** An arrow between squares; jumps between boards bend so they clear the boards between. */
   arrow(from, to, c, color, width) {
-    const { ctx } = this;
     const [x0, y0] = this.squareCenter(from[0], 2 * from[1] + c, from[2], from[3]);
     const [x1, y1] = this.squareCenter(to[0], 2 * to[1] + c, to[2], to[3]);
+    this.arrowAt(x0, y0, x1, y1, from[0] === to[0] && from[1] === to[1], color, width);
+  }
+
+  /** An arrow between two world points (square centres); `sameBoard` ones are straight. */
+  arrowAt(x0, y0, x1, y1, sameBoard, color, width) {
+    const { ctx } = this;
     const dx = x1 - x0, dy = y1 - y0;
     const len = Math.hypot(dx, dy);
     if (len < 0.01) return;
-    const sameBoard = from[0] === to[0] && from[1] === to[1];
     const bend = sameBoard ? 0 : Math.min(1.6, 0.12 * len);
     const nx = -dy / len, ny = dx / len;
     const mx = (x0 + x1) / 2 + nx * bend, my = (y0 + y1) / 2 + ny * bend;

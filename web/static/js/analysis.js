@@ -10,6 +10,14 @@ const MAX_DEPTH = 64;
 // Most engine lines (MultiPV) the Lines setting offers.
 const MAX_LINES = 5;
 
+/** Close the move list's menu, if one is open. */
+function closeMenu() {
+  for (const m of document.querySelectorAll('.ctx-menu')) m.remove();
+}
+document.addEventListener('pointerdown', (e) => { if (!e.target.closest('.ctx-menu')) closeMenu(); }, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+addEventListener('resize', closeMenu);
+
 export class Analysis {
   constructor(app) {
     this.app = app;
@@ -139,6 +147,9 @@ export class Analysis {
     this.meta = meta;
     this.meta.source = source;
     this.cache.clear();
+    // First continuations shown as variations ("Force variation"), by node id.
+    this.forced = new Set();
+    this.board.clearMarks();
     // Node ids start over with every game: a "go deeper" on the last one does not carry over.
     this.deeperNode = null;
     this.gameKey++;
@@ -249,11 +260,19 @@ export class Analysis {
     }
     return path;
   }
+  /** The main line: first children from the root, stopping before a forced variation. */
   mainline() {
     const ml = [0];
     let c = 0;
-    while (this.node(c).children.length) { c = this.node(c).children[0]; ml.push(c); }
+    while (this.node(c).children.length && !this.forced.has(this.node(c).children[0])) { c = this.node(c).children[0]; ml.push(c); }
     return ml;
+  }
+  /** Whether `id` is on the main line. */
+  isMainLine(id) {
+    for (let c = id; this.node(c).parent != null; c = this.node(c).parent) {
+      if (this.node(this.node(c).parent).children[0] !== c || this.forced.has(c)) return false;
+    }
+    return true;
   }
   moveNumber(n) {
     const k = n.ply - 1 + this.rootPlayer;
@@ -442,6 +461,9 @@ export class Analysis {
       }
     }
     closeRow();
+    // The main line ends before a forced variation: all of the last action's continuations
+    // are variations.
+    for (const v of this.node(ml[ml.length - 1]).children) frag.append(el('div', { class: 'mv-row' }, this.variationEl(v)));
     box.replaceChildren(frag);
     const cur = box.querySelector('.cur');
     if (cur) {
@@ -822,19 +844,12 @@ export class Analysis {
       const c = e.target.closest('[data-id]');
       if (c) this.goto(+c.dataset.id);
     });
-    $('#moves').addEventListener('contextmenu', async (e) => {
+    $('#moves').addEventListener('contextmenu', (e) => {
       const c = e.target.closest('[data-id]');
       if (!c) return;
       e.preventDefault();
-      const id = +c.dataset.id;
-      const n = this.node(id);
-      if (n.parent == null) return;
-      if (await confirmDialog('Delete this action?', { text: 'Everything after it is deleted too.', ok: 'Delete', danger: true })) {
-        const r = this.rules.call({ cmd: 'delete', node: id });
-        this.tree = r.tree;
-        if (!this.line().includes(this.cur) || this.isInSubtree(this.cur, id)) this.cur = r.node;
-        this.show();
-      }
+      c.blur();
+      this.openMoveMenu(+c.dataset.id, e.clientX, e.clientY);
     });
     $('#nav-first').onclick = () => this.first();
     $('#nav-prev').onclick = () => this.prev();
@@ -928,6 +943,69 @@ export class Analysis {
   isInSubtree(id, root) {
     for (let n = id; n != null; n = this.node(n).parent) if (n === root) return true;
     return false;
+  }
+
+  /**
+   * The move list's menu for action `id` (as infinitechess.org's analysis board): Promote
+   * variation (first among its siblings), Make main line (first at every level), Force
+   * variation (show the first continuation as a variation) and Delete from here. Each of the
+   * first three then shows the action on the board.
+   */
+  openMoveMenu(id, x, y) {
+    closeMenu();
+    const n = this.node(id);
+    if (n.parent == null) return;
+    const parent = this.node(n.parent);
+    const { num, black } = this.moveNumber(n);
+    const title = `${num}${black ? '…' : '.'} ${n.san || n.lan}`;
+    const item = (label, fn, cls = '') => el('button', { type: 'button', class: 'ctx-item' + cls, onclick: () => { closeMenu(); fn(); } }, label);
+    const items = [];
+    if (parent.children[0] !== id) items.push(item('Promote variation', () => this.promoteNode(id, true)));
+    if (!this.isMainLine(id)) items.push(item('Make main line', () => this.promoteNode(id, false)));
+    if (parent.children[0] === id && !this.forced.has(id)) items.push(item('Force variation', () => { this.forced.add(id); this.afterTreeEdit(id); }));
+    items.push(item('Delete from here', () => this.deleteNode(id), ' danger'));
+    const menu = el('div', { class: 'ctx-menu', role: 'menu' }, el('div', { class: 'ctx-title', title, text: title }), ...items);
+    document.body.append(menu);
+    const r = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(4, Math.min(x, innerWidth - r.width - 4))}px`;
+    menu.style.top = `${Math.max(4, Math.min(y, innerHeight - r.height - 4))}px`;
+    menu.querySelector('.ctx-item').focus({ preventScroll: true });
+  }
+
+  /** Promote `id` among its siblings (`fork`) or to the main line, and show it. */
+  promoteNode(id, fork) {
+    this.tree = this.rules.call({ cmd: 'promote', node: id, fork }).tree;
+    // Promoting undoes a forced variation on the way.
+    for (let c = id; c != null; c = this.node(c).parent) {
+      this.forced.delete(c);
+      if (fork) break;
+    }
+    this.afterTreeEdit(id);
+  }
+
+  /** After the tree's order changed: show action `id` on the board and redraw the list. */
+  afterTreeEdit(id) {
+    if (id !== this.cur) this.goto(id);
+    else this.show({ follow: false });
+  }
+
+  /**
+   * Delete action `id` and everything after it. Viewing a position inside it moves the view to
+   * the position before it, and the action being built there (it belonged to the deleted
+   * position) is cleared.
+   */
+  deleteNode(id) {
+    const r = this.rules.call({ cmd: 'delete', node: id });
+    this.tree = r.tree;
+    const moved = this.isInSubtree(this.cur, id);
+    if (moved) {
+      this.stopAutoplay();
+      this.cur = r.node;
+      this.input.reset();
+    }
+    if (this.deeperNode != null && this.isInSubtree(this.deeperNode, id)) this.deeperNode = null;
+    this.show({ follow: false });
+    if (moved) this.restartEngine();
   }
 
   openLoad(text) {

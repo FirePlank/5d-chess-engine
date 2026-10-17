@@ -334,17 +334,24 @@ impl Game {
         Ok(p)
     }
 
-    /// Make `id`'s branch the first child at every level up to the root.
+    /// Make `id`'s branch the first child at every level up to the root (the main line).
     pub fn promote(&mut self, id: usize) {
         let mut c = id;
-        while let Some(p) = self.nodes[c].parent {
-            let ch = &mut self.nodes[p].children;
-            if let Some(i) = ch.iter().position(|&x| x == c) {
-                let x = ch.remove(i);
-                ch.insert(0, x);
-            }
-            c = p;
+        while self.promote_at_fork(c) {
+            c = self.nodes[c].parent.unwrap();
         }
+    }
+
+    /// Make `id` the first child of its parent only (one level up among its siblings); false
+    /// for the root.
+    pub fn promote_at_fork(&mut self, id: usize) -> bool {
+        let Some(p) = self.nodes[id].parent else { return false };
+        let ch = &mut self.nodes[p].children;
+        if let Some(i) = ch.iter().position(|&x| x == id) {
+            let x = ch.remove(i);
+            ch.insert(0, x);
+        }
+        true
     }
 
     /// The tree as nested move lists for the move panel.
