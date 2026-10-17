@@ -64,6 +64,11 @@ const TRAVEL_MATE_STEPS: u32 = 64;
 /// it up (when most of its combinations with the other boards' moves are illegal, finding one
 /// can take thousands).
 const TRAVEL_CAPTURE_STEPS: u32 = 16;
+/// Blunder check of the action to play (`allows_mate_in_one`): the actions it may try (the
+/// best first, then the last depth's order), the actions of each reply's probe, and its time.
+const GUARD_TRIES: usize = 8;
+const GUARD_PROBE: usize = 64;
+const GUARD_MS: u64 = 30;
 /// Aspiration windows (Apeiron's scheme): from depth ASP_MIN_DEPTH, after a completed depth
 /// with a non-mate score `prev`, the root is searched in [prev - w, prev + w], w starting at
 /// ASP_WINDOW; a fail low or high multiplies w by ASP_FAIL_MULT and moves that bound to
@@ -552,13 +557,17 @@ struct CheckDetector<'a> {
     buf: CheckBuf,
     /// Superphysical reach from the next board of each line with physical moves.
     reach: Vec<(i32, SpReach)>,
+    /// The checking coordinates found, (axis, coordinate).
+    found: Vec<(usize, Index)>,
 }
 
 impl<'a> CheckDetector<'a> {
     fn new(info: &'a HcInfo, s: &'a State, scratch: &mut OrderScratch) -> Self {
         let mut reach = std::mem::take(&mut scratch.reach);
         reach.clear();
-        CheckDetector { info, s, checks: None, buf: std::mem::take(&mut scratch.checks), reach }
+        let mut found = std::mem::take(&mut scratch.check_coords);
+        found.clear();
+        CheckDetector { info, s, checks: None, buf: std::mem::take(&mut scratch.checks), reach, found }
     }
 
     /// Give the buffers back to `scratch`.
@@ -568,9 +577,18 @@ impl<'a> CheckDetector<'a> {
             None => self.buf,
         };
         scratch.reach = self.reach;
+        scratch.check_coords = self.found;
     }
 
     fn gives_check(&mut self, axis: usize, coord: Index) -> bool {
+        let c = self.detect(axis, coord);
+        if c {
+            self.found.push((axis, coord));
+        }
+        c
+    }
+
+    fn detect(&mut self, axis: usize, coord: Index) -> bool {
         let info: &'a HcInfo = self.info;
         let Some(mb) = info.get_move_boards(axis, coord) else { return false };
         let s: &'a State = self.s;
@@ -618,6 +636,8 @@ struct OrderScratch {
     /// History values of the branch coordinates, by coordinate, as they were when the
     /// node was ordered (the branch axes may be scored later).
     branch_history: Vec<i32>,
+    /// The checking coordinates the last ordering found, (axis, coordinate).
+    check_coords: Vec<(usize, Index)>,
 }
 
 /// How `node_ordering` treats the branch axes.
@@ -994,6 +1014,90 @@ impl AlphaBeta {
             }
         }
         None
+    }
+
+    /// A checkmate in one among the combinations of checking moves, best first by `orders` and
+    /// `scores` (the node ordering, whose checking coordinates are `checks`): each board's
+    /// moves cut down to its checking ones, its departures (for travels between boards) and its
+    /// best other move, no timeline branching off (`travel_mate` looks at those). At most
+    /// `probe` actions are tried.
+    #[allow(clippy::too_many_arguments)]
+    fn check_mate(&mut self, s: &mut State, info: &HcInfo, ss: &SearchSpace, orders: &AxisOrders, scores: &[Vec<i32>], checks: &[(usize, Index)], probe: usize) -> Option<MoveSeq> {
+        let fba = info.first_branch_axis();
+        let dim = info.dimension();
+        if checks.is_empty() {
+            return None;
+        }
+        let departing = |n: usize, i: Index| matches!(info.entry(n, i), Entry::Departing { .. });
+        let mut keep: Vec<Vec<Index>> = vec![Vec::new(); fba];
+        for &(n, i) in checks.iter().filter(|c| c.0 < fba) {
+            keep[n].push(i);
+        }
+        for (n, k) in keep.iter_mut().enumerate() {
+            if let Some(&b) = orders.axis(n).iter().find(|&&i| i != 0 && !k.contains(&i) && !departing(n, i)) {
+                k.push(b);
+            }
+        }
+        let mut space = SearchSpace::default();
+        'hc: for hc in &ss.hcs {
+            let mut h = hc.clone();
+            for b in fba..dim {
+                if !h[b].contains(0) {
+                    continue 'hc;
+                }
+                h[b].assign_singleton(0);
+            }
+            for (n, k) in keep.iter().enumerate() {
+                h[n].erase_if(|i| !(i == 0 || k.contains(&i) || departing(n, i)));
+                if h[n].is_empty() {
+                    continue 'hc;
+                }
+            }
+            space.hcs.push(h);
+        }
+        if space.hcs.is_empty() {
+            return None;
+        }
+        let mut cursor = BestFirstCursor::default();
+        {
+            let (o, sc) = cursor.ordering_mut();
+            o.clone_from(orders);
+            sc.clear();
+            sc.extend_from_slice(scores);
+        }
+        cursor.restart(info, space);
+        for _ in 0..probe {
+            let act = cursor.next(info, s)?;
+            let mark = Self::make(s, &act);
+            let mate = self.in_check(s) && !self.has_evasion(s);
+            s.unmake(mark);
+            if mate {
+                return Some(act);
+            }
+        }
+        None
+    }
+
+    /// Whether the side to move in `s` has a checkmate in one that `travel_mate` or `check_mate`
+    /// finds (the blunder check of the action to play: `s` is the position after it).
+    fn allows_mate_in_one(&mut self, s: &mut State) -> bool {
+        let mut nb = self.bufs.pop().unwrap_or_default();
+        let ss = nb.info.rebuild(s, false);
+        let mut found = {
+            let NodeBufs { info, order, .. } = &mut *nb;
+            self.travel_mate(s, info, &ss, order).is_some()
+        };
+        if !found {
+            let NodeBufs { info, cursor, order, .. } = &mut *nb;
+            self.start_actions(s, info, cursor, order, ss.clone(), false);
+            let checks = std::mem::take(&mut order.check_coords);
+            let (orders, scores) = cursor.ordering_mut();
+            let (orders, scores) = (orders.clone(), scores.clone());
+            found = self.check_mate(s, info, &ss, &orders, &scores, &checks, GUARD_PROBE).is_some();
+            order.check_coords = checks;
+        }
+        self.bufs.push(nb);
+        found
     }
 
     /// Capturing travels a node would search late or never: a travel onto a board's end that
@@ -2569,6 +2673,8 @@ impl AlphaBeta {
         // The optional-board root actions were added (see below).
         let mut root_widened = false;
         let mut base_depth = first;
+        // The scores of `roots` as the last completed depth ordered them.
+        let mut root_scores: Vec<i32> = Vec::new();
         while base_depth <= max_depth {
             let depth = if ahead { (base_depth + 1).min(max_depth) } else { base_depth };
             let prev_best = best.clone();
@@ -2726,11 +2832,15 @@ impl AlphaBeta {
                 // Reorder roots: best first, rest by this iteration's scores.
                 let mut idx: Vec<usize> = (0..roots.len()).collect();
                 idx.sort_by(|&a, &b| scores.get(b).copied().unwrap_or(-INF).cmp(&scores.get(a).copied().unwrap_or(-INF)));
+                root_scores = idx.iter().map(|&i| scores.get(i).copied().unwrap_or(-INF)).collect();
                 roots = idx.into_iter().map(|i| roots[i].clone()).collect();
                 if kept {
                     // The kept mate is searched first at the next depth.
                     if let Some(i) = roots.iter().position(|r| r.1 == best) {
                         roots[..=i].rotate_right(1);
+                        if i < root_scores.len() {
+                            root_scores[..=i].rotate_right(1);
+                        }
                     }
                 }
                 // A kept mate keeps the lines it was found with (as in Apeiron).
@@ -2794,6 +2904,41 @@ impl AlphaBeta {
                 // A delay clock's free time is left: search on, but only until it runs out.
                 let soft = start + Duration::from_millis(free);
                 self.deadline = Some(self.deadline.map_or(soft, |d| d.min(soft)));
+            }
+        }
+        // Blunder check: the action to play must not allow a mate in one that the mate probes
+        // find (`allows_mate_in_one`), which the search can miss below the root (the reply sits
+        // past the action cap); the next actions by the last depth's order stand in for it. If
+        // none of those tried escapes, the action's score is that loss.
+        if main && completed_depth > 0 && best_score > -(MATE - 1000) {
+            // (The search may have run out of time: the probes get a time of their own.)
+            let never = AtomicBool::new(false);
+            let _probe = interrupt_on(&never, Some(Instant::now() + Duration::from_millis(GUARD_MS)));
+            let mut w = root.clone();
+            w.enable_undo();
+            let at = roots.iter().position(|r| r.1 == best);
+            let mut chosen = None;
+            for i in at.into_iter().chain((0..roots.len()).filter(|&i| Some(i) != at)).take(GUARD_TRIES) {
+                let mark = Self::make(&mut w, &roots[i].1);
+                let mates = self.allows_mate_in_one(&mut w);
+                w.unmake(mark);
+                if !mates {
+                    chosen = Some(i);
+                    break;
+                }
+            }
+            match chosen {
+                Some(i) if roots[i].1 != best => {
+                    best = roots[i].1.clone();
+                    best_score = root_scores.get(i).copied().unwrap_or(best_score).min(MATE - 1001);
+                    best_pv = vec![best.clone()];
+                    best_proven = false;
+                }
+                Some(_) => {}
+                None => {
+                    best_score = -(MATE - 2);
+                    best_proven = false;
+                }
             }
         }
         if main && completed_depth > 0 {
@@ -3156,5 +3301,35 @@ mod tests {
         let seq: MoveSeq = a.moves().iter().map(|m| m.fm).collect();
         assert_eq!(AlphaBeta::child(&s, &seq).get_mate_type(), MateType::Checkmate, "played {:?}", seq);
         assert_eq!(e.last_score(), MATE - 1);
+    }
+
+    /// Sac gauntlet game g203, after Black's (2T14)c7(1T14)d6 (0T14)d8a5 (-1T14)b5a5 (searched
+    /// as a mate in 2 for Black): White mates in one by a 4-board action, which the blunder check
+    /// finds.
+    #[test]
+    fn blunder_check_finds_the_reply_mate() {
+        let mut s = crate::core::perft::parse_g_line(
+            "G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w] moves \
+             (0T1)b1c3 submit (0T1)g8f6 submit (0T2)d2d4 submit (0T2)d7d5 submit (0T3)g1f3 submit \
+             (0T3)b8c6 submit (0T4)c1f4 submit (0T4)f6h5 submit (0T5)f4e3 submit (0T5)f7f6 submit \
+             (0T6)e3(0T2)e7 submit (1T2)d8e7 submit (1T3)e2e3 submit (1T3)b8c6 submit (1T4)c3b5 submit \
+             (1T4)f6d5 submit (1T5)f1c4 submit (1T5)e7h4 submit (1T6)c4d5 submit (1T6)e8d8 (0T6)h5f4 submit \
+             (0T7)d1c1 (1T7)g1f3 submit (1T7)h4f2 (0T7)c6d4 submit (0T8)f1(1T8)f2 submit \
+             (1T8)f7f5 (0T8)d4e2 submit (0T9)c3e2 (1T9)d5f7 submit (1T9)f8b4 (0T9)f4g2 submit \
+             (1T10)f2h4 (0T10)e1(1T9)f1 submit (0T10)g2(0T8)g1 submit (-1T9)h1g1 submit \
+             (2T9)f8d6 (-1T9)d4e2 submit (-1T10)c3e2 (2T10)b5d6 submit (2T10)c7d6 (1T10)g7g5 (-1T10)d8d7 submit \
+             (2T11)d5(-1T11)d8 (0T11)f3(1T11)f5 submit (2T11)c6e7 (1T11)b4d2 (0T11)c7c5 (-1T11)e8d8 submit \
+             (-1T12)c1f4 (0T12)c1d2 (1T12)c1d2 (2T12)f2h4 submit \
+             (2T12)d6d5 (1T12)g5h4 (0T12)d5d4 (-1T12)d7b5 submit \
+             (-1T13)f4d6 (0T13)e2f4 (1T13)f5d6 (2T13)h4e7 submit \
+             (2T13)d8c7 (1T13)c7d6 (0T13)c8d7 (-1T13)e7d6 submit (0T14)d2(-1T14)c3 (1T14)b5d6 (2T14)e7d6 submit \
+             (2T14)c7(1T14)d6 (0T14)d8a5 (-1T14)b5a5 submit",
+        )
+        .unwrap();
+        s.enable_undo();
+        let mut e = AlphaBeta::new();
+        let stop = AtomicBool::new(false);
+        e.begin_search(&stop, None, None);
+        assert!(e.allows_mate_in_one(&mut s));
     }
 }
