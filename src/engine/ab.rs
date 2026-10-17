@@ -391,6 +391,8 @@ pub struct AlphaBeta {
     known: KnownCache,
     /// The score (internal units, side to move) of the last `find_best_move`.
     last_score: i32,
+    /// Whether that score, a mate score, is proven (see `proven`).
+    last_proven: bool,
     /// The main thread's last search, for a resumed one.
     resume: Option<SearchResume>,
     /// Search threads (`Threads`), this one included.
@@ -666,6 +668,7 @@ impl AlphaBeta {
             known_check: None,
             known: KnownCache::new(),
             last_score: 0,
+            last_proven: false,
             resume: None,
             threads: 1,
             multipv: 1,
@@ -2266,6 +2269,7 @@ impl AlphaBeta {
             if let Some(m) = book.choose(root, super::book::random_seed()) {
                 info(format!("string book {} ; {} (weight {} of {})", m.lan, m.pgn, m.weight, book.play_weight(root)));
                 self.last_score = 0;
+                self.last_proven = false;
                 return Some(m.action.clone());
             }
         }
@@ -2305,6 +2309,7 @@ impl AlphaBeta {
         if let Some(r) = &resume {
             if r.completed_depth >= max_depth {
                 self.last_score = r.score;
+                self.last_proven = r.proven;
                 return Some(Action::from_moveseq(&r.best, root));
             }
             return self.search_roots(root, r.roots.clone(), r.roots_complete, max_depth, start, plan.as_ref(), info, Some(r));
@@ -2390,6 +2395,7 @@ impl AlphaBeta {
             Some(m) if self.last_score < MATE - 1 => {
                 info(self.info_text(root, 1, self.line_tag(1), MATE - 1, std::slice::from_ref(&m), self.nodes, start.elapsed().as_secs_f64(), 1));
                 self.last_score = MATE - 1;
+                self.last_proven = true;
                 self.resume = None;
                 Some(Action::from_moveseq(&m, root))
             }
@@ -2415,6 +2421,7 @@ impl AlphaBeta {
         if self.threads <= 1 {
             let r = self.iterate(root, roots, roots_complete, max_depth, start, plan, info, &[], resumed_depth, resume);
             self.last_score = r.score;
+            self.last_proven = r.proven;
             return Some(Action::from_moveseq(&r.best, root));
         }
 
@@ -2481,6 +2488,7 @@ impl AlphaBeta {
             }
         }
         self.last_score = chosen.score;
+        self.last_proven = chosen.proven;
         Some(Action::from_moveseq(&chosen.best, root))
     }
 
@@ -2840,6 +2848,12 @@ impl AlphaBeta {
     /// side to move's view; mates as `MATE - plies`, proven or not).
     pub fn last_score(&self) -> i32 {
         self.last_score
+    }
+
+    /// Whether `last_score`, a mate score, is a proven mate (a forced mate within its distance
+    /// for a mating score, every legal action searched for a mated one).
+    pub fn last_proven(&self) -> bool {
+        self.last_proven
     }
 }
 
