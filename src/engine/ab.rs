@@ -46,7 +46,7 @@ const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
-const ROOT_LMR_MIN_INDEX: usize = 6;
+const ROOT_LMR_MIN_INDEX: usize = 8;
 /// Root actions with a move on an optional board tried for a checkmate in one.
 const ROOT_FUTURE_MATE_PROBE: usize = 16;
 /// Time for that probe without a time plan (with one: a 32nd of the optimum).
