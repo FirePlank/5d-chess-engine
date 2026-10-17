@@ -14,8 +14,7 @@ use crate::core::bitboard::{marked_pos, pmask};
 use crate::core::board::Board;
 use crate::core::check_position::{BoardOverlay, CheckBuf, CheckKind, CheckPosition, SpReach};
 use crate::core::hypercuboid::{has_physical_check, interrupt_on, interrupted, plays_wasted_move, BestFirstCursor, Entry, HcCursor, HcInfo, NeedBranch};
-use crate::misc::geometry::Hc;
-use crate::core::multiverse::{active_range_for, next_turn};
+use crate::core::multiverse::next_turn;
 use crate::core::piece::*;
 use crate::core::state::promotion_rank;
 use crate::core::state::{Mark, MateType, State};
@@ -51,12 +50,6 @@ const ROOT_LMR_MIN_INDEX: usize = 6;
 const ROOT_FUTURE_MATE_PROBE: usize = 16;
 /// Time for that probe without a time plan (with one: a 32nd of the optimum).
 const ROOT_FUTURE_MATE_MS: u64 = 50;
-/// Interior nodes up to this ply (the root is 0) look for a checkmate in one by a checking
-/// travel the node would search late or never (`travel_mate`).
-const TRAVEL_MATE_PLY: usize = 2;
-/// Hypercuboids the search for an evasion of such a check may look at (an evasion is usually
-/// found in a few; past this the check counts as no mate).
-const TRAVEL_MATE_STEPS: u32 = 64;
 /// Aspiration windows (Apeiron's scheme): from depth ASP_MIN_DEPTH, after a completed depth
 /// with a non-mate score `prev`, the root is searched in [prev - w, prev + w], w starting at
 /// ASP_WINDOW; a fail low or high multiplies w by ASP_FAIL_MULT and moves that bound to
@@ -875,100 +868,6 @@ impl AlphaBeta {
         out
     }
 
-    /// A checkmate in one by a checking travel the node's actions come to late or never: a
-    /// travel that gives check on arrival and branches off a new timeline (actions creating
-    /// timelines come after every other one: with two boards to play, after hundreds) or
-    /// leaves or reaches a board the side to move need not play (`without_future` leaves those
-    /// out), played alone (the other boards unplayed). With another board to play that takes a
-    /// travel moving the present back (a new active timeline in the past). A check with no
-    /// evasion within `TRAVEL_MATE_STEPS` hypercuboids is a mate.
-    fn travel_mate(&mut self, s: &mut State, info: &mut HcInfo, ss: &SearchSpace, scratch: &mut OrderScratch) -> Option<MoveSeq> {
-        let dim = info.dimension();
-        let fba = info.first_branch_axis();
-        let present = s.get_present();
-        let (amin, amax) = s.get_active_range();
-        let (lo, hi) = s.get_lines_range();
-        let optional: Vec<usize> = (lo..=hi)
-            .filter(|&l| !(l >= amin && l <= amax && s.get_timeline_end(l) == present))
-            .filter_map(|l| info.line_to_axis(l))
-            .collect();
-        if fba >= dim && optional.is_empty() {
-            return None;
-        }
-        let mandatory: Vec<usize> = (0..fba).filter(|n| !optional.contains(n)).collect();
-        let nl = s.new_line();
-        let (na, nb) = active_range_for(s.multiverse().layout(), lo.min(nl), hi.max(nl));
-        let moves_back = |m: &FullMove| nl >= na && nl <= nb && (m.to.t(), present.1) < present;
-        // (departure axis, departure coordinate, arrival axis, arrival coordinate)
-        let mut travels: Vec<(usize, Index, usize, Index)> = Vec::new();
-        let u = info.get_universe();
-        // Branch axes share their entries: the first one stands for all.
-        for n in 0..dim.min(fba + 1) {
-            let wanted = n >= fba || optional.contains(&n);
-            for i in u[n].iter() {
-                let (m, dep, fa) = if n < fba {
-                    let Entry::Arriving { m, idx, fa, .. } = info.entry(n, i) else { continue };
-                    (*m, *idx, *fa as usize)
-                } else {
-                    let Some(b) = info.branch_departure(i) else { continue };
-                    b
-                };
-                if (wanted || optional.contains(&fa)) && (n >= fba && moves_back(&m) || mandatory.iter().all(|&a| a == fa || a == n)) {
-                    travels.push((fa, dep, n, i));
-                }
-            }
-        }
-        if travels.is_empty() {
-            return None;
-        }
-        info.materialize_branch(s);
-        let info: &HcInfo = info;
-        let mut det = CheckDetector::new(info, s, scratch);
-        travels.retain(|&(_, _, n, i)| det.gives_check(n, i));
-        det.finish(scratch);
-        for &(fa, dep, n, i) in &travels {
-            // The travel alone, if the node's actions have it.
-            let Some(hc) = ss.hcs.iter().find(|hc| {
-                hc[fa].contains(dep) && hc[n].contains(i) && (0..dim).all(|a| a == fa || a == n || hc[a].contains(0))
-            }) else {
-                continue;
-            };
-            let mut h: Hc = hc.clone();
-            for a in 0..dim {
-                h[a].assign_singleton(0);
-            }
-            h[fa].assign_singleton(dep);
-            h[n].assign_singleton(i);
-            let mut probe = HcCursor::new(SearchSpace::from_vec(vec![h]), HcOrdering::Natural);
-            let Some(act) = probe.next(info, s) else { continue };
-            let mark = Self::make(s, &act);
-            let mate = self.in_check(s) && !self.has_evasion(s);
-            s.unmake(mark);
-            if mate {
-                return Some(act);
-            }
-        }
-        None
-    }
-
-    /// Whether the side to move has a legal action (each evades the check), as far as
-    /// `TRAVEL_MATE_STEPS` hypercuboids show (past them: yes).
-    fn has_evasion(&mut self, s: &State) -> bool {
-        let mut nb = self.bufs.pop().unwrap_or_default();
-        let found = {
-            let NodeBufs { info, evasions, .. } = &mut *nb;
-            evasions.ss = info.rebuild(s, false);
-            evasions.order = HcOrdering::Natural;
-            evasions.branch_pending = false;
-            evasions.budget = TRAVEL_MATE_STEPS;
-            let found = evasions.next(info, s).is_some() || evasions.budget == 0 || interrupted();
-            evasions.budget = u32::MAX;
-            found
-        };
-        self.bufs.push(nb);
-        found
-    }
-
     /// A checkmate in one among the root actions `without_future` leaves out: a piece that
     /// travels back from a board the side to move need not play (ahead of the present, or
     /// on an inactive timeline) and gives check on arrival, with moves on the boards that must
@@ -1512,23 +1411,6 @@ impl AlphaBeta {
 
         let mut nb = self.bufs.pop().unwrap_or_default();
         let ss = nb.info.rebuild(s, true);
-        if ply <= TRAVEL_MATE_PLY {
-            let mate = {
-                let NodeBufs { info, order, .. } = &mut *nb;
-                self.travel_mate(s, info, &ss, order)
-            };
-            if let Some(act) = mate {
-                self.bufs.push(nb);
-                let v = MATE - (ply as i32 + 1);
-                self.pv_clear(ply + 1);
-                if pv {
-                    self.pv_update(ply, &act);
-                }
-                self.tt_store(key, depth, Bound::Exact, mate_to_tt(v, ply), true, &act);
-                self.proven = true;
-                return v;
-            }
-        }
         let first = Self::without_future(s, &nb.info, &ss);
         let mut full = Some(ss);
         {
@@ -2705,32 +2587,5 @@ mod tests {
         assert_eq!(AlphaBeta::child(&s, &seq).get_mate_type(), MateType::Checkmate, "played {:?}", seq);
         assert_eq!(e.last_score(), MATE - 1);
         assert!(last.contains("score mate 1 "), "{}", last);
-    }
-
-    /// Turn Zero engine game, Black's move 30: (-2T16)Na5xb3 loses to the knight travel
-    /// (-2T17)Ng5>>x(-2T16)g7#, a branching travel from a board White must play, which interior
-    /// nodes reached only after every action creating no timeline (tactics suite, "T0 travel
-    /// mate").
-    #[test]
-    fn checking_travel_reply_is_searched() {
-        let s = start_with_moves(
-            "(0T1)e2e3 submit (0T1)g8f6 submit (0T2)b2b4 submit (0T2)d7d5 submit (0T3)c1b2 submit (0T3)c8g4 submit \
-             (0T4)g1f3 submit (0T4)b8c6 submit (0T5)b4b5 submit (0T5)c6a5 submit (0T6)h2h3 submit (0T6)g4h5 submit \
-             (0T7)g2g4 submit (0T7)h5g6 submit (0T8)d2d3 submit (0T8)e7e6 submit (0T9)b1d2 submit (0T9)f8d6 submit \
-             (0T10)d1e2 submit (0T10)d8d7 submit (0T11)a2a4 submit (0T11)e8g8 submit (0T12)h3h4 submit (0T12)a5c4 submit \
-             (0T13)d3c4 submit (0T13)d5d4 submit (0T14)b2d4 submit (0T14)e6e5 submit (0T15)d4c3 submit (0T15)g6c2 submit \
-             (0T16)f1h3 submit (0T16)e5e4 submit (0T17)c3f6 submit (0T17)g7f6 submit (0T18)f3d4 submit (0T18)d6e5 submit \
-             (0T19)d4c2 submit (0T19)e5a1 submit (0T20)c2a1 submit (0T20)d7d6 submit (0T21)g4g5 submit (0T21)d6e5 submit \
-             (0T22)e2d1 submit (0T22)e5(0T18)a1 submit (-1T19)d2b1 submit (-1T19)a1b1 submit (0T23)d1(0T11)d1 submit \
-             (1T11)d7b5 submit (1T12)f3g5 submit (1T12)b5b2 submit (1T13)a1b1 submit (1T13)b2c3 submit (1T14)h3h4 submit \
-             (1T14)e8f8 submit (1T15)h4h5 submit (1T15)g6h5 submit (1T16)g4h5 submit (1T16)a5(1T15)a3 submit \
-             (-2T16)b1b3 submit",
-        );
-        let losing = FullMove::parse("(-2T16)a5b3").unwrap();
-        let mut e = AlphaBeta::new();
-        let stop = AtomicBool::new(false);
-        let a = e.find_best_move(&s, &Limits { depth: Some(3), ..Default::default() }, &stop, &mut |_| {}).unwrap();
-        let seq: MoveSeq = a.moves().iter().map(|m| m.fm).collect();
-        assert!(seq.as_slice() != [losing], "played {:?}", seq);
     }
 }

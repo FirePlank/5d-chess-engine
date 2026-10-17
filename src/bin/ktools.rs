@@ -1555,7 +1555,7 @@ fn tactics(path: &str, ms: u64, threads: usize, out: &mut impl Write) {
         };
         let best = e.find_best_move(&t.state, &Limits { movetime: Some(ms), ..Default::default() }, &stop, &mut |m| {
             match first_action(&m) {
-                Some(a) if t.solved_by(&a) || fast_mate(&m) => {
+                Some(a) if t.best.contains(&a) || fast_mate(&m) => {
                     since.get_or_insert(t0.elapsed().as_secs_f64());
                 }
                 Some(_) => since = None,
@@ -1567,7 +1567,7 @@ fn tactics(path: &str, ms: u64, threads: usize, out: &mut impl Write) {
         let depth = last.split_whitespace().nth(1).unwrap_or("?").to_string();
         let score = last.split_whitespace().skip_while(|w| *w != "score").take(3).collect::<Vec<_>>().join(" ");
         match best {
-            Some(a) if t.solved_by(&a) || (fast_mate(&last) && first_action(&last).as_ref() == Some(&a)) => {
+            Some(a) if t.best.contains(&a) || (fast_mate(&last) && first_action(&last).as_ref() == Some(&a)) => {
                 let at = since.unwrap_or(secs);
                 solved += 1;
                 time_sum += at;
@@ -1575,8 +1575,7 @@ fn tactics(path: &str, ms: u64, threads: usize, out: &mut impl Write) {
             }
             other => {
                 let played = other.map(|a| kairos::web::tree::action_lan(&t.state, &a)).unwrap_or_else(|| "none".into());
-                let wanted = if t.avoid { format!("not {}", t.best_lan.join(" | ")) } else { t.best_lan.join(" | ") };
-                writeln!(out, "UNSOLVED {:>6.2}s  depth {:>2}  {:<16} {}  (played {}, wanted {})", secs, depth, score, t.name, played, wanted).unwrap();
+                writeln!(out, "UNSOLVED {:>6.2}s  depth {:>2}  {:<16} {}  (played {}, wanted {})", secs, depth, score, t.name, played, t.best_lan.join(" | ")).unwrap();
             }
         }
         out.flush().unwrap();

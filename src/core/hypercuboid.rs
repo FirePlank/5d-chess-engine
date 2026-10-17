@@ -636,12 +636,6 @@ impl HcInfo {
         let &(m, _, _, mover) = self.branch_moves.get((i as usize).checked_sub(1)?)?;
         Some((m, mover))
     }
-    /// The arrival move, departure coordinate and departure axis of branch coordinate `i`,
-    /// built or not.
-    pub fn branch_departure(&self, i: Index) -> Option<(FullMove, Index, usize)> {
-        let &(m, dep, fa, _) = self.branch_moves.get((i as usize).checked_sub(1)?)?;
-        Some((m, dep, fa as usize))
-    }
     pub fn get_semimove(&self, n: usize, i: Index) -> Semimove {
         match self.entry(n, i) {
             Entry::Physical { m, .. } => Semimove::Physical(*m),
@@ -1794,9 +1788,6 @@ pub struct HcCursor {
     pub order: HcOrdering,
     /// The branch axes' shared order is still to be filled (see `next_with`).
     pub branch_pending: bool,
-    /// Hypercuboids it may still look at: once none is left, `next` finds no further action
-    /// (the caller tells that apart from the end by `budget == 0`).
-    pub budget: u32,
     sc: PointScratch,
     checks: CheckBuf,
 }
@@ -1809,7 +1800,7 @@ impl Default for HcCursor {
 
 impl HcCursor {
     pub fn new(ss: SearchSpace, order: HcOrdering) -> Self {
-        HcCursor { ss, order, branch_pending: false, budget: u32::MAX, sc: PointScratch::default(), checks: CheckBuf::default() }
+        HcCursor { ss, order, branch_pending: false, sc: PointScratch::default(), checks: CheckBuf::default() }
     }
 
     pub fn next(&mut self, info: &HcInfo, s: &State) -> Option<MoveSeq> {
@@ -1829,10 +1820,9 @@ impl HcCursor {
         let mut steps = 0u32;
         while !self.ss.is_empty() {
             steps += 1;
-            if steps % INTERRUPT_EVERY == 0 && interrupted() || self.budget == 0 {
+            if steps % INTERRUPT_EVERY == 0 && interrupted() {
                 return Ok(None);
             }
-            self.budget -= 1;
             let mut hc = self.ss.pop_back().unwrap();
             if info.needs_branch(&hc) {
                 self.ss.push_back(hc);
