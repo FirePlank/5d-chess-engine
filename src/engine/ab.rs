@@ -96,6 +96,16 @@ const RFP_MARGIN: i32 = 250;
 const NMP_MIN_DEPTH: i32 = 3;
 const NMP_R: i32 = 2;
 const NMP_DIV: i32 = 4;
+/// Singular extension (Stockfish's, as in Apeiron): at a non-PV node of at least SE_DEPTH, not
+/// in check and not seeking a mate, whose TT entry is a non-mate lower or exact bound at most
+/// SE_TT_DEPTH_SLACK shallower than the node, every other action is searched at
+/// (depth - 1) / 2 against singular beta = TT score - SE_MARGIN * depth. When none reaches it
+/// the TT action is extended by a ply (up to ply 2 * root depth); when singular beta is at
+/// least beta, the node fails high on it (multi-cut); otherwise a TT action expected to fail
+/// high is searched a ply shallower.
+const SE_DEPTH: i32 = 7;
+const SE_TT_DEPTH_SLACK: i32 = 3;
+const SE_MARGIN: i32 = 50;
 const DEFAULT_HASH_MB: usize = 64;
 /// Static evaluations are kept within +-EVAL_MAX, well clear of mate scores.
 const EVAL_MAX: i32 = 20000;
@@ -387,6 +397,11 @@ pub struct AlphaBeta {
     terms: Box<hce::TermCache>,
     /// Whether the position the next `negamax` call searches is in check, when known.
     known_check: Option<bool>,
+    /// The action the next `negamax` call leaves out (a singular extension's verification
+    /// search): it neither probes nor stores the table, nor updates killers or history.
+    excluded: Option<MoveSeq>,
+    /// Depth of the current root iteration (extensions stop past twice it).
+    root_depth: i32,
     /// Static evaluations and in-check status of recently seen positions.
     known: KnownCache,
     /// The score (internal units, side to move) of the last `find_best_move`.
@@ -666,6 +681,8 @@ impl AlphaBeta {
             bufs: Vec::new(),
             terms: Box::default(),
             known_check: None,
+            excluded: None,
+            root_depth: 0,
             known: KnownCache::new(),
             last_score: 0,
             last_proven: false,
@@ -1549,6 +1566,7 @@ impl AlphaBeta {
 
     fn negamax(&mut self, s: &mut State, depth: i32, ply: usize, mut alpha: i32, beta: i32, pv: bool) -> i32 {
         let known_check = self.known_check.take();
+        let excluded = self.excluded.take();
         self.pv_clear(ply);
         if depth <= 0 {
             return self.qsearch(s, ply, alpha, beta, QDEPTH, known_check);
@@ -1565,33 +1583,51 @@ impl AlphaBeta {
         let alpha0 = alpha;
         let key = s.hash();
         let mut tt_action: Option<MoveSeq> = None;
-        // Ok((score, proven)): a cutoff; Err(action): the remembered action, if any. (Read
-        // under the slot's lock, so the score, its proof and the action are one entry's.)
-        let probe = self.tt.probe(key, |e| {
-            let sc = mate_from_tt(e.score, ply);
-            if !pv && e.depth as i32 >= depth {
-                let cut = match e.bound {
-                    Bound::Exact => true,
-                    Bound::Lower => sc >= beta,
-                    Bound::Upper => sc <= alpha,
-                    Bound::Empty => false,
-                };
-                if cut {
-                    return Ok((sc, e.proven));
+        // The TT entry's score, when a singular extension may test its action.
+        let mut se_score: Option<i32> = None;
+        // Ok((score, proven)): a cutoff; Err((action, singular score)): the remembered action,
+        // if any. (Read under the slot's lock, so the score, its proof and the action are one
+        // entry's.) A verification search never probes: the entry is its own node's.
+        let probe = if excluded.is_some() {
+            None
+        } else {
+            self.tt.probe(key, |e| {
+                let sc = mate_from_tt(e.score, ply);
+                if !pv && e.depth as i32 >= depth {
+                    let cut = match e.bound {
+                        Bound::Exact => true,
+                        Bound::Lower => sc >= beta,
+                        Bound::Upper => sc <= alpha,
+                        Bound::Empty => false,
+                    };
+                    if cut {
+                        return Ok((sc, e.proven));
+                    }
                 }
-            }
-            Err(if e.action.is_empty() { None } else { Some(e.action.clone()) })
-        });
+                let se = (e.depth as i32 >= depth - SE_TT_DEPTH_SLACK
+                    && matches!(e.bound, Bound::Lower | Bound::Exact)
+                    && sc.abs() < MATE - 1000)
+                    .then_some(sc);
+                Err(if e.action.is_empty() { (None, None) } else { (Some(e.action.clone()), se) })
+            })
+        };
         match probe {
             Some(Ok((sc, proven))) => {
                 self.proven = proven;
                 return sc;
             }
-            Some(Err(a)) => tt_action = a,
+            Some(Err((a, se))) => {
+                tt_action = a;
+                se_score = se;
+            }
             None => {}
         }
+        // Singular extension candidate (see SE_DEPTH).
+        let se_score = se_score.filter(|_| {
+            !pv && depth >= SE_DEPTH && !self.seek_mate && (ply as i32) < 2 * self.root_depth && !known_check.unwrap_or_else(|| self.in_check(s))
+        });
 
-        if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| self.in_check(s)) {
+        if !pv && excluded.is_none() && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| self.in_check(s)) {
             if depth <= RFP_DEPTH {
                 let e = self.static_eval(s);
                 if e - RFP_MARGIN * depth >= beta {
@@ -1630,16 +1666,39 @@ impl AlphaBeta {
 
         // Remembered actions first, before paying for the action space: the TT action,
         // then the killers.
-        let mut pre_tried: Vec<MoveSeq> = Vec::new();
+        // A verification search's excluded action counts as tried: no enumeration plays it.
+        let mut pre_tried: Vec<MoveSeq> = excluded.iter().cloned().collect();
         let mut remembered: Vec<MoveSeq> = tt_action.iter().cloned().collect();
         if ply <= MAX_PLY {
-            remembered.extend(self.killers[ply].iter().flatten().filter(|k| tt_action.as_ref() != Some(*k)).cloned());
+            remembered.extend(self.killers[ply].iter().flatten().filter(|k| tt_action.as_ref() != Some(*k) && excluded.as_ref() != Some(*k)).cloned());
         }
         for (k, act) in remembered.into_iter().enumerate() {
-            let Some(mark) = Self::make_checked(s, &act) else { continue };
+            let Some(mut mark) = Self::make_checked(s, &act) else { continue };
             // The TT action keeps the node's PV status; killers after it are null-window.
             let v = if k == 0 && tt_action.is_some() {
-                let v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, pv);
+                let mut ext = 0;
+                if let Some(tt_score) = se_score {
+                    // Singular extension: does any other action come near the TT score?
+                    s.unmake(mark);
+                    let sbeta = tt_score - SE_MARGIN * depth;
+                    self.excluded = Some(act.clone());
+                    self.known_check = Some(false);
+                    let v = self.negamax(s, (depth - 1) / 2, ply, sbeta - 1, sbeta, false);
+                    if self.aborted {
+                        return 0;
+                    }
+                    if v < sbeta {
+                        ext = 1;
+                    } else if sbeta >= beta {
+                        // Multi-cut: the TT action and another both beat beta.
+                        self.proven = false;
+                        return sbeta;
+                    } else if tt_score >= beta {
+                        ext = -1;
+                    }
+                    mark = Self::make_checked(s, &act).expect("validated TT action");
+                }
+                let v = -self.negamax(s, depth - 1 + ext, ply + 1, -beta, -alpha, pv);
                 s.unmake(mark);
                 v
             } else {
@@ -1662,9 +1721,11 @@ impl AlphaBeta {
                 }
             }
             if alpha >= beta {
-                self.on_cutoff(s, &act, depth, ply);
                 let proven = mate_proven(best, best_proven, false);
-                self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
+                if excluded.is_none() {
+                    self.on_cutoff(s, &act, depth, ply);
+                    self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
+                }
                 self.proven = proven;
                 return best;
             }
@@ -1678,14 +1739,16 @@ impl AlphaBeta {
                 let NodeBufs { info, order, .. } = &mut *nb;
                 self.travel_mate(s, info, &ss, order)
             };
-            if let Some(act) = mate {
+            if let Some(act) = mate.filter(|a| excluded.as_ref() != Some(a)) {
                 self.bufs.push(nb);
                 let v = MATE - (ply as i32 + 1);
                 self.pv_clear(ply + 1);
                 if pv {
                     self.pv_update(ply, &act);
                 }
-                self.tt_store(key, depth, Bound::Exact, mate_to_tt(v, ply), true, &act);
+                if excluded.is_none() {
+                    self.tt_store(key, depth, Bound::Exact, mate_to_tt(v, ply), true, &act);
+                }
                 self.proven = true;
                 return v;
             }
@@ -1810,9 +1873,11 @@ impl AlphaBeta {
                         }
                     }
                     if alpha >= beta {
-                        self.on_cutoff(s, &act, depth, ply);
                         let proven = mate_proven(best, best_proven, false);
-                        self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
+                        if excluded.is_none() {
+                            self.on_cutoff(s, &act, depth, ply);
+                            self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
+                        }
                         self.proven = proven;
                         break 'search Some(best);
                     }
@@ -1883,9 +1948,11 @@ impl AlphaBeta {
                         }
                     }
                     if alpha >= beta {
-                        self.on_cutoff(s, &act, depth, ply);
                         let proven = mate_proven(best, best_proven, false);
-                        self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
+                        if excluded.is_none() {
+                            self.on_cutoff(s, &act, depth, ply);
+                            self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
+                        }
                         self.proven = proven;
                         break 'widen Some(best);
                     }
@@ -1913,6 +1980,11 @@ impl AlphaBeta {
             // (A cutoff has set `proven`; an abort returns 0.)
             return v;
         }
+        if searched == 0 && excluded.is_some() {
+            // Only the excluded action is legal: it is singular.
+            self.proven = false;
+            return alpha;
+        }
         if searched == 0 && generated == 0 && tt_action.is_none() {
             return self.terminal_score(s, ply);
         }
@@ -1926,7 +1998,7 @@ impl AlphaBeta {
         // A fail-low with actions the action cap left unsearched bounds nothing: one of those
         // might score higher (e.g. the only mating move), and a stored "at most" would poison
         // deeper searches of this node.
-        if bound != Bound::Upper || (exhausted && !skipped) {
+        if excluded.is_none() && (bound != Bound::Upper || (exhausted && !skipped)) {
             self.tt_store(key, depth, bound, mate_to_tt(best, ply), proven, &best_action);
         }
         self.proven = proven;
@@ -2571,6 +2643,7 @@ impl AlphaBeta {
         let mut base_depth = first;
         while base_depth <= max_depth {
             let depth = if ahead { (base_depth + 1).min(max_depth) } else { base_depth };
+            self.root_depth = depth;
             let prev_best = best.clone();
             // seekMate bar: 3000 + 100000 / depth^2 (Stockfish's form, in our units).
             self.seek_mate = depth > 1 && best_score.abs() >= 3000 + 100_000 / (depth * depth);
