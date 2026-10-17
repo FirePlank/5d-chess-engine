@@ -42,7 +42,7 @@ const ROOT_CAP: usize = 1000;
 const BATCH: usize = 12;
 const QDEPTH: i32 = 3;
 const QCAP: usize = 4;
-const LMR_MIN_DEPTH: i32 = 4;
+const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
