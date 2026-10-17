@@ -636,11 +636,6 @@ impl HcInfo {
         let &(m, _, _, mover) = self.branch_moves.get((i as usize).checked_sub(1)?)?;
         Some((m, mover))
     }
-    /// Branch coordinate `i`'s move with its departure coordinate and axis, built or not.
-    pub fn branch_departure(&self, i: Index) -> Option<(FullMove, Index, usize)> {
-        let &(m, dep, fa, _) = self.branch_moves.get((i as usize).checked_sub(1)?)?;
-        Some((m, dep, fa as usize))
-    }
     pub fn get_semimove(&self, n: usize, i: Index) -> Semimove {
         match self.entry(n, i) {
             Entry::Physical { m, .. } => Semimove::Physical(*m),
