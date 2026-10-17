@@ -197,3 +197,5 @@
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / c6 {know} 2. Nf3 {play 10}
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. e4 / e5 {know} 2. Nf3 {play 10}
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. e4 / e6 {know} 2. Nf3 {play 10}
+# User's line (2026-10-17): Black meets 2. c3 with d5 and the e4 break with c6, keeping f7 covered and ready for Qb6/Qa5 against the Qb3 travel route.
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c3 {know} / d5 {play 10} 3. e4 {know} / c6 {play 10}
