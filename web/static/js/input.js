@@ -15,6 +15,12 @@ export class MoveInput {
     this.autoSubmitBy = { analysis: true, play: false, ...(store('autoSubmitBy') || {}) };
     this.peek = false;
     board.onSquare = (sq) => this.click(sq);
+    // A right-click with a piece selected only deselects it (as 5dcol); otherwise it draws.
+    board.onRightPress = () => {
+      if (!this.selected) return false;
+      this.deselect();
+      return true;
+    };
     $('#tool-autosubmit').onclick = () => {
       this.autoSubmitBy[this.mode] = !this.autoSubmit;
       store('autoSubmitBy', this.autoSubmitBy);
@@ -57,10 +63,24 @@ export class MoveInput {
 
   get active() { return this.draft.length > 0; }
 
-  /** The current position (with the draft applied), from the rules core. */
+  /**
+   * The current position (with the draft applied), from the rules core. A draft that no longer
+   * fits the position (the tree changed under it) is dropped rather than left to fail every
+   * redraw.
+   */
   view() {
     const s = this.source;
-    return s.rules.call({ cmd: 'view', node: s.node(), draft: this.draft }).view;
+    try {
+      return s.rules.call({ cmd: 'view', node: s.node(), draft: this.draft }).view;
+    } catch (e) {
+      if (!this.draft.length) throw e;
+      this.draft = [];
+      this.selected = null;
+      this.targets = [];
+      this.peek = false;
+      this.board.setOverlay({ selected: null, targets: [], targetColor: null, peek: false });
+      return s.rules.call({ cmd: 'view', node: s.node(), draft: [] }).view;
+    }
   }
 
   refresh(follow = true) {
@@ -126,6 +146,8 @@ export class MoveInput {
     }
     this.draft.push(mv);
     this.deselect();
+    // Playing a move clears the user's marks (as lichess).
+    this.board.clearMarks();
     const v = this.refresh();
     // A lone action (nothing else left to play) submits itself.
     const morePlayable = v.timelines.some((tl) => tl.end[1] === v.player && tl.status !== 'unplayable');

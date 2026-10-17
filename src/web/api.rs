@@ -175,7 +175,12 @@ impl Api {
             "promote" => {
                 let id = self.node_arg(j);
                 let g = self.game()?;
-                g.promote(id);
+                // `fork`: only among its siblings ("Promote variation"); else to the main line.
+                if j.get("fork").bool() == Some(true) {
+                    g.promote_at_fork(id);
+                } else {
+                    g.promote(id);
+                }
                 Ok(ok(obj![("tree", g.tree_json())]))
             }
             "comment" => {

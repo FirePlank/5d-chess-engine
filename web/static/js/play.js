@@ -125,6 +125,7 @@ export class Play {
       return;
     }
     this.previewing = true;
+    this.board.clearMarks();
     this.cur = 0;
     this.localStart = null;
     this.localMoves = [];
@@ -367,7 +368,9 @@ export class Play {
       $('#play-queue-text').textContent = s.queue ? `${s.queue} waiting. You can watch the game live, or join the queue.` : 'You can watch the game live. Join the queue to play next.';
     }
     const showForm = !s || s.canStart || (!live && !watching);
-    $('#play-form').classList.toggle('hidden', !(showForm && (!mine || !g || g.over || this.wantSetup)));
+    // Your finished game stays on screen (result, moves, Analyse); the setup comes back with
+    // New game, so the two never crowd the panel together.
+    $('#play-form').classList.toggle('hidden', !(showForm && (!mine || !g || this.wantSetup)));
     $('#play-start').disabled = !!(s && !s.canStart);
     $('#play-setup').classList.toggle('hidden', $('#play-form').classList.contains('hidden') && $('#play-busy').classList.contains('hidden'));
     $('#play-live').classList.toggle('hidden', !live || (mine && this.wantSetup && g.over));
