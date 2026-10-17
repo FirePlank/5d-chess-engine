@@ -1023,7 +1023,7 @@ impl AlphaBeta {
                 if *victim == NO_PIECE || !(wanted || optional.contains(&fa)) {
                     continue;
                 }
-                let priority = if matches!(*victim, QUEEN_W | PRINCESS_W | ROOK_W | BISHOP_W | KNIGHT_W | UNICORN_W | DRAGON_W) {
+                let priority = if matches!(*victim, QUEEN_W | PRINCESS_W | ROOK_W) {
                     piece_value(*victim)
                 } else {
                     let c = checkers.get_or_insert_with(|| {
