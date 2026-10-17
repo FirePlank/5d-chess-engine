@@ -1,0 +1,12 @@
+{
+  "name": "root_mate_guard_ext",
+  "old": "2073cc1",
+  "games": 3000,
+  "shards": 40,
+  "tc": "tc 10+0.1",
+  "elo0": -8,
+  "elo1": 0,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}
