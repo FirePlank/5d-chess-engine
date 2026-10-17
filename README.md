@@ -41,7 +41,7 @@ info depth 4 multipv 2 score cp 26 wdl 571 0 429 nodes 1374 nps 171729 time 8 ro
 info depth 4 multipv 3 score cp 6 wdl 517 0 483 nodes 1374 nps 171729 time 8 roots 20 pv (0T1)e2e4 submit (0T1)g8f6 submit ...
 ```
 
-A depth's lines share its `nodes`, `nps`, `time` and `roots`; `score` reads as in a plain search (`cp X wdl W D L` or `mate N wdl ...`, side to move's view). With K = 1 the search and its output are the plain ones: no `multipv` tag. With `Threads` above 1, a final group of K lines follows when a helper's result wins the vote (its depth may be one more than the last group's); `bestmove` is the last group's line 1 action, unless a later, interrupted depth changed it (as in a plain search). The JSON API's `search` takes `"multiPV": K` (else the `set_option` value, else 1); its streamed info lines are the same text, and the browser's `parseInfo` (web/static/js/kairos.js) returns the tag as `multipv` (absent on a plain search). The Analysis page keeps line 1 as the shown entry and all lines of that depth in its `lines` array (index k - 1).
+A depth's lines share its `nodes`, `nps`, `time` and `roots`; `score` reads as in a plain search (`cp X wdl W D L` or `mate N wdl ...`, side to move's view). With K = 1 the search and its output are the plain ones: no `multipv` tag. With `Threads` above 1, a final group of K lines follows when a helper's result wins the vote (its depth may be one more than the last group's); `bestmove` is the last group's line 1 action, unless a later, interrupted depth changed it (as in a plain search). The JSON API's `search` takes `"multiPV": K` (else the `set_option` value, else 1); its streamed info lines are the same text, and 5D Chess Lab's `parseInfo` (static/js/kairos.js) returns the tag as `multipv` (absent on a plain search). The Analysis page keeps line 1 as the shown entry and all lines of that depth in its `lines` array (index k - 1).
 
 ## Testing
 
@@ -70,28 +70,11 @@ Strength is measured with the SPRT harness in `src/bin/sprt.rs` (pentanomial GSP
 
 Larger tests run sharded on GitHub Actions with `scripts/sprt_run.sh`, which pushes a `test:` commit to the `sprt` branch and stops the run once the LLR crosses a bound.
 
-## Website: viewer, analysis board and play
+## 5D Chess Lab
 
-```bash
-rustup target add wasm32-wasip1-threads   # once
-cargo wasm                                # the browser engine (again after engine changes)
-cargo run --release --bin kairos-web
-```
+Kairos runs in the browser at **[5D Chess Lab](https://fireplank.github.io/5d-chess-lab/)**: an analysis board, a board editor and play against the engine. The site lives in its own repository, [FirePlank/5d-chess-lab](https://github.com/FirePlank/5d-chess-lab), and builds this crate (compiled to WebAssembly) as a git dependency; it picks up every engine change on `main` within the hour (at once when this repository's `SITE_DISPATCH_TOKEN` secret is set, see `.github/workflows/notify-site.yml`), and moves to it only once its checks pass.
 
-Then open <http://127.0.0.1:8080/>. `cargo wasm` (an alias in `.cargo/config.toml`) builds `web/wasm` into `web/wasm/target/wasm32-wasip1-threads/release/kairos_wasm.wasm`, which the server serves as `/kairos.wasm`; the server warns at start if it is missing or older than the sources.
-
-- **Analysis**: paste or drop a game (SPRT `--games-out` JSON lines, 5dpgn, a 5DUCI `position … moves …` line or a board FEN; Ctrl+V loads from the clipboard) and step through it: every timeline and turn on one zoomable board, arrows for the last action and for checks, the present, book actions marked, the recorded evaluations as a graph, and the opening book's theory moves for the position (click one to play it). Kairos analyses the position in the browser: live depth, score and principal variation, click a PV action to play it. Moves can be made on the board (select on every board you want to play, then submit), building variations.
-- **Play**: play Kairos on any built-in variant, as either side, with a clock or a fixed think time; with "Opening book" on (the default) Kairos plays theory moves from its opening book at once. The server runs the engine; one person plays at a time, everyone else watches the live game and can queue for the next one. Finished games are appended to `games/web/played.jsonl`.
-- **Editor**: set up any position: place, move and remove pieces on any board (a palette of all twelve piece types; click or drag to paint, right-click swaps colour), add boards and timelines ("+" slots at each timeline's ends and beside the outermost ones; a new board copies its neighbour), select, drag, copy and paste boards and whole timelines, mark which kings, rooks, pawns and brawns are unmoved, and set the board size, odd/even timelines and promotion pieces. The rules core checks the position as it changes (whose move, the present, checks, mate, a royal left in check, gaps) and the 5DFEN text box edits it both ways. Open it from the Analysis page's Edit button with the position shown, then analyse it or play Kairos from it. Every change is one undo step (Ctrl+Z / Ctrl+Y).
-- **Games**: your games, kept in the browser (IndexedDB): every game you finish against Kairos on the Play page (longer than one action), with when it was played, the time control and the engine version and settings, and the analyses you save from the analysis board (Save: the whole tree, its variations, comments and forced variations, and the position shown). Filter by kind, result and variant, rename a game and edit its players and notes, open it on the analysis board, delete it, or export them all as JSONL records.
-
-There is one browser build (`wasm32-wasip1-threads`, like Apeiron's single build): it runs on shared memory, and when the page is cross-origin isolated (kairos-web sends COOP/COEP) the analysis engine also runs its Lazy SMP helper threads in Web Workers; otherwise it searches on one thread. Threads and hash size are in the engine settings (gear) on the Analysis page.
-
-Options: `--port 8080`, `--host 0.0.0.0` (listen on every interface), `--games <dir>` (repeatable; default `games/`), `--threads <n>` and `--hash <MB>` (the play engine), `--archive <file>`.
-
-The site is plain HTML/CSS/ES modules in `web/static`, with no build step. It also runs with no server at all: the published site, <https://fireplank.github.io/5d-chess-engine/>, is rebuilt by `.github/workflows/pages.yml` on every push to main that touches the engine or the site. `scripts/build_pages.sh [dir]` (after `cargo wasm`) assembles it: `web/static`, the engine as `kairos.wasm`, and the game records in `web/games` (a small curated set) with an index. Without a server, Play runs the game on the in-browser engine (each visitor plays their own Kairos, using the analysis engine settings; no queue), and `coi-serviceworker.js` adds the COOP/COEP headers static hosts cannot send, so the engine still gets its threads (one thread where service workers are unavailable).
-
-Tests: `cargo test` covers the record loader and 5dpgn; after `cargo wasm`, `node tests/web/records.mjs games/sprt/*.jsonl` replays SPRT records through the browser build and cross-checks actions, book/eval tags and results, and `node tests/web/pgn_corpus.mjs <dir>` loads every 5dpgn file under a directory and views each main-line position.
+The `kairos::web` module is the part of the engine it uses: 5dpgn and 5DFEN, the game records, the analysis game tree and the JSON command interface (`web::api`). Changes there show up on the site.
 
 ## License
 

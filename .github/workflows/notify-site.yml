@@ -1,0 +1,37 @@
+# Tell 5D Chess Lab (FirePlank/5d-chess-lab), which builds this engine for the browser, that
+# the engine changed: its Pages workflow then moves its engine pin to this commit, checks the
+# browser build and deploys. Needs a SITE_DISPATCH_TOKEN secret (a fine-grained token with
+# Contents: read and write on 5d-chess-lab); without one, the site still picks the change up
+# within the hour.
+name: Notify 5D Chess Lab
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'data/**'
+      - 'build.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+permissions: {}
+
+jobs:
+  notify:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: repository_dispatch to FirePlank/5d-chess-lab
+        env:
+          TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "No SITE_DISPATCH_TOKEN secret: the site's hourly check picks this commit up."
+            exit 0
+          fi
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/FirePlank/5d-chess-lab/dispatches \
+            -d "{\"event_type\":\"engine-updated\",\"client_payload\":{\"sha\":\"$GITHUB_SHA\"}}"
+          echo "Notified 5D Chess Lab of $GITHUB_SHA"
