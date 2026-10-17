@@ -40,7 +40,7 @@ const ROOT_CAP: usize = 1000;
 /// Actions generated (and sorted by action score) at a time at interior nodes: the first
 /// batch holds one action and each next one twice as many, up to this.
 const BATCH: usize = 12;
-const QDEPTH: i32 = 3;
+const QDEPTH: i32 = 4;
 const QCAP: usize = 4;
 const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
