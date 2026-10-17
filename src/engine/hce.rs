@@ -6,7 +6,7 @@ use crate::core::board::Board;
 use crate::core::check_position::CheckPosition;
 use crate::core::state::State;
 
-pub const NF: usize = 93;
+pub const NF: usize = 97;
 
 /// Feature indices.
 pub mod fi {
@@ -95,6 +95,9 @@ pub mod fi {
     /// every board, and travel landings next to own royals where the enemy moves next (white's
     /// minus black's).
     pub const DEF: usize = 90;
+    /// Round 5: the worst board by material, mobility and attacks where the enemy moves next, and
+    /// boards with own royals (white's minus black's).
+    pub const G5: usize = 93;
 }
 
 pub const FEATURE_NAMES: [&str; NF] = [
@@ -112,6 +115,7 @@ pub const FEATURE_NAMES: [&str; NF] = [
     "k_def", "k_flight",
     "tl_lost", "to_move", "zone_mand_stm", "zone_mand_opp",
     "def_hot", "def_board", "travel_hot",
+    "mat_def_max", "mob_min", "royal_boards", "zone_hot_max",
 ];
 
 pub type Features = [i32; NF];
@@ -140,81 +144,81 @@ pub fn default_weights() -> Weights {
 /// Weights used by the alpha-beta search with `use_hce` (Texel-tuned, see bin/tune.rs).
 pub fn tuned_weights() -> Weights {
     weights_by_name(&[
-        ("mat_a_pawn", 508.5),
+        ("mat_a_pawn", 388.2),
         ("mat_a_brawn", 150.0),
-        ("mat_a_knight", 909.1),
-        ("mat_a_bishop", 1638.7),
-        ("mat_a_rook", 1094.2),
-        ("mat_a_queen", 2341.8),
+        ("mat_a_knight", 724.5),
+        ("mat_a_bishop", 1464.2),
+        ("mat_a_rook", 548.7),
+        ("mat_a_queen", 2119.8),
         ("mat_a_princess", 899.8),
         ("mat_a_unicorn", 250.0),
         ("mat_a_dragon", 150.0),
-        ("mat_a_cking", 251.3),
-        ("mat_i_pawn", -69.3),
+        ("mat_a_cking", 155.1),
+        ("mat_i_pawn", -76.9),
         ("mat_i_brawn", 74.9),
-        ("mat_i_knight", 218.9),
-        ("mat_i_bishop", 656.9),
-        ("mat_i_rook", 329.3),
-        ("mat_i_queen", 1076.5),
+        ("mat_i_knight", 207.8),
+        ("mat_i_bishop", 644.5),
+        ("mat_i_rook", 328.2),
+        ("mat_i_queen", 1067.8),
         ("mat_i_princess", 450.0),
         ("mat_i_unicorn", 125.1),
         ("mat_i_dragon", 74.9),
         ("mat_i_cking", 150.0),
-        ("cent_knight", 105.1),
-        ("cent_bishop", -27.6),
-        ("cent_rook", 22.7),
-        ("cent_queen", 0.4),
-        ("cent_other", 95.8),
-        ("pawn_adv", -52.7),
-        ("pawn_near", 374.2),
-        ("king_cent", -49.3),
-        ("tl_slots", 2516.4),
-        ("tl_slots_heavy", -118.4),
-        ("k_holes", -247.3),
-        ("k_knights", 2548.7),
-        ("k_open_orth", -540.5),
-        ("k_open_diag", 113.6),
-        ("k_shield", 763.6),
-        ("k_zone_att", 105.1),
-        ("mob_knight", 98.2),
-        ("mob_bishop", 137.3),
-        ("mob_rook", 130.5),
-        ("mob_queen", 89.8),
-        ("mob_king", 155.1),
-        ("hanging", -16.7),
-        ("royal_att", -2034.7),
-        ("tempo", -140.4),
-        ("active_lines", 75.3),
+        ("cent_knight", 94.7),
+        ("cent_bishop", -63.6),
+        ("cent_rook", 24.4),
+        ("cent_queen", -73.8),
+        ("cent_other", 75.3),
+        ("pawn_adv", -52.0),
+        ("pawn_near", 345.3),
+        ("king_cent", -62.4),
+        ("tl_slots", 2403.3),
+        ("tl_slots_heavy", -74.7),
+        ("k_holes", -234.2),
+        ("k_knights", 2523.5),
+        ("k_open_orth", -470.5),
+        ("k_open_diag", 78.5),
+        ("k_shield", 725.8),
+        ("k_zone_att", 206.7),
+        ("mob_knight", 9.1),
+        ("mob_bishop", 64.0),
+        ("mob_rook", 50.2),
+        ("mob_queen", 10.5),
+        ("mob_king", 55.6),
+        ("hanging", -17.8),
+        ("royal_att", -2074.7),
+        ("tempo", -88.9),
+        ("active_lines", 92.7),
         ("checks_5d", 0.0),
         ("sp_checks", 0.0),
-        ("mandatory", 454.0),
-        ("passed", 107.8),
-        ("doubled", 7.8),
-        ("isolated", -42.7),
-        ("king_prox", 991.5),
-        ("undeveloped", -252.9),
-        ("king_prox_5d", 62.7),
-        ("queen_prox", -379.6),
-        ("travel_past", 80.5),
-        ("travel_now", 461.6),
-        ("travel_backed", -522.7),
-        ("weak_sq", 325.5),
+        ("mandatory", 213.5),
+        ("passed", 41.1),
+        ("doubled", -18.7),
+        ("isolated", -38.5),
+        ("king_prox", 937.6),
+        ("undeveloped", -388.9),
+        ("king_prox_5d", 134.2),
+        ("queen_prox", -349.6),
+        ("travel_past", 82.9),
+        ("travel_now", 530.4),
+        ("travel_backed", -596.2),
+        ("weak_sq", 384.7),
         ("open_orth5", 0.0),
-        ("open_diag5", -7.5),
-        ("open_multi5", -16.5),
-        ("king_off", -788.5),
-        ("king_off_new", -1323.5),
-        ("low_flight", 713.3),
-        ("exiled", -8.7),
+        ("open_diag5", -14.7),
+        ("open_multi5", -19.1),
+        ("king_off", -809.8),
+        ("king_off_new", -1423.6),
+        ("low_flight", 706.9),
+        ("exiled", -2.9),
         ("inactive_royal_att", 0.0),
-        ("travel_stm", 596.0),
-        ("tl_slots_threat", 553.8),
-        ("tl_slots_stm", -369.3),
-        ("f7_weak", 15.1),
-        ("f7_open", 76.0),
-        ("f7_qreach", 197.5),
-        ("f7_broute", 66.4),
-        ("kn_checks", 280.9),
+        ("travel_stm", 564.5),
+        ("tl_slots_threat", 532.9),
+        ("tl_slots_stm", -365.1),
+        ("f7_weak", 40.2),
+        ("f7_open", 68.5),
+        ("f7_qreach", 244.9),
+        ("f7_broute", 18.5),
+        ("kn_checks", 286.4),
         // Set by hand (untuned; see `split_sac`), for defence: the local proofs ignore
         // time-travel defences and the other timelines, so they only nudge. A side to move
         // with a verified f7 travel on hand is a pawn and a half up (its opponent should have
@@ -228,19 +232,23 @@ pub fn tuned_weights() -> Weights {
         ("sac_now", 0.0),
         ("sac_now_stm", 700.0),
         ("sac_open", 150.0),
-        ("zone_hot", 236.7),
-        ("weak_hot", -42.4),
-        ("dmax5", -136.7),
-        ("zone_max", -338.5),
-        ("k_def", -3.1),
-        ("k_flight", 180.5),
-        ("tl_lost", -61.3),
-        ("to_move", 197.5),
-        ("zone_mand_stm", -6.0),
-        ("zone_mand_opp", 447.6),
-        ("def_hot", -91.3),
-        ("def_board", -3.1),
-        ("travel_hot", -71.5),
+        ("zone_hot", 324.7),
+        ("weak_hot", -106.2),
+        ("dmax5", -195.5),
+        ("zone_max", -468.9),
+        ("k_def", -22.7),
+        ("k_flight", 224.5),
+        ("tl_lost", -89.8),
+        ("to_move", 388.5),
+        ("zone_mand_stm", 26.7),
+        ("zone_mand_opp", 766.9),
+        ("def_hot", -97.6),
+        ("def_board", -22.7),
+        ("travel_hot", -136.0),
+        ("mat_def_max", -217.5),
+        ("mob_min", 92.4),
+        ("royal_boards", 440.5),
+        ("zone_hot_max", 234.9),
     ])
 }
 
@@ -480,7 +488,16 @@ pub mod ex {
     pub const DEF_HOT: usize = 26;
     /// `si::TRAVEL_NOW` landings next to own royals on boards where the enemy moves next.
     pub const TRAVEL_HOT: usize = 27;
-    pub const COUNT: usize = 28;
+    /// The largest material deficit on any one active board (pawns 1, minors 3, rooks 5,
+    /// queens 9, other pieces 3).
+    pub const MAT_DEF_MAX: usize = 28;
+    /// The least mobility on any active board where this side has a royal (at most 40).
+    pub const MOB_MIN: usize = 29;
+    /// Active boards holding own royals.
+    pub const ROYAL_BOARDS: usize = 30;
+    /// The most attacked squares around own royals on any board where the enemy moves next.
+    pub const ZONE_HOT_MAX: usize = 31;
+    pub const COUNT: usize = 32;
 }
 
 /// Squares within king distance 2.
@@ -534,6 +551,7 @@ fn board_extra(b: &Board, extra: &mut [[i32; ex::COUNT]; 2], w: i32, h: i32, att
         for k in marked_pos(b.royal() & me) {
             f[ex::DEF_BOARD] += (king_attack(k) & att_nr[c]).count_ones() as i32;
         }
+        f[ex::ROYAL_BOARDS] += (b.royal() & me != 0) as i32;
         let royals = b.royal() & them;
         if royals == 0 {
             continue;
@@ -660,11 +678,22 @@ pub struct BoardTerms {
     /// Squares each color attacks: all pieces, and pieces other than royals.
     att: [Bitboard; 2],
     att_nr: [Bitboard; 2],
+    /// Each color's material (pawns 1, minors 3, rooks 5, queens 9, other pieces 3) and
+    /// mobility (at most 40), for the worst-board terms.
+    mat: [i32; 2],
+    mob: [i32; 2],
 }
 
 impl BoardTerms {
-    const ZERO: BoardTerms =
-        BoardTerms { side: [[0; si::COUNT]; 2], extra: [[0; ex::COUNT]; 2], heavy: 0, att: [0; 2], att_nr: [0; 2] };
+    const ZERO: BoardTerms = BoardTerms {
+        side: [[0; si::COUNT]; 2],
+        extra: [[0; ex::COUNT]; 2],
+        heavy: 0,
+        att: [0; 2],
+        att_nr: [0; 2],
+        mat: [0; 2],
+        mob: [0; 2],
+    };
 }
 
 pub fn board_terms(b: &Board, w: i32, h: i32) -> BoardTerms {
@@ -673,6 +702,11 @@ pub fn board_terms(b: &Board, w: i32, h: i32) -> BoardTerms {
     t.att = [att[0].attacks, att[1].attacks];
     t.att_nr = [att[0].attacks_nr, att[1].attacks_nr];
     board_extra(b, &mut t.extra, w, h, t.att_nr);
+    const V: [i32; 10] = [1, 1, 3, 3, 5, 9, 9, 3, 3, 3];
+    for c in 0..2 {
+        t.mat[c] = (0..10).map(|k| V[k] * t.side[c][si::MAT_A + k]).sum();
+        t.mob[c] = (0..5).map(|k| t.side[c][si::MOB + k]).sum::<i32>().min(40);
+    }
     t.heavy = (b.queen() | b.bishop() | b.princess()).count_ones() as i32;
     t
 }
@@ -765,6 +799,7 @@ pub fn sides_with(s: &State, src: &mut impl TermSource) -> Sides {
     let (w, h) = s.get_board_size();
     let present = s.get_present();
     let (il_min, il_max) = s.get_initial_lines_range();
+    let mut royal_seen = [false; 2];
     let mut atts = [[0u64; 4]; ATT_LINES];
     for l in l_min..=l_max {
         let (t, c) = s.get_timeline_end(l);
@@ -786,6 +821,17 @@ pub fn sides_with(s: &State, src: &mut impl TermSource) -> Sides {
             sd.heavy += bt.heavy;
             sd.active += 1;
             sd.mandatory += ((t, c) == present) as i32;
+            for d in 0..2 {
+                let ex_d = &mut sd.extra[d];
+                ex_d[ex::MAT_DEF_MAX] = ex_d[ex::MAT_DEF_MAX].max(bt.mat[1 - d] - bt.mat[d]);
+                if bt.extra[d][ex::ROYAL_BOARDS] != 0 {
+                    ex_d[ex::MOB_MIN] = if royal_seen[d] { ex_d[ex::MOB_MIN].min(bt.mob[d]) } else { bt.mob[d] };
+                    royal_seen[d] = true;
+                }
+                if c as usize != d {
+                    ex_d[ex::ZONE_HOT_MAX] = ex_d[ex::ZONE_HOT_MAX].max(bt.side[d][si::K_ZONE_ATT]);
+                }
+            }
             for d in 0..2 {
                 if c as usize != d {
                     sd.extra[d][ex::DEF_HOT] += bt.extra[d][ex::DEF_BOARD];
@@ -1326,6 +1372,10 @@ pub fn features_from(sd: &Sides, s: &State, checks: bool) -> Features {
     f[fi::DEF] = e(ex::DEF_HOT);
     f[fi::DEF + 1] = e(ex::DEF_BOARD);
     f[fi::DEF + 2] = e(ex::TRAVEL_HOT);
+    f[fi::G5] = e(ex::MAT_DEF_MAX);
+    f[fi::G5 + 1] = e(ex::MOB_MIN);
+    f[fi::G5 + 2] = e(ex::ROYAL_BOARDS);
+    f[fi::G5 + 3] = e(ex::ZONE_HOT_MAX);
     for k in 0..=si::INACTIVE_ROYAL_ATT - si::TRAVEL_PAST {
         f[fi::DANGER_5D + k] = d(si::TRAVEL_PAST + k);
     }
