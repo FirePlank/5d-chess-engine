@@ -951,22 +951,6 @@ impl AlphaBeta {
         None
     }
 
-    /// Whether the opponent, were the side to move to pass, would have a checkmate in one by a
-    /// travel (`travel_mate`): then neither a pass nor the static evaluation shows what the
-    /// position is worth.
-    fn travel_mate_threat(&mut self, s: &mut State) -> bool {
-        let mark = s.make_null();
-        let mut nb = self.bufs.pop().unwrap_or_default();
-        let ss = nb.info.rebuild(s, true);
-        let mate = {
-            let NodeBufs { info, order, .. } = &mut *nb;
-            self.travel_mate(s, info, &ss, order).is_some()
-        };
-        self.bufs.push(nb);
-        s.unmake(mark);
-        mate
-    }
-
     /// Whether the side to move has a legal action (each evades the check), as far as
     /// `TRAVEL_MATE_STEPS` hypercuboids show (past them: yes).
     fn has_evasion(&mut self, s: &State) -> bool {
@@ -1451,20 +1435,13 @@ impl AlphaBeta {
         }
 
         if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| self.in_check(s)) {
-            // Not when the opponent threatens a mate by a travel (`travel_mate_threat`).
-            let mut threat = None;
             if depth <= RFP_DEPTH {
                 let e = self.static_eval(s);
-                if e - RFP_MARGIN * depth >= beta && !*threat.get_or_insert_with(|| ply <= TRAVEL_MATE_PLY && self.travel_mate_threat(s)) {
+                if e - RFP_MARGIN * depth >= beta {
                     return e;
                 }
             }
-            if depth >= NMP_MIN_DEPTH
-                && !self.seek_mate
-                && Self::has_null_material(s)
-                && self.static_eval(s) >= beta
-                && !*threat.get_or_insert_with(|| ply <= TRAVEL_MATE_PLY && self.travel_mate_threat(s))
-            {
+            if depth >= NMP_MIN_DEPTH && !self.seek_mate && Self::has_null_material(s) && self.static_eval(s) >= beta {
                 let r = NMP_R + depth / NMP_DIV;
                 let mark = s.make_null();
                 let v = -self.negamax(s, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
