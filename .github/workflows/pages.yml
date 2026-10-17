@@ -1,20 +1,11 @@
-# The static site on GitHub Pages: analysis board, play against Kairos and the game browser,
-# all in the browser on the WASM engine (scripts/build_pages.sh). Rebuilt on every push to main
-# that touches the engine or the site.
-name: Pages
+# The site moved to its own repository, 5D Chess Lab (FirePlank/5d-chess-lab). This repository's
+# Pages now only forward old links there, keeping the page's #/route (analysis, play, ...).
+name: Pages (redirect to 5D Chess Lab)
 
 on:
   push:
     branches: [main]
     paths:
-      - 'src/**'
-      - 'web/**'
-      - 'data/**'
-      - 'build.rs'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.cargo/**'
-      - 'scripts/build_pages.sh'
       - '.github/workflows/pages.yml'
   workflow_dispatch: {}
 
@@ -30,25 +21,22 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Rust with the wasm32-wasip1-threads target
+      - name: Redirect page
         run: |
-          rustup toolchain install stable --profile minimal --target wasm32-wasip1-threads
-          rustup default stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: pages
-          workspaces: web/wasm -> target
-
-      - name: Build the browser engine
-        run: cargo wasm
-
-      - name: Assemble the site
-        run: bash scripts/build_pages.sh _site
+          mkdir -p _site
+          cat > _site/index.html <<'HTML'
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>5D Chess Lab</title>
+          <meta name="robots" content="noindex">
+          <link rel="canonical" href="https://fireplank.github.io/5d-chess-lab/">
+          <meta http-equiv="refresh" content="0; url=https://fireplank.github.io/5d-chess-lab/">
+          <script>location.replace('https://fireplank.github.io/5d-chess-lab/' + location.hash);</script>
+          <p>The Kairos site is now <a href="https://fireplank.github.io/5d-chess-lab/">5D Chess Lab</a>.</p>
+          HTML
+          cp _site/index.html _site/404.html
+          touch _site/.nojekyll
 
       - uses: actions/configure-pages@v5
 
