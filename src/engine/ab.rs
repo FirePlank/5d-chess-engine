@@ -1619,10 +1619,14 @@ impl AlphaBeta {
         let mut searched = 0usize;
         // Mate proof: the best reply's, and every searched reply's (see `proven`).
         let (mut best_proven, mut all_proven) = (false, true);
-        let cap = {
+        let mut cap = {
             let base = LMP[(depth as usize).min(LMP.len() - 1)];
             if pv { base * PV_CAP_MULT } else { base }
         };
+        // When every action searched loses to a mate, the cap is raised once by its own size:
+        // a mated score made of the actions the cap let in claims mates the side to move
+        // escapes (see `mated_cap`).
+        let mut cap_raised = false;
 
         // Remembered actions first, before paying for the action space: the TT action,
         // then the killers.
@@ -1701,7 +1705,10 @@ impl AlphaBeta {
         let mut skipped = false;
         let mut batch_size = 1;
         let outcome: Option<i32> = 'search: {
-            while searched < cap && !exhausted {
+            while !exhausted {
+                if searched >= cap && !Self::mated_cap(&mut cap, &mut cap_raised, best) {
+                    break;
+                }
                 let mut batch: Vec<(i32, MoveSeq)> = Vec::with_capacity(BATCH);
                 let size = batch_size;
                 batch_size = (2 * batch_size).min(BATCH);
@@ -1754,7 +1761,7 @@ impl AlphaBeta {
                 }
                 batch.sort_by(|a, b| b.0.cmp(&a.0));
                 for (sc, act) in batch {
-                    if searched >= cap {
+                    if searched >= cap && !Self::mated_cap(&mut cap, &mut cap_raised, best) {
                         skipped = true;
                         break;
                     }
@@ -1924,6 +1931,20 @@ impl AlphaBeta {
         }
         self.proven = proven;
         best
+    }
+
+    /// At the action cap of a node whose best score `best` so far is mated: raise the cap once,
+    /// by its own size (returns whether it did). Mates the search claims through such a node
+    /// are otherwise often false: the escape lies past the cap (the LMP counts are tuned for
+    /// nodes that are not lost).
+    #[inline]
+    fn mated_cap(cap: &mut usize, raised: &mut bool, best: i32) -> bool {
+        if *raised || best >= -(MATE - 1000) {
+            return false;
+        }
+        *raised = true;
+        *cap *= 2;
+        true
     }
 
     fn on_cutoff(&mut self, s: &State, act: &MoveSeq, depth: i32, ply: usize) {
