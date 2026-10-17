@@ -34,7 +34,7 @@ const MAX_PLY: usize = 128;
 /// Actions searched at non-PV nodes by remaining depth (index = depth, last repeats).
 const LMP: [usize; 5] = [0, 20, 32, 44, 56];
 /// Multiplier for the PV-node action cap.
-const PV_CAP_MULT: usize = 5;
+const PV_CAP_MULT: usize = 4;
 /// Root actions considered.
 const ROOT_CAP: usize = 1000;
 /// Actions generated (and sorted by action score) at a time at interior nodes: the first
