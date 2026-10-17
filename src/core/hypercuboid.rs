@@ -1875,6 +1875,8 @@ pub struct BestFirstCursor {
     sc: PointScratch,
     checks: CheckBuf,
     lone: Option<LoneWalk>,
+    /// Class of the last action found.
+    last_class: i32,
 }
 
 /// The first class of a context with one playable board: the coordinates of its axis 0 still
@@ -1902,11 +1904,10 @@ struct BfHeap {
 pub type BranchFill<'a> = dyn FnMut(&mut AxisOrders, &mut Vec<Vec<i32>>) + 'a;
 
 impl BfHeap {
-    /// Order the branch axes now when `hc` has a branch coordinate other than the null one.
-    fn need_branch(&mut self, hc: &Hc, several: bool, fill: &mut BranchFill) {
-        if self.branch_pending
-            && (self.first_branch..hc.dimension()).any(|n| if several { !hc[n].is_empty() && hc[n].single().is_none() } else { hc[n].has_other_than(0) })
-        {
+    /// Order the branch axes now when `hc` has several coordinates on one (a single one needs
+    /// no order, see `push`).
+    fn need_branch(&mut self, hc: &Hc, fill: &mut BranchFill) {
+        if self.branch_pending && (self.first_branch..hc.dimension()).any(|n| !hc[n].is_empty() && hc[n].single().is_none()) {
             fill(self.order.axes_mut(), &mut self.scores);
             self.branch_pending = false;
         }
@@ -1924,7 +1925,7 @@ impl BfHeap {
 
     fn push(&mut self, hc: Hc, class: i32, fill: &mut BranchFill) {
         let _p = crate::misc::prof::scope(11);
-        self.need_branch(&hc, false, fill);
+        self.need_branch(&hc, fill);
         let mut bound = 0i64;
         let shared = match &self.order {
             HcOrdering::Precomputed(o) => o.shared,
@@ -1933,6 +1934,16 @@ impl BfHeap {
         for n in 0..hc.dimension() {
             let sc = &self.scores[n.min(shared)];
             let set = &hc[n];
+            if self.branch_pending && n >= self.first_branch {
+                // Still unordered, so a single coordinate (or none): only the null one is
+                // scored, and any other is the same on every hypercuboid of its class.
+                match set.single() {
+                    Some(0) => bound += sc[0] as i64,
+                    Some(_) => {}
+                    None => return,
+                }
+                continue;
+            }
             let best = match &self.order {
                 HcOrdering::Precomputed(_) if set.single().is_some_and(|i| self.universe[n].contains(i)) => {
                     set.single().map(|i| sc[i as usize])
@@ -1990,6 +2001,7 @@ impl Default for BestFirstCursor {
             sc: PointScratch::default(),
             checks: CheckBuf::default(),
             lone: None,
+            last_class: 0,
         }
     }
 }
@@ -2037,6 +2049,19 @@ impl BestFirstCursor {
         self.next_with(info, s, &mut |_, _| {}).expect("branch entries built")
     }
 
+    /// The class of the last action found: the initial hypercuboid it came from, counted from
+    /// the last one (0) back.
+    pub fn last_class(&self) -> i32 {
+        self.last_class
+    }
+
+    /// Drop the rest of the actions of class `class`, the one being enumerated.
+    pub fn drop_class(&mut self, class: i32) {
+        while self.heap.heap.peek().is_some_and(|it| it.key.0 == -class) {
+            self.heap.heap.pop();
+        }
+    }
+
     /// `next`, ordering pending branch axes with `fill` once needed; stops with `NeedBranch`
     /// (and no progress) when the next hypercuboid needs the branch entries `info` deferred.
     pub fn next_with(&mut self, info: &HcInfo, s: &State, fill: &mut BranchFill) -> Result<Option<MoveSeq>, NeedBranch> {
@@ -2054,6 +2079,7 @@ impl BestFirstCursor {
                 }
                 walk.point[0] = i;
                 if info.lone_point_legal(s, &walk.point, &mut self.checks) {
+                    self.last_class = 0;
                     return Ok(Some(info.to_action(&walk.point)));
                 }
             }
@@ -2071,7 +2097,7 @@ impl BestFirstCursor {
                 return Err(NeedBranch);
             }
             let class = -key.0;
-            self.heap.need_branch(&hc, true, fill);
+            self.heap.need_branch(&hc, fill);
             if !info.take_point(&mut hc, &self.heap.order, &mut self.sc) {
                 continue;
             }
@@ -2081,6 +2107,7 @@ impl BestFirstCursor {
                 None => {
                     let act = info.to_action(pt);
                     hc.remove_point_with(pt, |h| heap.push(h, class, fill));
+                    self.last_class = class;
                     return Ok(Some(act));
                 }
                 Some(problem) => {

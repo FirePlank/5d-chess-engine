@@ -5,14 +5,17 @@
 //!
 //! ```text
 //! # <name> [mate <n>] best <action LAN>[ | <another correct action LAN>...] ; <5dpgn> [; note]
+//! # <name> avoid <action LAN>[ | <another wrong action LAN>...] ; not <5dpgn>
 //! G <promotions> <5duci position> moves ...
 //! ```
 //!
 //! Any of the listed actions solves the position; with `mate <n>` (the correct action forces
-//! mate in `n`), so does any action the engine proves mates in `n` or fewer.
+//! mate in `n`), so does any action the engine proves mates in `n` or fewer. An `avoid`
+//! position (a defence) is solved by any action but the listed ones.
 //!
 //! Source lines (`data/tactics_src.txt`): `<name> | <correct action in 5dpgn, alternatives
-//! separated by " or "> | <a 5dpgn game ending in the position> [| mate <n>]`; `#` lines are
+//! separated by " or "> | <a 5dpgn game ending in the position> [| mate <n>]`, or with
+//! `not <wrong action>[ or <another>...]` in place of the correct actions; `#` lines are
 //! comments. When some action checkmates at once, the correct actions are all the actions that
 //! do (a mate in one is always best), whatever the source names.
 
@@ -25,36 +28,46 @@ pub struct Tactic {
     pub name: String,
     pub g: String,
     pub state: State,
-    /// The correct actions (any of them solves the position).
+    /// The correct actions (any of them solves the position), or with `avoid` the wrong ones.
     pub best: Vec<Action>,
     /// Their LAN, as in the file.
     pub best_lan: Vec<String>,
+    /// `best` lists the actions to avoid: any other solves the position.
+    pub avoid: bool,
     /// The correct actions force mate in this many actions (of the side to move).
     pub mate: Option<u32>,
 }
 
-/// Parse a suite file; every position and every best action is checked legal.
+impl Tactic {
+    /// Whether playing `a` solves the position.
+    pub fn solved_by(&self, a: &Action) -> bool {
+        self.avoid != self.best.contains(a)
+    }
+}
+
+/// Parse a suite file; every position and every best (or avoided) action is checked legal.
 pub fn parse(text: &str) -> Result<Vec<Tactic>, String> {
     let mut out = Vec::new();
-    let mut head: Option<(String, Option<u32>, Vec<String>)> = None;
+    let mut head: Option<(String, Option<u32>, Vec<String>, bool)> = None;
     for (n, line) in text.lines().enumerate() {
         let line = line.trim();
         let err = |e: String| format!("tactics line {}: {}", n + 1, e);
         if let Some(c) = line.strip_prefix("# ") {
-            if let Some((name, rest)) = c.split_once(" best ") {
+            let split = c.split_once(" best ").map(|x| (x, false)).or_else(|| c.split_once(" avoid ").map(|x| (x, true)));
+            if let Some(((name, rest), avoid)) = split {
                 let rest = rest.split_once(" ; ").map_or(rest, |(a, _)| a);
                 let (name, mate) = match name.rsplit_once(" mate ") {
                     Some((nm, k)) if k.trim().parse::<u32>().is_ok() => (nm, k.trim().parse().ok()),
                     _ => (name, None),
                 };
-                head = Some((name.trim().to_string(), mate, rest.split(" | ").map(|a| a.trim().to_string()).collect()));
+                head = Some((name.trim().to_string(), mate, rest.split(" | ").map(|a| a.trim().to_string()).collect(), avoid));
             }
             continue;
         }
         if !line.starts_with("G ") {
             continue;
         }
-        let (name, mate, lans) = head.take().ok_or_else(|| err("G line without a \"# <name> best <action>\" line".into()))?;
+        let (name, mate, lans, avoid) = head.take().ok_or_else(|| err("G line without a \"# <name> best <action>\" line".into()))?;
         let state = parse_g_line(line).map_err(err)?;
         let mut best = Vec::new();
         for lan in &lans {
@@ -62,7 +75,7 @@ pub fn parse(text: &str) -> Result<Vec<Tactic>, String> {
             crate::web::tree::play_action(&state, &moves).map_err(|e| err(format!("{}: illegal best action {}: {}", name, lan, e)))?;
             best.push(Action::from_vector(&moves, &state));
         }
-        out.push(Tactic { name, g: line.to_string(), state, best, best_lan: lans, mate });
+        out.push(Tactic { name, g: line.to_string(), state, best, best_lan: lans, avoid, mate });
     }
     Ok(out)
 }
@@ -122,6 +135,10 @@ pub fn generate_with_notes(src: &str, notes: &mut Vec<String>) -> Result<String,
             s = play_action(&s, act.moves()).map_err(|e| err(format!("{}: {}", child.text, e)))?;
             node = child;
         }
+        let (best, mut avoid) = match best.trim().strip_prefix("not ") {
+            Some(b) => (b, true),
+            None => (best, false),
+        };
         let mut acts = Vec::new();
         for b in best.split(" or ") {
             let a = parse_action(&s, b.trim()).map_err(|e| err(format!("best {}: {}", b, e)))?;
@@ -140,13 +157,18 @@ pub fn generate_with_notes(src: &str, notes: &mut Vec<String>) -> Result<String,
                 notes.push(format!("{}: {} actions mate in one", name, mates.len()));
             }
             acts = mates;
+            avoid = false;
         }
         let lans: Vec<String> = acts.iter().map(|a| action_lan(&s, a)).collect();
         let pgns: Vec<String> = acts.iter().map(|a| action_to_pgn(&s, a)).collect();
         // A mate in one: any checkmating action is listed, so no mate length is needed.
         let mate = if mate_in_one { None } else { mate };
         let mate_txt = mate.map(|k| format!(" mate {}", k)).unwrap_or_default();
-        out += &format!("# {}{} best {} ; {}{}\n{}\n", name, mate_txt, lans.join(" | "), pgns.join(" | "), note, g);
+        if avoid {
+            out += &format!("# {}{} avoid {} ; not {}\n{}\n", name, mate_txt, lans.join(" | "), pgns.join(" | "), g);
+        } else {
+            out += &format!("# {}{} best {} ; {}{}\n{}\n", name, mate_txt, lans.join(" | "), pgns.join(" | "), note, g);
+        }
     }
     Ok(out)
 }
