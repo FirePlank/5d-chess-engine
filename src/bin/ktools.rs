@@ -269,41 +269,6 @@ fn main() {
                 }
             }
         }
-        "legalcheck" => {
-            // legalcheck <file.g>... : every legal action of each position, enumerated with and
-            // without the problem memos (best-first in the engine's order, and depth-first in
-            // natural order); prints positions where the sets differ.
-            use kairos::core::hypercuboid::NO_PROBLEM_MEMO;
-            use kairos::engine::ab::AlphaBeta;
-            use std::sync::atomic::Ordering;
-            let (mut n, mut checked, mut bad) = (0, 0, 0);
-            for path in &args[2..] {
-                let text = std::fs::read_to_string(path).expect("positions");
-                for line in text.lines().filter(|l| l.starts_with("G ")) {
-                    let Ok(s) = parse_g_line(line) else { continue };
-                    n += 1;
-                    let in_check = s.has_phantom_check();
-                    checked += in_check as usize;
-                    let all = |memo: bool| -> (Vec<String>, Vec<String>) {
-                        NO_PROBLEM_MEMO.store(!memo, Ordering::Relaxed);
-                        let mut a: Vec<String> = AlphaBeta::new().node_order(&s, 200_000).iter().map(|x| format!("{:?}", x)).collect();
-                        let (w, ss) = HcInfo::build_hc(&s);
-                        let mut b: Vec<String> = w.search(&s, ss).take(200_000).map(|x| format!("{:?}", x)).collect();
-                        a.sort();
-                        b.sort();
-                        (a, b)
-                    };
-                    let (a0, b0) = all(false);
-                    let (a1, b1) = all(true);
-                    if a0 != a1 || b0 != b1 || a0 != b0 {
-                        bad += 1;
-                        writeln!(out, "DIFF check {} | bf {} vs {} | dfs {} vs {} | {}", in_check, a0.len(), a1.len(), b0.len(), b1.len(), &line[..line.len().min(120)]).unwrap();
-                    }
-                }
-            }
-            NO_PROBLEM_MEMO.store(false, Ordering::Relaxed);
-            writeln!(out, "positions {} in check {} differing {}", n, checked, bad).unwrap();
-        }
         "depthstat" => {
             use kairos::engine::ab::AlphaBeta;
             use kairos::engine::Limits;
