@@ -84,11 +84,6 @@ fn lmr(depth: i32, index: usize) -> i32 {
 }
 /// Ordering bonus of a checking semimove (above every capture).
 const CHECK_BONUS: i32 = 30_000;
-/// Ordering cost of deviating from a quiet board's first move (a board whose best move is
-/// no capture, check or promotion) when another board is to be played too: best-first
-/// combinations then try the alternatives on the boards where something happens before
-/// shuffling quiet moves on the others.
-const QUIET_DEVIATION: i32 = 2000;
 /// Share of the optimum time the f7 sac table's probes may take (a search without a clock
 /// only reads the tables).
 const SAC_PREP_DIV: u64 = 100;
@@ -851,18 +846,6 @@ impl AlphaBeta {
         }
         if let Some(d) = detector {
             d.finish(scratch);
-        }
-        // Quiet boards keep their first move (see `QUIET_DEVIATION`).
-        let live = (0..fba.min(dim)).filter(|&n| orders[n].len() > 1).count();
-        if live >= 2 {
-            for n in axes.start..axes.end.min(fba) {
-                let o = &orders[n];
-                if o.len() > 1 && scores[n][o[0] as usize] < 10_000 {
-                    for &i in &o[1..] {
-                        scores[n][i as usize] -= QUIET_DEVIATION;
-                    }
-                }
-            }
         }
     }
 
