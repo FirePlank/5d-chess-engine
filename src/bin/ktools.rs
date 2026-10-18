@@ -182,8 +182,9 @@ fn main() {
                     }
                 }
                 let br = if w.first_branch_axis() < w.dimension() { u[w.first_branch_axis()].iter().count() } else { 0 };
-                writeln!(out, "pos {} {} lines {} active {} dim {} phys {} arr {} dep {} branch {} | {:.2}s | {} | {}", k, if s.player() { "b" } else { "w" },
-                    l1 - l0 + 1, s.active_timelines(), w.dimension(), phys, arr, dep, br, t.elapsed().as_secs_f64(),
+                let secs = t.elapsed().as_secs_f64();
+                writeln!(out, "pos {} {} lines {} active {} dim {} phys {} arr {} dep {} branch {} | {:.2}s total {} tnps {:.0} | {} | {}", k, if s.player() { "b" } else { "w" },
+                    l1 - l0 + 1, s.active_timelines(), w.dimension(), phys, arr, dep, br, secs, e.last_search_nodes(), e.last_search_nodes() as f64 / secs,
                     last.split(" pv ").next().unwrap_or(""), best.map(|a| a.to_string()).unwrap_or_default()).unwrap();
                 out.flush().unwrap();
             }
