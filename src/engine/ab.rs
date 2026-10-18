@@ -2495,7 +2495,6 @@ impl AlphaBeta {
         let saved = (self.multipv, self.threads, self.own_book);
         self.multipv = 32;
         self.threads = 1;
-        self.own_book = false;
         self.resume = None;
         let fallback = self.find_best_move_full(root, &limited, stop, info);
         let lines = self.resume.take().map(|r| r.lines).unwrap_or_default();
