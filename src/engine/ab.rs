@@ -57,7 +57,7 @@ const QEVASION_REST_STEPS: u32 = 16;
 /// Hypercuboids an interior node in check may look at for evasions once its focused ones (see
 /// `focused_evasions`) are searched: past them the node counts as not fully searched (no
 /// mated score, no upper bound), as at the action cap.
-const EVASION_REST_STEPS: u32 = 2048;
+const EVASION_REST_STEPS: u32 = 512;
 const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
