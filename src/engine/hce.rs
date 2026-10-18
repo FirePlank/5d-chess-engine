@@ -144,81 +144,81 @@ pub fn default_weights() -> Weights {
 /// Weights used by the alpha-beta search with `use_hce` (Texel-tuned, see bin/tune.rs).
 pub fn tuned_weights() -> Weights {
     weights_by_name(&[
-        ("mat_a_pawn", 484.2),
+        ("mat_a_pawn", 563.1),
         ("mat_a_brawn", 150.0),
-        ("mat_a_knight", 845.5),
-        ("mat_a_bishop", 1553.5),
-        ("mat_a_rook", 944.9),
-        ("mat_a_queen", 2464.5),
+        ("mat_a_knight", 935.8),
+        ("mat_a_bishop", 1724.0),
+        ("mat_a_rook", 1050.7),
+        ("mat_a_queen", 2797.5),
         ("mat_a_princess", 899.8),
         ("mat_a_unicorn", 250.0),
         ("mat_a_dragon", 150.0),
-        ("mat_a_cking", 195.3),
-        ("mat_i_pawn", -83.8),
+        ("mat_a_cking", 147.6),
+        ("mat_i_pawn", -94.4),
         ("mat_i_brawn", 74.9),
-        ("mat_i_knight", 219.3),
-        ("mat_i_bishop", 630.7),
-        ("mat_i_rook", 316.4),
-        ("mat_i_queen", 1097.3),
+        ("mat_i_knight", 222.4),
+        ("mat_i_bishop", 623.8),
+        ("mat_i_rook", 308.0),
+        ("mat_i_queen", 1134.4),
         ("mat_i_princess", 450.0),
         ("mat_i_unicorn", 125.1),
         ("mat_i_dragon", 74.9),
         ("mat_i_cking", 150.0),
-        ("cent_knight", 97.5),
-        ("cent_bishop", -50.9),
-        ("cent_rook", 52.0),
-        ("cent_queen", -6.4),
-        ("cent_other", 142.7),
-        ("pawn_adv", -28.2),
-        ("pawn_near", 302.0),
-        ("king_cent", -123.6),
-        ("tl_slots", 2332.7),
-        ("tl_slots_heavy", -98.2),
-        ("k_holes", -224.7),
-        ("k_knights", 2526.0),
-        ("k_open_orth", -511.5),
-        ("k_open_diag", 31.5),
-        ("k_shield", 624.7),
-        ("k_zone_att", 234.0),
-        ("mob_knight", 76.0),
-        ("mob_bishop", 129.6),
-        ("mob_rook", 106.9),
-        ("mob_queen", 91.3),
-        ("mob_king", 93.1),
-        ("hanging", -15.6),
-        ("royal_att", -2076.0),
-        ("tempo", -106.2),
-        ("active_lines", 142.2),
+        ("cent_knight", 151.5),
+        ("cent_bishop", -27.6),
+        ("cent_rook", 97.5),
+        ("cent_queen", 96.7),
+        ("cent_other", 231.3),
+        ("pawn_adv", -1.8),
+        ("pawn_near", 318.2),
+        ("king_cent", -215.8),
+        ("tl_slots", 2392.7),
+        ("tl_slots_heavy", -14.2),
+        ("k_holes", -303.5),
+        ("k_knights", 2509.5),
+        ("k_open_orth", -616.5),
+        ("k_open_diag", -15.8),
+        ("k_shield", 647.1),
+        ("k_zone_att", 193.6),
+        ("mob_knight", 102.0),
+        ("mob_bishop", 173.8),
+        ("mob_rook", 138.0),
+        ("mob_queen", 116.4),
+        ("mob_king", 94.7),
+        ("hanging", -19.5),
+        ("royal_att", -2190.2),
+        ("tempo", -155.8),
+        ("active_lines", 248.5),
         ("checks_5d", 0.0),
         ("sp_checks", 0.0),
-        ("mandatory", 278.9),
-        ("passed", 64.0),
-        ("doubled", -2.4),
-        ("isolated", -29.8),
-        ("king_prox", 972.7),
-        ("undeveloped", -381.6),
-        ("king_prox_5d", 84.5),
-        ("queen_prox", -341.1),
-        ("travel_past", 54.9),
-        ("travel_now", 532.9),
-        ("travel_backed", -567.5),
-        ("weak_sq", 380.5),
+        ("mandatory", 267.5),
+        ("passed", 102.2),
+        ("doubled", 7.5),
+        ("isolated", -44.2),
+        ("king_prox", 1065.5),
+        ("undeveloped", -442.5),
+        ("king_prox_5d", 419.3),
+        ("queen_prox", -265.3),
+        ("travel_past", 82.7),
+        ("travel_now", 511.8),
+        ("travel_backed", -692.4),
+        ("weak_sq", 412.0),
         ("open_orth5", 0.0),
-        ("open_diag5", -20.2),
-        ("open_multi5", -20.5),
-        ("king_off", -847.1),
-        ("king_off_new", -1536.2),
-        ("low_flight", 746.0),
-        ("exiled", -11.8),
-        ("inactive_royal_att", -4.4),
-        ("travel_stm", 608.4),
-        ("tl_slots_threat", 552.0),
-        ("tl_slots_stm", -415.3),
-        ("f7_weak", 26.4),
-        ("f7_open", 62.9),
-        ("f7_qreach", 248.4),
-        ("f7_broute", -11.6),
-        ("kn_checks", 296.2),
+        ("open_diag5", -35.1),
+        ("open_multi5", -32.4),
+        ("king_off", -964.4),
+        ("king_off_new", -1828.4),
+        ("low_flight", 895.6),
+        ("exiled", -15.5),
+        ("inactive_royal_att", -8.2),
+        ("travel_stm", 674.0),
+        ("tl_slots_threat", 777.8),
+        ("tl_slots_stm", -424.5),
+        ("f7_weak", -18.2),
+        ("f7_open", 64.5),
+        ("f7_qreach", 311.8),
+        ("f7_broute", -49.8),
+        ("kn_checks", 332.7),
         // Set by hand (untuned; see `split_sac`), for defence: the local proofs ignore
         // time-travel defences and the other timelines, so they only nudge. A side to move
         // with a verified f7 travel on hand is a pawn and a half up (its opponent should have
@@ -232,21 +232,21 @@ pub fn tuned_weights() -> Weights {
         ("sac_now", 0.0),
         ("sac_now_stm", 700.0),
         ("sac_open", 150.0),
-        ("zone_hot", 460.2),
-        ("weak_hot", -74.7),
-        ("dmax5", -197.1),
-        ("zone_max", -430.7),
-        ("k_def", -15.5),
-        ("k_flight", 226.9),
-        ("tl_lost", -92.7),
-        ("to_move", 372.2),
-        ("zone_mand_stm", -20.4),
-        ("zone_mand_opp", 732.9),
-        ("def_hot", -76.5),
-        ("def_board", -15.5),
-        ("travel_hot", -129.1),
-        ("kingless", -171.3),
-        ("kl_swarm", -313.5),
+        ("zone_hot", 652.4),
+        ("weak_hot", -96.0),
+        ("dmax5", -178.7),
+        ("zone_max", -389.5),
+        ("k_def", 0.9),
+        ("k_flight", 274.9),
+        ("tl_lost", -108.4),
+        ("to_move", 562.7),
+        ("zone_mand_stm", 140.4),
+        ("zone_mand_opp", 803.3),
+        ("def_hot", -69.5),
+        ("def_board", 0.9),
+        ("travel_hot", -214.9),
+        ("kingless", -315.5),
+        ("kl_swarm", -600.4),
     ])
 }
 
@@ -1550,7 +1550,19 @@ pub fn score(f: &Features, w: &Weights, black_to_move: bool) -> i32 {
     for i in 0..NF {
         acc += w[i] * f[i] as f32;
     }
-    let white = acc.round() as i32;
+    let white = (acc * damp(f[fi::ACTIVE_LINES])).round() as i32;
+    if black_to_move { -white } else { white }
+}
+
+/// `score` with the damping factor given (the f7 sac terms are split from the vector holding
+/// the active timelines' count).
+#[inline]
+pub fn score_g(f: &Features, w: &Weights, black_to_move: bool, g: f32) -> i32 {
+    let mut acc = 0f32;
+    for i in 0..NF {
+        acc += w[i] * f[i] as f32;
+    }
+    let white = (acc * g).round() as i32;
     if black_to_move { -white } else { white }
 }
 
@@ -1560,7 +1572,26 @@ pub fn linear(f: &Features, w: &Weights) -> f32 {
     for i in 0..NF {
         acc += w[i] * f[i] as f32;
     }
-    acc
+    acc * damp(f[fi::ACTIVE_LINES])
+}
+
+/// Active timelines from which the handcrafted score is scaled down, and how fast (now
+/// 2 / (1 + active)): the terms add up over every board while results get no more certain
+/// with more timelines; unscaled, the score ran into the eval clamp in four positions in ten
+/// with six or more, and the eval net's capped correction could not pull it back.
+pub const DAMP_FROM: i32 = 1;
+pub const DAMP_DIV: f32 = 2.0;
+
+/// The handcrafted score's scale with `active` timelines: 1 up to `DAMP_FROM`, then
+/// `DAMP_DIV / (DAMP_DIV + extra timelines)`.
+#[inline]
+pub fn damp(active: i32) -> f32 {
+    damp_with(active, DAMP_FROM, DAMP_DIV)
+}
+
+#[inline]
+pub fn damp_with(active: i32, from: i32, div: f32) -> f32 {
+    div / (div + (active - from).max(0) as f32)
 }
 
 #[cfg(test)]
