@@ -50,7 +50,7 @@ const QEVASION_STEPS: u32 = 256;
 /// Focused evasions and evasion budgets only apply with at least this many boards to play
 /// on (existing axes): with fewer, the whole space is small, and proving that no evasion
 /// exists (a mate at the horizon) must not be cut short.
-const FOCUS_MIN_BOARDS: usize = usize::MAX;
+const FOCUS_MIN_BOARDS: usize = 3;
 /// The same once the focused evasions (see `focused_evasions`) are searched: the rest of the
 /// space is mostly evasions branching off timelines, costly to find and rarely better.
 const QEVASION_REST_STEPS: u32 = 16;
