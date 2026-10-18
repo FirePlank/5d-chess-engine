@@ -53,7 +53,7 @@ const QEVASION_STEPS: u32 = 256;
 const FOCUS_MIN_BOARDS: usize = 3;
 /// The same once the focused evasions (see `focused_evasions`) are searched: the rest of the
 /// space is mostly evasions branching off timelines, costly to find and rarely better.
-const QEVASION_REST_STEPS: u32 = 64;
+const QEVASION_REST_STEPS: u32 = 16;
 /// Hypercuboids an interior node in check may look at for evasions once its focused ones (see
 /// `focused_evasions`) are searched: past them the node counts as not fully searched (no
 /// mated score, no upper bound), as at the action cap.
