@@ -1,0 +1,12 @@
+{
+  "name": "problem_memo",
+  "old": "11e1154",
+  "games": 9000,
+  "shards": 40,
+  "tc": "tc 10+0.1",
+  "elo0": -8,
+  "elo1": 0,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}

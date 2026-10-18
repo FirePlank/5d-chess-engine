@@ -1127,6 +1127,7 @@ impl AlphaBeta {
         let found = {
             let NodeBufs { info, evasions, .. } = &mut *nb;
             evasions.ss = info.rebuild(s, false);
+            evasions.forget();
             evasions.order = HcOrdering::Natural;
             evasions.branch_pending = false;
             evasions.budget = TRAVEL_MATE_STEPS;
@@ -1254,6 +1255,7 @@ impl AlphaBeta {
         scratch.skip = true;
         self.node_ordering(s, info, true, scratch, orders, scores, 0..usize::MAX, branch);
         scratch.skip = false;
+        cursor.forget();
         cursor.set_branch_pending(defer && info.first_branch_axis() < info.dimension());
         cursor.restart(info, ss);
     }
@@ -1575,6 +1577,7 @@ impl AlphaBeta {
         {
             let NodeBufs { info, evasions, order, evasion_scores, .. } = &mut *nb;
             evasions.ss = info.rebuild(s, true);
+            evasions.forget();
             let many = info.first_branch_axis() >= FOCUS_MIN_BOARDS;
             evasions.budget = if many { QEVASION_STEPS } else { u32::MAX };
             // The branch axes are only ordered once some hypercuboid needs their order.
