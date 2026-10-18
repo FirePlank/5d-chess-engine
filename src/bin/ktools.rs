@@ -1742,6 +1742,9 @@ fn tactics(path: &str, ms: u64, threads: usize, out: &mut impl Write) {
 /// is in internal units (records on the reported scale are converted back).
 ///   ktools netdata out.bin games1.jsonl games2.jsonl ...
 /// Record: NI + 4 little-endian f32 (inputs, base, teacher or NaN, wdl, game).
+/// With `NETDATA_FEN=<path>` set, `<path>` gets one line per record: for a position with a
+/// single timeline, its present board (5D FEN, `*` = unmoved) and the side to move as
+/// "<fen>|<w|b>", otherwise "-" (for plain-chess teacher labels, scripts/chess/).
 /// With `NETDATA_NO_CHECK` set, positions where the side to move is in check (5D, as
 /// `State::has_phantom_check`) are left out. Held-out test sets must be built this way: being
 /// in check predicts the result strongly, so terms correlated with it look far better offline
@@ -1759,14 +1762,17 @@ fn netdata(args: &[String], out: &mut impl Write) {
     }
     let threads = 14;
     let no_check = std::env::var_os("NETDATA_NO_CHECK").is_some();
+    let fen_path = std::env::var("NETDATA_FEN").ok();
+    let want_fen = fen_path.is_some();
     // Base score: the evaluation the search uses (the tuned feature HCE).
     let ep = tuned_weights();
-    let chunks: Vec<Vec<f32>> = std::thread::scope(|sc| {
+    let chunks: Vec<(Vec<f32>, Vec<String>)> = std::thread::scope(|sc| {
         let hs: Vec<_> = (0..threads)
             .map(|tid| {
                 let (lines, ep) = (&lines, &ep);
                 sc.spawn(move || {
                     let mut rec: Vec<f32> = Vec::new();
+                    let mut fens: Vec<String> = Vec::new();
                     let mut g = tid;
                     while g < lines.len() {
                         let line = &lines[g];
@@ -1807,7 +1813,7 @@ fn netdata(args: &[String], out: &mut impl Write) {
                         let Ok(mut s) = position_from_uci(pos) else { continue };
                         let mut ok = true;
                         let mut first_player = None;
-                        let mut pending: Vec<(usize, Vec<f32>, bool)> = Vec::new();
+                        let mut pending: Vec<(String, Vec<f32>, bool)> = Vec::new();
                         for (i, a) in acts.iter().enumerate() {
                             if i == opening {
                                 first_player = Some(s.get_present().1);
@@ -1822,7 +1828,15 @@ fn netdata(args: &[String], out: &mut impl Write) {
                                     Some(v) if v.abs() < 20000 => v as f32,
                                     _ => f32::NAN,
                                 });
-                                pending.push((i, r, s.get_present().1));
+                                let mut fen = String::from("-");
+                                if want_fen {
+                                    let (lo, hi) = s.get_lines_range();
+                                    if lo == hi {
+                                        let (t, c) = s.get_timeline_end(lo);
+                                        fen = format!("{}|{}", s.board(lo, t, c).get_fen(true), if c { "b" } else { "w" });
+                                    }
+                                }
+                                pending.push((fen, r, s.get_present().1));
                             }
                             if apply_uci_moves(&mut s, &format!("{} submit", a)).is_err() {
                                 ok = false;
@@ -1836,13 +1850,16 @@ fn netdata(args: &[String], out: &mut impl Write) {
                         // NEW's colour and the result for white.
                         let new_black = if new_first { first } else { !first };
                         let white = if score == 0.5 { 0.5 } else if (score == 1.0) != new_black { 1.0 } else { 0.0 };
-                        for (_, mut r, stm_black) in pending {
+                        for (fen, mut r, stm_black) in pending {
                             r.push(if stm_black { 1.0 - white } else { white });
                             r.push(g as f32 - threads as f32);
                             rec.extend(r);
+                            if want_fen {
+                                fens.push(fen);
+                            }
                         }
                     }
-                    rec
+                    (rec, fens)
                 })
             })
             .collect();
@@ -1850,13 +1867,23 @@ fn netdata(args: &[String], out: &mut impl Write) {
     });
     let mut bytes: Vec<u8> = Vec::new();
     let mut n = 0usize;
-    for c in &chunks {
+    for (c, _) in &chunks {
         n += c.len() / (NI + 4);
         for v in c {
             bytes.extend_from_slice(&v.to_le_bytes());
         }
     }
     std::fs::write(out_path, &bytes).expect("write records");
+    if let Some(p) = &fen_path {
+        let mut text = String::new();
+        for (_, f) in &chunks {
+            for line in f {
+                text.push_str(line);
+                text.push('\n');
+            }
+        }
+        std::fs::write(p, text).expect("write fens");
+    }
     writeln!(out, "{} records ({} inputs + 4) from {} games -> {}", n, NI, lines.len(), out_path).unwrap();
 }
 
