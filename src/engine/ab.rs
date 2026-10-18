@@ -56,7 +56,7 @@ const ROOT_FUTURE_MATE_MS: u64 = 50;
 const ROOT_WIDEN_CAP: usize = 256;
 /// Interior nodes up to this ply (the root is 0) look for a checkmate in one by a checking
 /// travel the node would search late or never (`travel_mate`).
-const TRAVEL_MATE_PLY: usize = 2;
+const TRAVEL_MATE_PLY: usize = 3;
 /// Hypercuboids the search for an evasion of such a check may look at (an evasion is usually
 /// found in a few; past this the check counts as no mate).
 const TRAVEL_MATE_STEPS: u32 = 64;
@@ -1821,7 +1821,7 @@ impl AlphaBeta {
         if ply <= TRAVEL_MATE_PLY {
             let mate = {
                 let NodeBufs { info, order, .. } = &mut *nb;
-                self.travel_mate(s, info, &ss, order, if ply == 1 { Some(&mut tchecks) } else { None })
+                self.travel_mate(s, info, &ss, order, if ply % 2 == 1 { Some(&mut tchecks) } else { None })
             };
             if let Some(act) = mate {
                 self.bufs.push(nb);
