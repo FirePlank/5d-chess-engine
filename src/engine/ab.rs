@@ -43,7 +43,7 @@ const BATCH: usize = 12;
 const QDEPTH: i32 = 3;
 const QCAP: usize = 4;
 /// Singular extension: depth from which the TT action is tested, and the margin per depth.
-const SING_DEPTH: i32 = 8;
+const SING_DEPTH: i32 = 6;
 const SING_MARGIN: i32 = 100;
 const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
