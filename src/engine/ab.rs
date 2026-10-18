@@ -634,6 +634,12 @@ struct OrderScratch {
     /// History values of the branch coordinates, by coordinate, as they were when the
     /// node was ordered (the branch axes may be scored later).
     branch_history: Vec<i32>,
+    /// Existing axes `start_actions` left unscored: every hypercuboid it started on holds a
+    /// single coordinate there (boards the side to move need not play, at interior nodes).
+    /// `order_skipped` scores them once a wider space needs them.
+    skipped: Vec<bool>,
+    /// `node_ordering` leaves the `skipped` axes out.
+    skip: bool,
 }
 
 /// How `node_ordering` treats the branch axes.
@@ -831,6 +837,13 @@ impl AlphaBeta {
         for n in axes.start..axes.end.min(dim) {
             let sc = &mut scores[n];
             sc.clear();
+            if scratch.skip && n < fba && scratch.skipped.get(n).copied().unwrap_or(false) {
+                // A single coordinate in every hypercuboid: its order is never read, and its
+                // score adds the same to every bound of a class.
+                sc.resize(u[n].max().map(|i| i as usize + 1).unwrap_or(0), 0);
+                orders[n].clear();
+                continue;
+            }
             if n == fba && branch == BranchOrder::Defer {
                 // Only the null coordinate is scored (all a branch axis restricted to it
                 // needs); the history values the others will need are recorded as of now.
@@ -1232,9 +1245,27 @@ impl AlphaBeta {
     fn start_actions(&self, s: &State, info: &HcInfo, cursor: &mut BestFirstCursor, scratch: &mut OrderScratch, ss: SearchSpace, defer: bool) {
         let (orders, scores) = cursor.ordering_mut();
         let branch = if defer { BranchOrder::Defer } else { BranchOrder::Now };
+        // Interior nodes skip the axes no hypercuboid varies (see `OrderScratch::skipped`).
+        let fba = info.first_branch_axis();
+        scratch.skipped.clear();
+        if defer {
+            scratch.skipped.extend((0..fba).map(|n| ss.hcs.iter().all(|hc| hc[n].single().is_some() || hc[n].is_empty())));
+        }
+        scratch.skip = true;
         self.node_ordering(s, info, true, scratch, orders, scores, 0..usize::MAX, branch);
+        scratch.skip = false;
         cursor.set_branch_pending(defer && info.first_branch_axis() < info.dimension());
         cursor.restart(info, ss);
+    }
+
+    /// Score the axes `start_actions` skipped, before the cursor is restarted on a space that
+    /// may vary them.
+    fn order_skipped(&self, s: &State, info: &HcInfo, scratch: &mut OrderScratch, cursor: &mut BestFirstCursor) {
+        let skipped = std::mem::take(&mut scratch.skipped);
+        let (orders, scores) = cursor.ordering_mut();
+        for (n, _) in skipped.iter().enumerate().filter(|x| *x.1) {
+            self.node_ordering(s, info, true, scratch, orders, scores, n..n + 1, BranchOrder::Now);
+        }
     }
 
     /// The deferred branch-axis ordering of `start_actions`.
@@ -1908,6 +1939,10 @@ impl AlphaBeta {
                             // ordering is unchanged: nothing was searched since it was made.)
                             if generated == 0 {
                                 if let Some(f) = full.take() {
+                                    {
+                                        let NodeBufs { info, cursor, order, .. } = &mut *nb;
+                                        self.order_skipped(s, info, order, cursor);
+                                    }
                                     nb.cursor.restart(&nb.info, f);
                                     continue;
                                 }
@@ -2007,6 +2042,10 @@ impl AlphaBeta {
         let mut widen_complete = false;
         if outcome.is_none() && best < -MATE + 1000 && full.as_ref().is_some_and(|f| Self::trims_future(s, &nb.info, f)) {
             let space = Self::future_only(s, &nb.info, full.as_ref().expect("checked"));
+            {
+                let NodeBufs { info, cursor, order, .. } = &mut *nb;
+                self.order_skipped(s, info, order, cursor);
+            }
             nb.cursor.restart(&nb.info, space);
             let mut widened = 0usize;
             outcome = 'widen: loop {
