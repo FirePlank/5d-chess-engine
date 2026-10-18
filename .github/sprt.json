@@ -1,0 +1,12 @@
+{
+  "name": "net_fresh12",
+  "old": "7cb74ed",
+  "games": 9000,
+  "shards": 40,
+  "tc": "tc 10+0.1",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self"
+}
