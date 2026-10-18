@@ -95,6 +95,8 @@ const RFP_MARGIN: i32 = 250;
 /// eval is at least beta, search the pass with depth reduced by NMP_R + depth / NMP_DIV.
 const NMP_MIN_DEPTH: i32 = 3;
 const NMP_R: i32 = 2;
+/// A null-move cutoff at this depth or more is verified by a search without null moves.
+const NMP_VERIFY_DEPTH: i32 = 6;
 const NMP_DIV: i32 = 4;
 const DEFAULT_HASH_MB: usize = 64;
 /// Static evaluations are kept within +-EVAL_MAX, well clear of mate scores.
@@ -384,6 +386,8 @@ pub struct AlphaBeta {
     /// The root is won or lost by enough (or by mate) that pruning which hides long mating
     /// lines is switched off (Stockfish's seekMate).
     seek_mate: bool,
+    /// Null moves are only tried from this ply on (while a null-move cutoff is verified).
+    nmp_min_ply: usize,
     /// Per-node buffers, reused down the recursion.
     bufs: Vec<Box<NodeBufs>>,
     /// Evaluation terms of recently seen boards.
@@ -718,6 +722,7 @@ impl AlphaBeta {
             stop_ptr: std::ptr::null(),
             proven: false,
             seek_mate: false,
+            nmp_min_ply: 0,
             bufs: Vec::new(),
             terms: Box::default(),
             phys_static: std::cell::RefCell::new(Vec::new()),
@@ -1738,7 +1743,7 @@ impl AlphaBeta {
                     return e;
                 }
             }
-            if depth >= NMP_MIN_DEPTH && !self.seek_mate && Self::has_null_material(s) && self.static_eval(s) >= beta {
+            if depth >= NMP_MIN_DEPTH && ply >= self.nmp_min_ply && !self.seek_mate && Self::has_null_material(s) && self.static_eval(s) >= beta {
                 let r = NMP_R + depth / NMP_DIV;
                 let mark = s.make_null();
                 let v = -self.negamax(s, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
@@ -1747,9 +1752,25 @@ impl AlphaBeta {
                     return 0;
                 }
                 if v >= beta {
-                    // Never a mate score (beta is not one): nothing to prove.
-                    self.proven = false;
-                    return if v > MATE - 1000 { beta } else { v };
+                    // A threat deeper than the reduced search sees makes the null move look
+                    // safe: at high depth the cutoff is verified without null moves.
+                    let verified = if depth >= NMP_VERIFY_DEPTH {
+                        let saved = self.nmp_min_ply;
+                        self.nmp_min_ply = ply + (depth - r) as usize * 3 / 4;
+                        let vv = self.negamax(s, depth - r, ply, beta - 1, beta, false);
+                        self.nmp_min_ply = saved;
+                        if self.aborted {
+                            return 0;
+                        }
+                        vv >= beta
+                    } else {
+                        true
+                    };
+                    if verified {
+                        // Never a mate score (beta is not one): nothing to prove.
+                        self.proven = false;
+                        return if v > MATE - 1000 { beta } else { v };
+                    }
                 }
             }
         }
