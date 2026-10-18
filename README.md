@@ -45,6 +45,14 @@ A depth's lines share its `nodes`, `nps`, `time` and `roots`; `score` reads as i
 
 ## Testing
 
+Strength: `setoption name Skill Level value N` selects levels 1–8 (default 8).
+The JSON `search` field is `"skillLevel": N`; omitted searches default to full strength,
+unless a persistent `Skill Level` option is set. Level 8 runs the unchanged full search.
+Levels 1–7 use increasing depth/node caps and sample 32 exact MultiPV candidates with
+geometrically decreasing win-probability noise. They bypass the opening book; interfaces
+should disable pondering for these levels. The ladder targets roughly even rating gaps,
+but has no calibrated Elo labels: validating equal gaps requires longer paired matches.
+
 ```bash
 # Unit tests and perft
 cargo test --release

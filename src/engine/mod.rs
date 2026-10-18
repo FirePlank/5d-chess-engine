@@ -4,6 +4,7 @@ pub mod evalnet;
 pub mod hce;
 pub mod local;
 pub mod sac;
+mod skill;
 pub mod time;
 pub mod uci;
 

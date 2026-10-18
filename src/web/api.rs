@@ -327,6 +327,8 @@ impl Api {
         // `multiPV`: this search's, else the `set_option` value, else 1.
         let multipv = j.get("multiPV").int().or_else(|| options.iter().find(|(n, _)| n == "MultiPV").map(|o| o.1)).unwrap_or(1);
         eng.set_option("MultiPV", &crate::engine::OptionValue::Int(multipv));
+        let skill = j.get("skillLevel").int().or_else(|| options.iter().find(|(n, _)| n == "Skill Level").map(|o| o.1)).unwrap_or(8);
+        eng.set_option("Skill Level", &crate::engine::OptionValue::Int(skill));
         let stop = AtomicBool::new(false);
         let best = eng.find_best_move(&s, &limits, &stop, &mut |m| info(&m));
         let bestmove = best.map(|a| super::tree::action_lan(&s, &a));
