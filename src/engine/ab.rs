@@ -1693,9 +1693,7 @@ impl AlphaBeta {
         }
         let mut out_of_budget = false;
         let aborted = 'search: {
-            // (Six with three boards or more to play: nodes there are mostly in check.)
-            let qcap = if nb.info.first_branch_axis() >= 3 { 6 } else { QCAP };
-            while tried < qcap {
+            while tried < QCAP {
                 if self.check_abort() {
                     break 'search true;
                 }
