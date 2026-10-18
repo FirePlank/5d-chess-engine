@@ -1009,6 +1009,13 @@ impl HcInfo {
         // all come first, so this is the same for every branch axis).
         let mut branch_ghosts: Option<IntegerSet> = None;
         for n in 0..dim {
+            // An axis held to its null coordinate (an unplayed board or branch axis: most axes
+            // at interior nodes) takes it: no arrival is the null one, so there is nothing to
+            // prune, pair or include (the general path below gives the same).
+            if hc[n].single() == Some(0) && matches!(self.entry(n, 0), Entry::Null) && (matches!(order, HcOrdering::Natural) || self.universe[n].contains(0)) {
+                result[n] = 0;
+                continue;
+            }
             let grp = &self.groups[n.min(self.new_axis)];
             // Arrivals whose departure left the hypercuboid can never be paired.
             if n < self.new_axis {
@@ -1787,6 +1794,53 @@ pub fn interrupted() -> bool {
     })
 }
 
+/// Problems found while enumerating one context (`find_problem`'s slices). Each holds
+/// only points that fail whatever hypercuboid they lie in (its axes are fixed by properties of
+/// single coordinates), so a later hypercuboid inside one is dropped, and a later point inside
+/// one is cut out with it, without looking again: with many timelines the same check is
+/// otherwise found again in every piece the earlier cuts left.
+#[derive(Default)]
+struct ProblemMemo {
+    slices: Vec<Slice>,
+    next: usize,
+}
+
+/// Problems a memo keeps (the oldest is replaced).
+const PROBLEM_MEMO: usize = 32;
+/// Contexts with fewer boards to play (existing axes) keep no memo: their problems are few and
+/// rarely found twice, so it would only cost time.
+const PROBLEM_MEMO_MIN_AXES: usize = 3;
+
+/// Turns the problem memos off (diagnostics: `ktools legalcheck` compares the actions found
+/// with and without them).
+pub static NO_PROBLEM_MEMO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+impl ProblemMemo {
+    fn clear(&mut self) {
+        self.slices.clear();
+        self.next = 0;
+    }
+    fn add(&mut self, s: &Slice) {
+        if NO_PROBLEM_MEMO.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        if self.slices.len() < PROBLEM_MEMO {
+            self.slices.push(s.clone());
+        } else {
+            self.slices[self.next] = s.clone();
+            self.next = (self.next + 1) % PROBLEM_MEMO;
+        }
+    }
+    /// Whether every point of `hc` lies in one remembered problem.
+    fn covers(&self, hc: &Hc) -> bool {
+        self.slices.iter().any(|s| s.fixed.iter().all(|(n, c)| hc[*n].is_subset_of(c)))
+    }
+    /// A remembered problem holding `p`.
+    fn holding(&self, p: &Point) -> Option<&Slice> {
+        self.slices.iter().find(|s| s.contains(p))
+    }
+}
+
 /// Resumable legal-action enumeration. The caller supplies the context and the state it
 /// was built from on every call (the state may be modified between calls if restored).
 pub struct HcCursor {
@@ -1799,6 +1853,8 @@ pub struct HcCursor {
     pub budget: u32,
     sc: PointScratch,
     checks: CheckBuf,
+    /// Problems found in the current context (cleared by `forget`).
+    memo: ProblemMemo,
 }
 
 impl Default for HcCursor {
@@ -1809,11 +1865,16 @@ impl Default for HcCursor {
 
 impl HcCursor {
     pub fn new(ss: SearchSpace, order: HcOrdering) -> Self {
-        HcCursor { ss, order, branch_pending: false, budget: u32::MAX, sc: PointScratch::default(), checks: CheckBuf::default() }
+        HcCursor { ss, order, branch_pending: false, budget: u32::MAX, sc: PointScratch::default(), checks: CheckBuf::default(), memo: ProblemMemo::default() }
     }
 
     pub fn next(&mut self, info: &HcInfo, s: &State) -> Option<MoveSeq> {
         self.next_with(info, s, &mut |_| {}).expect("branch entries built")
+    }
+
+    /// Forget the problems found so far: call when `ss` is set for another context (state).
+    pub fn forget(&mut self) {
+        self.memo.clear();
     }
 
     /// `next`, filling the branch axes' order with `fill_branch` when `branch_pending` and a
@@ -1844,10 +1905,20 @@ impl HcCursor {
                 fill_branch(self.order.axes_mut());
                 self.branch_pending = false;
             }
+            let memo = info.first_branch_axis() >= PROBLEM_MEMO_MIN_AXES;
+            if memo && self.memo.covers(&hc) {
+                continue;
+            }
             if !info.take_point(&mut hc, &self.order, &mut self.sc) {
                 continue;
             }
             let pt = &self.sc.point;
+            if let Some(problem) = memo.then(|| self.memo.holding(pt)).flatten() {
+                let _p = crate::misc::prof::scope(5);
+                self.ss.push_back(hc);
+                self.ss.remove_slice_backwards(problem, true, 10, 1);
+                continue;
+            }
             match info.find_problem(s, pt, &hc, &mut self.checks) {
                 None => {
                     let act = info.to_action(pt);
@@ -1856,6 +1927,9 @@ impl HcCursor {
                 }
                 Some(problem) => {
                     let _p = crate::misc::prof::scope(5);
+                    if memo {
+                        self.memo.add(&problem);
+                    }
                     self.ss.push_back(hc);
                     self.ss.remove_slice_backwards(&problem, true, 10, 1);
                 }
@@ -1896,6 +1970,8 @@ pub struct BestFirstCursor {
     limit_taken: u32,
     /// Hypercuboids it may still look at (see `set_budget`).
     budget: u32,
+    /// Problems found since the last `restart` of another context (see `ProblemMemo`).
+    memo: ProblemMemo,
 }
 
 /// The first class of a context with one playable board: the coordinates of its axis 0 still
@@ -2017,6 +2093,7 @@ impl Default for BestFirstCursor {
             limit_class: -1,
             limit_taken: 0,
             budget: u32::MAX,
+            memo: ProblemMemo::default(),
         }
     }
 }
@@ -2043,6 +2120,12 @@ impl BestFirstCursor {
     /// Whether the last `next` stopped on the budget (`set_budget`), not at the end.
     pub fn out_of_budget(&self) -> bool {
         self.budget == 0
+    }
+
+    /// Forget the problems found so far (see `ProblemMemo`): call before enumerating another
+    /// context. A `restart` on the same context keeps them.
+    pub fn forget(&mut self) {
+        self.memo.clear();
     }
 
     /// Enumerate `ss` (of the context `info`) from the start under the current ordering.
@@ -2146,12 +2229,21 @@ impl BestFirstCursor {
                     continue;
                 }
             }
+            let memo = info.first_branch_axis() >= PROBLEM_MEMO_MIN_AXES;
+            if memo && self.memo.covers(&hc) {
+                continue;
+            }
             self.heap.need_branch(&hc, true, fill);
             if !info.take_point(&mut hc, &self.heap.order, &mut self.sc) {
                 continue;
             }
             let pt = &self.sc.point;
             let heap = &mut self.heap;
+            if let Some(problem) = memo.then(|| self.memo.holding(pt)).flatten() {
+                let _p = crate::misc::prof::scope(5);
+                hc.remove_slice_with(problem, |h| heap.push(h, class, fill));
+                continue;
+            }
             match info.find_problem(s, pt, &hc, &mut self.checks) {
                 None => {
                     let act = info.to_action(pt);
@@ -2161,6 +2253,9 @@ impl BestFirstCursor {
                 }
                 Some(problem) => {
                     let _p = crate::misc::prof::scope(5);
+                    if memo {
+                        self.memo.add(&problem);
+                    }
                     hc.remove_slice_with(&problem, |h| heap.push(h, class, fill));
                 }
             }
