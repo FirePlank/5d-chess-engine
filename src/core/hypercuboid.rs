@@ -1894,8 +1894,6 @@ pub struct BestFirstCursor {
     /// The limited class being enumerated and the hypercuboids it has taken.
     limit_class: i32,
     limit_taken: u32,
-    /// Hypercuboids it may still look at (see `set_budget`).
-    budget: u32,
 }
 
 /// The first class of a context with one playable board: the coordinates of its axis 0 still
@@ -2016,7 +2014,6 @@ impl Default for BestFirstCursor {
             limit_steps: 0,
             limit_class: -1,
             limit_taken: 0,
-            budget: u32::MAX,
         }
     }
 }
@@ -2034,20 +2031,8 @@ impl BestFirstCursor {
         self.heap.branch_pending = pending;
     }
 
-    /// Until the next `restart`, `next` looks at no more than `steps` hypercuboids: past them it
-    /// finds no further action, which the caller tells apart from the end by `out_of_budget`.
-    pub fn set_budget(&mut self, steps: u32) {
-        self.budget = steps;
-    }
-
-    /// Whether the last `next` stopped on the budget (`set_budget`), not at the end.
-    pub fn out_of_budget(&self) -> bool {
-        self.budget == 0
-    }
-
     /// Enumerate `ss` (of the context `info`) from the start under the current ordering.
     pub fn restart(&mut self, info: &HcInfo, ss: SearchSpace) {
-        self.budget = u32::MAX;
         self.limit_below = 0;
         self.limit_class = -1;
         self.heap.heap.clear();
@@ -2125,10 +2110,9 @@ impl BestFirstCursor {
         let mut steps = 0u32;
         while !self.heap.heap.is_empty() {
             steps += 1;
-            if steps % INTERRUPT_EVERY == 0 && interrupted() || self.budget == 0 {
+            if steps % INTERRUPT_EVERY == 0 && interrupted() {
                 return Ok(None);
             }
-            self.budget -= 1;
             let BfItem { key, mut hc } = self.heap.heap.pop().unwrap();
             if info.needs_branch(&hc) {
                 self.heap.heap.push(BfItem { key, hc });
