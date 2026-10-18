@@ -47,9 +47,6 @@ const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
 const ROOT_LMR_MIN_INDEX: usize = 6;
-/// Actions of a depth-1 node whose checks are extended.
-const HORIZON_CHECKS: usize = 6;
-
 /// Root actions with a move on an optional board tried for a checkmate in one.
 const ROOT_FUTURE_MATE_PROBE: usize = 16;
 /// Time for that probe without a time plan (with one: a 32nd of the optimum).
@@ -1954,15 +1951,6 @@ impl AlphaBeta {
                     let quiet = sc < 10_000;
                     let mut r = 0;
                     let mut child_check = None;
-                    // One of the first checks at the horizon is extended: the quiescence search
-                    // only resolves captures, so a quiet mating move one ply past the depth
-                    // went unseen.
-                    let mut ext = 0;
-                    if depth == 1 && searched < HORIZON_CHECKS {
-                        let ic = self.in_check(s);
-                        child_check = Some(ic);
-                        ext = ic as i32;
-                    }
                     // Checking actions are not reduced: mating lines run through them.
                     if depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet {
                         let ic = self.in_check(s);
@@ -1974,16 +1962,16 @@ impl AlphaBeta {
                     let mut v;
                     self.known_check = child_check;
                     if searched == 0 {
-                        v = -self.negamax(s, depth - 1 + ext, ply + 1, -beta, -alpha, pv);
+                        v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, pv);
                     } else {
                         v = -self.negamax(s, depth - 1 - r, ply + 1, -alpha - 1, -alpha, false);
                         if !self.aborted && v > alpha && r > 0 {
                             self.known_check = child_check;
-                            v = -self.negamax(s, depth - 1 + ext, ply + 1, -alpha - 1, -alpha, false);
+                            v = -self.negamax(s, depth - 1, ply + 1, -alpha - 1, -alpha, false);
                         }
                         if !self.aborted && v > alpha && v < beta && pv {
                             self.known_check = child_check;
-                            v = -self.negamax(s, depth - 1 + ext, ply + 1, -beta, -alpha, true);
+                            v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, true);
                         }
                     }
                     s.unmake(mark);
