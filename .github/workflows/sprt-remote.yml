@@ -38,6 +38,7 @@ jobs:
       new_args: ${{ steps.cfg.outputs.new_args }}
       old_args: ${{ steps.cfg.outputs.old_args }}
       base: ${{ steps.cfg.outputs.base }}
+      book: ${{ steps.cfg.outputs.book }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,6 +62,7 @@ jobs:
             echo "new_args=$(jq -r '.new_args // ""' $c)"
             echo "old_args=$(jq -r '.old_args // ""' $c)"
             echo "base=$(jq -r '.base // "self"' $c)"
+            echo "book=$(jq -r '.book // ""' $c)"
           } >> "$GITHUB_OUTPUT"
 
       - uses: Swatinem/rust-cache@v2
@@ -186,6 +188,7 @@ jobs:
           sparse-checkout: |
             scripts/sprt_merge.py
             data/book.g
+            data/books/
           sparse-checkout-cone-mode: false
 
       - uses: actions/download-artifact@v4
@@ -210,8 +213,9 @@ jobs:
           old_args="${{ needs.setup.outputs.old_args }}"
           [ "$base" = self ] || old_args="${base#cpp:}"
           tc="${{ needs.setup.outputs.tc }}"
+          book="${{ needs.setup.outputs.book }}"
           ./bins/sprt --new "$PWD/bins/new-kairos ${{ needs.setup.outputs.new_args }}" \
-            --base "$PWD/bins/old-kairos $old_args" \
+            --base "$PWD/bins/old-kairos $old_args" ${book:+--book "$book"} \
             --${tc% *} ${tc#* } --elo0="${{ needs.setup.outputs.elo0 }}" --elo1="${{ needs.setup.outputs.elo1 }}" \
             --concurrency "$(nproc)" --compact --seed "${{ matrix.shard }}" \
             --min-games "${{ needs.setup.outputs.per_shard }}" --max-games "${{ needs.setup.outputs.per_shard }}" \

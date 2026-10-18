@@ -9,7 +9,9 @@
 #   Env: SHARDS (default 40), NEW_ARGS / OLD_ARGS (extra engine args, default none),
 #        BASE (self | cpp:<engine>, e.g. cpp:zero-capture-check-pw), MIN_GAMES, RUN_ID,
 #        OLD_SHA (build the old engine from this commit instead of <base-sha>, e.g. to
-#        measure main against an earlier version; use with patch "-").
+#        measure main against an earlier version; use with patch "-"),
+#        BOOK (openings from this G file of the repo, e.g. data/books/timelines4.g, each
+#        played with both colors; default: generated openings).
 set -euo pipefail
 NAME=$1 BASE_SHA=$2 PATCH=$3 GAMES=$4 TC=${5:-tc 10+0.1} E0=${6:-0} E1=${7:-5}
 R=$(git rev-parse --show-toplevel); W="$R/../5d-sprt-branch"
@@ -38,8 +40,8 @@ else
   [ "$PATCH" = "-" ] || git apply "$PATCH"
   jq -n --arg n "$NAME" --arg o "${OLD_SHA:-$BASE_SHA}" --arg tc "$TC" --argjson g "$GAMES" \
         --argjson e0 "$E0" --argjson e1 "$E1" --argjson sh "${SHARDS:-40}" \
-        --arg na "${NEW_ARGS:-}" --arg oa "${OLD_ARGS:-}" --arg b "${BASE:-self}" \
-        '{name:$n, old:$o, games:$g, shards:$sh, tc:$tc, elo0:$e0, elo1:$e1, new_args:$na, old_args:$oa, base:$b}' \
+        --arg na "${NEW_ARGS:-}" --arg oa "${OLD_ARGS:-}" --arg b "${BASE:-self}" --arg bk "${BOOK:-}" \
+        '{name:$n, old:$o, games:$g, shards:$sh, tc:$tc, elo0:$e0, elo1:$e1, new_args:$na, old_args:$oa, base:$b, book:$bk}' \
         > .github/sprt.json
   git add -A && git commit -q -m "test: $NAME"
   SHA=$(git rev-parse HEAD)

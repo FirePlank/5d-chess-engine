@@ -229,7 +229,9 @@ fn main() {
                             break;
                         }
                         let b = bucket(s.active_timelines());
-                        if (i + 1) % 7 == 0 && counts[b] < per && i + 1 < acts.len() {
+                        // TLC_MIN_LEFT: only positions with at least this many actions still to come.
+                        let left: usize = std::env::var("TLC_MIN_LEFT").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+                        if (i + 1) % 7 == 0 && counts[b] < per && i + left < acts.len() {
                             counts[b] += 1;
                             writeln!(out, "# tl {}", s.active_timelines()).unwrap();
                             writeln!(out, "G 1 {} moves {} submit", pos, acts[..=i].join(" submit ")).unwrap();
