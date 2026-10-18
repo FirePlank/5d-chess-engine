@@ -17,8 +17,6 @@ type Packed = [i16; NF];
 struct Sample {
     f: Packed,
     r: f32,
-    /// `hce::damp` of the position's active timelines (the score's scale).
-    g: f32,
 }
 
 fn pack(f: &hce::Features) -> Packed {
@@ -26,12 +24,12 @@ fn pack(f: &hce::Features) -> Packed {
 }
 
 #[inline]
-fn linear(s: &Sample, w: &Weights) -> f32 {
+fn linear(f: &Packed, w: &Weights) -> f32 {
     let mut acc = 0f32;
     for i in 0..NF {
-        acc += w[i] * s.f[i] as f32;
+        acc += w[i] * f[i] as f32;
     }
-    acc * s.g
+    acc
 }
 
 fn field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
@@ -71,8 +69,6 @@ fn quiet(s: &State) -> bool {
 }
 
 static QUIET_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// Damping (from, div) for experiments; `hce::DAMP_FROM` / `hce::DAMP_DIV` unless given.
-static DAMP: std::sync::OnceLock<(i32, f32)> = std::sync::OnceLock::new();
 
 fn game_samples(line: &str, out: &mut Vec<Sample>) -> Option<()> {
     // A game lost to an engine failure has no real result.
@@ -144,10 +140,7 @@ fn game_samples(line: &str, out: &mut Vec<Sample>) -> Option<()> {
         if QUIET_ONLY.load(std::sync::atomic::Ordering::Relaxed) && !quiet(&st) {
             continue;
         }
-        let f = hce::features(&st);
-        let (from, div) = *DAMP.get_or_init(|| (hce::DAMP_FROM, hce::DAMP_DIV));
-        let g = hce::damp_with(f[hce::fi::ACTIVE_LINES], from, div);
-        out.push(Sample { f: pack(&f), r: white_result, g });
+        out.push(Sample { f: pack(&hce::features(&st)), r: white_result });
     }
     Some(())
 }
@@ -159,7 +152,7 @@ fn sigmoid(x: f64) -> f64 {
 fn loss(samples: &[Sample], w: &Weights, k: f64) -> f64 {
     let mut acc = 0.0;
     for s in samples {
-        let p = sigmoid(k * linear(s, w) as f64);
+        let p = sigmoid(k * linear(&s.f, w) as f64);
         acc += (s.r as f64 - p).powi(2);
     }
     acc / samples.len().max(1) as f64
@@ -176,7 +169,6 @@ fn main() {
     let threads: usize = arg(&args, "--threads", 14);
     let out_path: String = arg(&args, "--out", "games/tuned_weights.txt".to_string());
     QUIET_ONLY.store(args.iter().any(|a| a == "--quiet"), std::sync::atomic::Ordering::Relaxed);
-    DAMP.set((arg(&args, "--damp-from", hce::DAMP_FROM), arg(&args, "--damp-div", hce::DAMP_DIV))).unwrap();
     let files: Vec<String> = args[1..]
         .iter()
         .enumerate()
@@ -277,7 +269,7 @@ fn main() {
         // Mean result by default-eval bucket (white's view), to check labels and scale.
         let mut bk: std::collections::BTreeMap<i32, (f64, usize)> = Default::default();
         for s in all.iter() {
-            let e = linear(s, &w) as i32;
+            let e = linear(&s.f, &w) as i32;
             let b = (e.clamp(-2000, 2000) / 200) * 200;
             let x = bk.entry(b).or_default();
             x.0 += s.r as f64;
@@ -329,8 +321,8 @@ fn main() {
                     sc.spawn(move || {
                         let mut g = [0f64; NF];
                         for s in ch.iter() {
-                            let p = sigmoid(k * linear(s, &wf) as f64);
-                            let d = 2.0 * (p - s.r as f64) * p * (1.0 - p) * k * s.g as f64;
+                            let p = sigmoid(k * linear(&s.f, &wf) as f64);
+                            let d = 2.0 * (p - s.r as f64) * p * (1.0 - p) * k;
                             for i in 0..NF {
                                 g[i] += d * s.f[i] as f64;
                             }
