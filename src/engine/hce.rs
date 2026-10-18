@@ -1550,19 +1550,7 @@ pub fn score(f: &Features, w: &Weights, black_to_move: bool) -> i32 {
     for i in 0..NF {
         acc += w[i] * f[i] as f32;
     }
-    let white = (acc * damp(f[fi::ACTIVE_LINES])).round() as i32;
-    if black_to_move { -white } else { white }
-}
-
-/// `score` with the damping factor given (the f7 sac terms are split from the vector holding
-/// the active timelines' count).
-#[inline]
-pub fn score_g(f: &Features, w: &Weights, black_to_move: bool, g: f32) -> i32 {
-    let mut acc = 0f32;
-    for i in 0..NF {
-        acc += w[i] * f[i] as f32;
-    }
-    let white = (acc * g).round() as i32;
+    let white = acc.round() as i32;
     if black_to_move { -white } else { white }
 }
 
@@ -1572,26 +1560,7 @@ pub fn linear(f: &Features, w: &Weights) -> f32 {
     for i in 0..NF {
         acc += w[i] * f[i] as f32;
     }
-    acc * damp(f[fi::ACTIVE_LINES])
-}
-
-/// Active timelines up to which the handcrafted score is not scaled, and how fast it is scaled
-/// down beyond (2 / (n - 2)): the terms add up over every board while results get no more
-/// certain with more timelines; unscaled, the score ran into the eval clamp in four positions
-/// in ten with six or more, and the eval net's capped correction could not pull it back.
-pub const DAMP_FROM: i32 = 4;
-pub const DAMP_DIV: f32 = 2.0;
-
-/// The handcrafted score's scale with `active` timelines: 1 up to `DAMP_FROM`, then
-/// `DAMP_DIV / (DAMP_DIV + extra timelines)`.
-#[inline]
-pub fn damp(active: i32) -> f32 {
-    damp_with(active, DAMP_FROM, DAMP_DIV)
-}
-
-#[inline]
-pub fn damp_with(active: i32, from: i32, div: f32) -> f32 {
-    div / (div + (active - from).max(0) as f32)
+    acc
 }
 
 #[cfg(test)]
