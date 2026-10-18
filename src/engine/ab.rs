@@ -42,22 +42,6 @@ const ROOT_CAP: usize = 1000;
 const BATCH: usize = 12;
 const QDEPTH: i32 = 3;
 const QCAP: usize = 4;
-/// Hypercuboids a quiescence node may look at for its check evasions. With many timelines a
-/// legal evasion can take tens of thousands of points to find (most combinations fail on
-/// jump order or still leave a royal attacked); past the budget the node stands on its static
-/// evaluation, unproven, instead of stalling the search.
-const QEVASION_STEPS: u32 = 256;
-/// Focused evasions and evasion budgets only apply with at least this many boards to play
-/// on (existing axes): with fewer, the whole space is small, and proving that no evasion
-/// exists (a mate at the horizon) must not be cut short.
-const FOCUS_MIN_BOARDS: usize = usize::MAX;
-/// The same once the focused evasions (see `focused_evasions`) are searched: the rest of the
-/// space is mostly evasions branching off timelines, costly to find and rarely better.
-const QEVASION_REST_STEPS: u32 = 16;
-/// Hypercuboids an interior node in check may look at for evasions once its focused ones (see
-/// `focused_evasions`) are searched: past them the node counts as not fully searched (no
-/// mated score, no upper bound), as at the action cap.
-const EVASION_REST_STEPS: u32 = 512;
 const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
@@ -1535,68 +1519,6 @@ impl AlphaBeta {
         }
     }
 
-    /// The evasions of a check most likely lie on the boards the check involves: the attacked
-    /// royal's, the checking piece's and every timeline between them (a 5D line of attack
-    /// crosses those). The focused space keeps those axes whole and fixes every other existing
-    /// axis to its default (its first coordinate in `order` the axis can take on its own: a
-    /// move on a board that must be played, the null one elsewhere), with no timeline branching
-    /// off. `None` when nothing would be fixed. With many timelines this finds an evasion in a
-    /// handful of points where the whole space takes thousands.
-    fn focused_evasions(s: &State, info: &HcInfo, ss: &SearchSpace, o: &AxisOrders) -> Option<SearchSpace> {
-        let fba = info.first_branch_axis();
-        let dim = info.dimension();
-        let player = s.get_present().1;
-        let present = s.get_present();
-        let (amin, amax) = s.get_active_range();
-        let mut involved: Vec<bool> = vec![false; fba];
-        for m in CheckPosition::for_phantom(s).checks(!player, true) {
-            let (a, b) = (m.from.l().min(m.to.l()), m.from.l().max(m.to.l()));
-            for l in a..=b {
-                if let Some(n) = info.line_to_axis(l).filter(|&n| n < fba) {
-                    involved[n] = true;
-                }
-            }
-        }
-        // With every board involved, the focused space is the actions creating no timeline:
-        // the cursor's first class anyway.
-        if involved.iter().all(|&x| x) {
-            return None;
-        }
-        let u = info.get_universe();
-        let mut defaults: Vec<Option<Index>> = vec![None; fba];
-        for (l, n) in (s.get_lines_range().0..=s.get_lines_range().1).filter_map(|l| info.line_to_axis(l).map(|n| (l, n))) {
-            if n >= fba || involved[n] {
-                continue;
-            }
-            let mandatory = l >= amin && l <= amax && s.get_timeline_end(l) == present;
-            defaults[n] = if mandatory {
-                o.axis(n).iter().copied().find(|&i| u[n].contains(i) && matches!(info.entry(n, i), Entry::Physical { .. }))
-            } else {
-                Some(0)
-            };
-        }
-        let mut out = SearchSpace::default();
-        'hc: for hc in &ss.hcs {
-            let mut h = hc.clone();
-            for n in 0..fba {
-                if let Some(d) = defaults[n] {
-                    if !h[n].contains(d) {
-                        continue 'hc;
-                    }
-                    h[n].assign_singleton(d);
-                }
-            }
-            for n in fba..dim {
-                if !h[n].contains(0) {
-                    continue 'hc;
-                }
-                h[n].assign_singleton(0);
-            }
-            out.hcs.push(h);
-        }
-        Some(out)
-    }
-
     /// `known_check`: whether `s` is in check, when the caller already knows.
     /// Evasions that raise alpha inside the window extend the PV table (mates end in them);
     /// in a null window none can, so only PV windows pay for it.
@@ -1672,26 +1594,15 @@ impl AlphaBeta {
         }
         // Search the evasions.
         let mut nb = self.bufs.pop().unwrap_or_default();
-        let mut full_space: Option<SearchSpace> = None;
-        let mut searched_acts: Vec<MoveSeq> = Vec::new();
         {
             let NodeBufs { info, evasions, order, evasion_scores, .. } = &mut *nb;
             evasions.ss = info.rebuild(s, true);
             evasions.forget();
-            let many = info.first_branch_axis() >= FOCUS_MIN_BOARDS;
-            evasions.budget = if many { QEVASION_STEPS } else { u32::MAX };
             // The branch axes are only ordered once some hypercuboid needs their order.
             let fba = info.first_branch_axis();
             self.node_ordering(s, info, false, order, evasions.order.axes_mut(), evasion_scores, 0..fba, BranchOrder::Now);
             evasions.branch_pending = fba < info.dimension();
-            // The focused evasions first; the whole space once they run out.
-            if let (true, HcOrdering::Precomputed(o)) = (many, &evasions.order) {
-                if let Some(f) = Self::focused_evasions(s, info, &evasions.ss, o) {
-                    full_space = Some(std::mem::replace(&mut evasions.ss, f));
-                }
-            }
         }
-        let mut out_of_budget = false;
         let aborted = 'search: {
             while tried < QCAP {
                 if self.check_abort() {
@@ -1713,32 +1624,15 @@ impl AlphaBeta {
                         self.aborted = true;
                         break 'search true;
                     }
-                    if let Some(f) = full_space.take() {
-                        // The focused evasions ran out: on to the whole space.
-                        evasions.ss = f;
-                        evasions.budget = QEVASION_REST_STEPS;
-                        continue;
-                    }
-                    if evasions.budget == 0 {
-                        // Out of budget, not out of evasions.
-                        out_of_budget = true;
-                        break;
-                    }
                     // Every evasion was searched.
                     break 'search false;
                 };
-                if searched_acts.contains(&act) {
-                    continue;
-                }
                 if qkiller.as_ref() == Some(&act) {
                     qkiller = None;
                     continue;
                 }
                 any = true;
                 tried += 1;
-                if full_space.is_some() {
-                    searched_acts.push(act.clone());
-                }
                 let mark = Self::make(s, &act);
                 let v = -self.qsearch(s, ply + 1, -beta, -alpha, qd - 1, None);
                 s.unmake(mark);
@@ -1765,14 +1659,9 @@ impl AlphaBeta {
             all_proven = false;
             false
         };
-        nb.evasions.budget = u32::MAX;
         self.bufs.push(nb);
         if aborted {
             return 0;
-        }
-        if !any && out_of_budget {
-            self.proven = false;
-            return self.static_eval(s);
         }
         if !any {
             // Only reached in check: mated.
@@ -1979,24 +1868,14 @@ impl AlphaBeta {
             }
             pre_tried.push(act);
         }
-        let node_in_check = self.in_check(s);
         let mut first = Self::without_future(s, &nb.info, &ss);
         // Capturing travels first: the first classes of the cursor (see `travel_class`).
         let travels = self.travel_captures(s, &nb.info, &ss, &mut first);
         let mut full = Some(ss);
-        // In check, the focused evasions first (see `focused_evasions`), then the rest.
-        let mut focus_rest: Option<SearchSpace> = None;
         {
             let NodeBufs { info, cursor, order, .. } = &mut *nb;
-            let rest = if node_in_check && info.first_branch_axis() >= FOCUS_MIN_BOARDS { Some(first.clone()) } else { None };
             self.start_actions(s, info, cursor, order, first, true);
             cursor.limit_classes(travels as i32, TRAVEL_CAPTURE_STEPS);
-            if let Some(rest) = rest {
-                if let Some(f) = Self::focused_evasions(s, info, &rest, cursor.ordering_mut().0) {
-                    cursor.restart(info, f);
-                    focus_rest = Some(rest);
-                }
-            }
         }
         let mut generated = 0usize;
         let mut exhausted = false;
@@ -2027,17 +1906,6 @@ impl AlphaBeta {
                             break 'search Some(0);
                         }
                         Ok(None) => {
-                            if let Some(rest) = focus_rest.take() {
-                                nb.cursor.restart(&nb.info, rest);
-                                nb.cursor.limit_classes(travels as i32, TRAVEL_CAPTURE_STEPS);
-                                nb.cursor.set_budget(EVASION_REST_STEPS);
-                                continue;
-                            }
-                            if nb.cursor.out_of_budget() {
-                                skipped = true;
-                                exhausted = true;
-                                break;
-                            }
                             // Every legal action may need a move on an optional board. (The
                             // ordering is unchanged: nothing was searched since it was made.)
                             if generated == 0 {
@@ -2055,13 +1923,9 @@ impl AlphaBeta {
                         }
                         Ok(Some(act)) => {
                             generated += 1;
-                            let travel = full.is_some() && focus_rest.is_none() && Self::travel_class(&mut nb.cursor, travels);
+                            let travel = full.is_some() && Self::travel_class(&mut nb.cursor, travels);
                             if pre_tried.contains(&act) {
                                 continue;
-                            }
-                            if focus_rest.is_some() {
-                                // (The rest of the space has it again.)
-                                pre_tried.push(act.clone());
                             }
                             if travel {
                                 // (One creating a timeline comes again among those actions.)
