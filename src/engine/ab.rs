@@ -42,8 +42,6 @@ const ROOT_CAP: usize = 1000;
 const BATCH: usize = 12;
 const QDEPTH: i32 = 3;
 const QCAP: usize = 4;
-/// Times the action cap of a node whose best so far is mated is doubled.
-const MATED_CAP_RAISES: u8 = 3;
 const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
@@ -1768,7 +1766,7 @@ impl AlphaBeta {
         // When every action searched loses to a mate, the cap is raised once by its own size:
         // a mated score made of the actions the cap let in claims mates the side to move
         // escapes (see `mated_cap`).
-        let mut cap_raised = 0u8;
+        let mut cap_raised = false;
 
         // Remembered actions first, before paying for the action space: the TT action,
         // then the killers.
@@ -2126,11 +2124,11 @@ impl AlphaBeta {
     /// are otherwise often false: the escape lies past the cap (the LMP counts are tuned for
     /// nodes that are not lost).
     #[inline]
-    fn mated_cap(cap: &mut usize, raised: &mut u8, best: i32) -> bool {
-        if *raised >= MATED_CAP_RAISES || best >= -(MATE - 1000) {
+    fn mated_cap(cap: &mut usize, raised: &mut bool, best: i32) -> bool {
+        if *raised || best >= -(MATE - 1000) {
             return false;
         }
-        *raised += 1;
+        *raised = true;
         *cap *= 2;
         true
     }
