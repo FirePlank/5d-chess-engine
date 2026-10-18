@@ -224,9 +224,27 @@ fn main() {
                     let (Some(pos), Some(moves)) = (json_field(line, "position"), json_field(line, "moves")) else { continue };
                     let acts: Vec<&str> = moves.split(" submit").map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
                     let Ok(mut s) = position_from_uci(pos) else { continue };
+                    // TLC_MAX_EVAL: only positions the next mover scored within this (reported
+                    // scale, from the game's "evals"; mates and unknown scores are left out).
+                    let max_eval: Option<i64> = std::env::var("TLC_MAX_EVAL").ok().and_then(|v| v.parse().ok());
+                    let book_len: usize = json_field(line, "book").and_then(|b| b.parse().ok()).unwrap_or(0);
+                    let evals: Vec<Option<i64>> = line
+                        .find("\"evals\":")
+                        .and_then(|i| line[i..].find('[').map(|j| i + j + 1))
+                        .map(|i| {
+                            let rest = &line[i..];
+                            rest[..rest.find(']').unwrap_or(0)].split(',').map(|x| x.trim().parse().ok()).collect()
+                        })
+                        .unwrap_or_default();
                     for (i, a) in acts.iter().enumerate() {
                         if apply_uci_moves(&mut s, &format!("{} submit", a)).is_err() {
                             break;
+                        }
+                        if let Some(m) = max_eval {
+                            let e = (i + 1).checked_sub(book_len).and_then(|k| evals.get(k).copied().flatten());
+                            if !e.is_some_and(|e| e.abs() <= m) {
+                                continue;
+                            }
                         }
                         let b = bucket(s.active_timelines());
                         // TLC_MIN_LEFT: only positions with at least this many actions still to come.
