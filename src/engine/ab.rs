@@ -1572,24 +1572,39 @@ impl AlphaBeta {
         }
         // Search the evasions.
         let mut nb = self.bufs.pop().unwrap_or_default();
-        let mut full_space: Option<SearchSpace> = None;
+        // The evasions in phases, searched one after another; once a
+        // phase has found an evasion the later ones are left out (the node is then not proven).
+        let mut phases: std::collections::VecDeque<(SearchSpace, u32)> = std::collections::VecDeque::new();
         let mut searched_acts: Vec<MoveSeq> = Vec::new();
         {
             let NodeBufs { info, evasions, order, evasion_scores, .. } = &mut *nb;
-            evasions.ss = info.rebuild(s, true);
+            let full = info.rebuild(s, true);
             evasions.forget();
             let many = info.first_branch_axis() >= FOCUS_MIN_BOARDS;
-            evasions.budget = if many { QEVASION_STEPS } else { u32::MAX };
             // The branch axes are only ordered once some hypercuboid needs their order.
             let fba = info.first_branch_axis();
             self.node_ordering(s, info, false, order, evasions.order.axes_mut(), evasion_scores, 0..fba, BranchOrder::Now);
             evasions.branch_pending = fba < info.dimension();
-            // The focused evasions first; the whole space once they run out.
+            let rest = if many { QEVASION_REST_STEPS } else { u32::MAX };
+            // The focused evasions first (three boards or more)...
             if let (true, HcOrdering::Precomputed(o)) = (many, &evasions.order) {
-                if let Some(f) = Self::focused_evasions(s, info, &evasions.ss, o) {
-                    full_space = Some(std::mem::replace(&mut evasions.ss, f));
+                if let Some(f) = Self::focused_evasions(s, info, &full, o) {
+                    phases.push_back((f, QEVASION_STEPS));
                 }
             }
+            // ...then those creating no timeline (the last hypercuboid of the space), then
+            // those creating timelines: costly to build and order, and rarely the only escape.
+            let mut hcs = full.hcs;
+            let last = hcs.pop();
+            if let Some(h) = last {
+                phases.push_back((SearchSpace::from_vec(vec![h]), rest));
+            }
+            if !hcs.is_empty() {
+                phases.push_back((SearchSpace::from_vec(hcs), rest));
+            }
+            let (first, budget) = phases.pop_front().unwrap_or_default();
+            evasions.ss = first;
+            evasions.budget = budget;
         }
         let mut out_of_budget = false;
         let aborted = 'search: {
@@ -1613,15 +1628,20 @@ impl AlphaBeta {
                         self.aborted = true;
                         break 'search true;
                     }
-                    if let Some(f) = full_space.take() {
-                        // The focused evasions ran out: on to the whole space.
-                        evasions.ss = f;
-                        evasions.budget = QEVASION_REST_STEPS;
-                        continue;
-                    }
                     if evasions.budget == 0 {
                         // Out of budget, not out of evasions.
                         out_of_budget = true;
+                    }
+                    if any {
+                        // The later phases are left out.
+                        break;
+                    }
+                    if let Some((ss, budget)) = phases.pop_front() {
+                        evasions.ss = ss;
+                        evasions.budget = budget;
+                        continue;
+                    }
+                    if out_of_budget {
                         break;
                     }
                     // Every evasion was searched.
@@ -1636,7 +1656,7 @@ impl AlphaBeta {
                 }
                 any = true;
                 tried += 1;
-                if full_space.is_some() {
+                if !phases.is_empty() {
                     searched_acts.push(act.clone());
                 }
                 let mark = Self::make(s, &act);
@@ -1891,6 +1911,7 @@ impl AlphaBeta {
             let rest = if node_in_check && info.first_branch_axis() >= FOCUS_MIN_BOARDS { Some(first.clone()) } else { None };
             self.start_actions(s, info, cursor, order, first, true);
             cursor.limit_classes(travels as i32, TRAVEL_CAPTURE_STEPS);
+            cursor.hold_branching(node_in_check);
             if let Some(rest) = rest {
                 if let Some(f) = Self::focused_evasions(s, info, &rest, cursor.ordering_mut().0) {
                     cursor.restart(info, f);
@@ -1928,10 +1949,31 @@ impl AlphaBeta {
                         }
                         Ok(None) => {
                             if let Some(rest) = focus_rest.take() {
+                                // The rest of the space only when the focused evasions all lose
+                                // to a mate (or there were none): its evasions are mostly the
+                                // same ones with other moves on the uninvolved boards.
+                                if searched > 0 && best > -(MATE - 1000) {
+                                    skipped = true;
+                                    exhausted = true;
+                                    break;
+                                }
                                 nb.cursor.restart(&nb.info, rest);
                                 nb.cursor.limit_classes(travels as i32, TRAVEL_CAPTURE_STEPS);
                                 nb.cursor.set_budget(EVASION_REST_STEPS);
+                                nb.cursor.hold_branching(true);
                                 continue;
+                            }
+                            if nb.cursor.held() {
+                                // In check, the evasions creating a timeline only when every
+                                // other one loses to a mate (or there is none): they cost much
+                                // to find and rarely beat one creating none.
+                                if searched == 0 || best < -(MATE - 1000) {
+                                    nb.cursor.hold_branching(false);
+                                    continue;
+                                }
+                                skipped = true;
+                                exhausted = true;
+                                break;
                             }
                             if nb.cursor.out_of_budget() {
                                 skipped = true;
