@@ -1253,6 +1253,8 @@ impl AlphaBeta {
     /// The first `cap` actions of `s` in the order an interior node would try them (diagnostics).
     pub fn node_order(&self, s: &State, cap: usize) -> Vec<MoveSeq> {
         let (info, ss) = HcInfo::build_hc(s);
+        // ORDER_NO_FUTURE: without moves on optional boards, as interior nodes enumerate.
+        let ss = if std::env::var_os("ORDER_NO_FUTURE").is_some() { Self::without_future(s, &info, &ss) } else { ss };
         let mut agen = BestFirstCursor::default();
         self.start_actions(s, &info, &mut agen, &mut OrderScratch::default(), ss, false);
         let mut out = Vec::new();
