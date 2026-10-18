@@ -1868,11 +1868,6 @@ impl AlphaBeta {
             }
             pre_tried.push(act);
         }
-        // In check with three boards or more to play, twice the actions: nodes there are mostly
-        // in check, and their evasions decide.
-        if nb.info.first_branch_axis() >= 3 && self.in_check(s) {
-            cap *= 2;
-        }
         let mut first = Self::without_future(s, &nb.info, &ss);
         // Capturing travels first: the first classes of the cursor (see `travel_class`).
         let travels = self.travel_captures(s, &nb.info, &ss, &mut first);
