@@ -405,6 +405,7 @@ pub struct AlphaBeta {
     /// `OwnBook`: play a book action (`book::Book::theory`) without searching when the root
     /// is a book position with one.
     own_book: bool,
+    skill_level: u8,
     /// `SacBot` (testing): play an f-sac signature travel (`sac::signature_travels`) whenever
     /// one is legal, without a search: the opponent of the sac gauntlet.
     sac_bot: bool,
@@ -729,6 +730,7 @@ impl AlphaBeta {
             threads: 1,
             multipv: 1,
             own_book: false,
+            skill_level: 8,
             sac_bot: false,
             helpers: Vec::new(),
             helper_nodes: 0,
@@ -2411,6 +2413,15 @@ impl AlphaBeta {
             return true;
         }
         match (key, value.as_f64()) {
+            ("Skill Level", Some(n)) if n.is_finite() => {
+                let level = n.clamp(1.0, 8.0) as u8;
+                if level != self.skill_level {
+                    self.new_game();
+                    self.resume = None;
+                }
+                self.skill_level = level;
+                true
+            }
             ("Hash", Some(mb)) => {
                 self.set_tt(|| TtTable::new((mb as usize).max(1)));
                 true
@@ -2471,6 +2482,37 @@ impl AlphaBeta {
     /// is done; the action played is chosen by the vote of the threads that report back within
     /// a few milliseconds (never waiting longer on a helper).
     pub fn find_best_move(&mut self, root: &State, limits: &Limits, stop: &AtomicBool, info: &mut dyn FnMut(String)) -> Option<Action> {
+        if self.skill_level == 8 {
+            return self.find_best_move_full(root, limits, stop, info);
+        }
+        let level = usize::from(self.skill_level - 1);
+        let depths = [1, 2, 3, 4, 6, 8, 12];
+        let nodes = [1_000, 3_000, 9_000, 27_000, 81_000, 243_000, 729_000];
+        let mut limited = limits.clone();
+        limited.depth = Some(limited.depth.unwrap_or(depths[level]).min(depths[level]));
+        limited.nodes = Some(limited.nodes.unwrap_or(nodes[level]).min(nodes[level]));
+        limited.resume = false;
+        let saved = (self.multipv, self.threads, self.own_book);
+        self.multipv = 32;
+        self.threads = 1;
+        self.own_book = false;
+        self.resume = None;
+        let fallback = self.find_best_move_full(root, &limited, stop, info);
+        let lines = self.resume.take().map(|r| r.lines).unwrap_or_default();
+        (self.multipv, self.threads, self.own_book) = saved;
+        let scores: Vec<i32> = lines.iter().map(|l| l.0).collect();
+        let choice = super::skill::pick(&scores, self.skill_level, super::book::random_seed());
+        if let Some(k) = choice {
+            if let Some(action) = lines[k].1.first() {
+                self.last_score = lines[k].0;
+                self.last_proven = false;
+                return Some(Action::from_moveseq(action, root));
+            }
+        }
+        fallback
+    }
+
+    fn find_best_move_full(&mut self, root: &State, limits: &Limits, stop: &AtomicBool, info: &mut dyn FnMut(String)) -> Option<Action> {
         if self.own_book {
             let book = super::book::Book::theory();
             if let Some(m) = book.choose(root, super::book::random_seed()) {
@@ -2609,6 +2651,28 @@ impl AlphaBeta {
             }
         }
         roots.sort_by(|a, b| b.0.cmp(&a.0));
+        // A beginner sometimes overlooks the reply instead of always seeing tactics
+        // through quiescence, even at depth one.
+        let seed = if self.skill_level == 1 { super::book::random_seed() } else { 0 };
+        if self.skill_level == 1 && seed % 3 == 0 {
+            self.terms.sac_root = super::sac::root_travels(root);
+            let mut work = root.clone();
+            work.enable_undo();
+            let mut scores = Vec::new();
+            for (_, act) in roots.iter().take(32) {
+                if !scores.is_empty() && (stop.load(Ordering::Relaxed) || deadline.is_some_and(|d| Instant::now() >= d)) {
+                    break;
+                }
+                let mark = Self::make(&mut work, act);
+                scores.push(-self.static_eval(&work));
+                work.unmake(mark);
+            }
+            let k = super::skill::pick(&scores, 1, seed ^ 0x243f6a8885a308d3).unwrap_or(0);
+            self.last_score = scores[k];
+            self.last_proven = false;
+            info(self.info_text(root, 0, 0, scores[k], std::slice::from_ref(&roots[k].1), self.nodes, start.elapsed().as_secs_f64(), roots.len()));
+            return Some(Action::from_moveseq(&roots[k].1, root));
+        }
         // The probe's mate is a root action, searched first: every depth's line (and a
         // resumed search) has it.
         if let Some(m) = &future_mate {
@@ -3185,6 +3249,22 @@ mod tests {
             _ => rest.find(' ').unwrap_or(rest.len()),
         };
         &rest[..end]
+    }
+
+    #[test]
+    fn skill_levels_return_legal_actions_and_restore_options() {
+        let s = crate::core::variants::startpos();
+        let stop = AtomicBool::new(false);
+        let mut e = AlphaBeta::new();
+        e.set_option("Hash", &OptionValue::Int(1));
+        for level in 1..=8 {
+            assert!(e.set_option("Skill Level", &OptionValue::Int(level)));
+            let a = e.find_best_move(&s, &Limits { depth: Some(1), movetime: Some(100), ..Default::default() }, &stop, &mut |_| {}).unwrap();
+            let mut state = s.clone();
+            let lan = crate::web::tree::action_lan(&s, &a);
+            assert!(crate::core::variants::apply_uci_moves(&mut state, &lan).is_ok(), "level {level}");
+            assert_eq!((e.multipv, e.threads, e.own_book), (1, 1, false));
+        }
     }
 
     /// MultiPV 3 reports three lines a depth (`multipv 1..3`), of distinct root actions,
