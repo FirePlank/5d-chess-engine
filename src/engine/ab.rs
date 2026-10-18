@@ -1951,14 +1951,6 @@ impl AlphaBeta {
                     let quiet = sc < 10_000;
                     let mut r = 0;
                     let mut child_check = None;
-                    // A check at the horizon is extended: the quiescence search only resolves
-                    // captures, so a quiet mating move one ply past the depth went unseen.
-                    let mut ext = 0;
-                    if depth == 1 {
-                        let ic = self.in_check(s);
-                        child_check = Some(ic);
-                        ext = ic as i32;
-                    }
                     // Checking actions are not reduced: mating lines run through them.
                     if depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet {
                         let ic = self.in_check(s);
@@ -1970,16 +1962,16 @@ impl AlphaBeta {
                     let mut v;
                     self.known_check = child_check;
                     if searched == 0 {
-                        v = -self.negamax(s, depth - 1 + ext, ply + 1, -beta, -alpha, pv);
+                        v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, pv);
                     } else {
                         v = -self.negamax(s, depth - 1 - r, ply + 1, -alpha - 1, -alpha, false);
                         if !self.aborted && v > alpha && r > 0 {
                             self.known_check = child_check;
-                            v = -self.negamax(s, depth - 1 + ext, ply + 1, -alpha - 1, -alpha, false);
+                            v = -self.negamax(s, depth - 1, ply + 1, -alpha - 1, -alpha, false);
                         }
                         if !self.aborted && v > alpha && v < beta && pv {
                             self.known_check = child_check;
-                            v = -self.negamax(s, depth - 1 + ext, ply + 1, -beta, -alpha, true);
+                            v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, true);
                         }
                     }
                     s.unmake(mark);
