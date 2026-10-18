@@ -352,6 +352,26 @@ fn main() {
             args.get(3).and_then(|s| s.parse().ok()).unwrap_or(15000),
             &mut out,
         ),
+        "matex" => {
+            // matex <n> : exact (no pruning) mate in n for the side to move, per G line on stdin.
+            let n: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(2);
+            for line in stdin.lock().lines() {
+                let line = line.unwrap();
+                if !line.starts_with("G ") {
+                    continue;
+                }
+                let s = parse_g_line(&line).unwrap();
+                let t0 = Instant::now();
+                let r = exact_mate(&s, n);
+                let txt = r.as_ref().map(|a| {
+                    let act = kairos::core::action::Action::from_moveseq(a, &s);
+                    let mut os = s.clone();
+                    act.moves().iter().map(|em| { let t = em.lan(&os); if let Some(m) = os.normalize_promotion(*em) { os.apply_ext::<true>(m); } t }).collect::<Vec<_>>().join(" ")
+                });
+                writeln!(out, "mate in {}: {:?} ({:.1}s)", n, txt, t0.elapsed().as_secs_f64()).unwrap();
+                out.flush().unwrap();
+            }
+        }
         "mate2" => {
             // Exact (full-width) mate-in-1/2 check: every white first action that forces mate
             // next turn, with each black reply and the white action that mates it.
@@ -1486,6 +1506,36 @@ fn apply_seq(s: &State, a: &[kairos::core::action::FullMove]) -> Option<State> {
 fn is_mated(s: &State) -> bool {
     let (w, ss) = HcInfo::build_hc(s);
     w.search(s, ss).next().is_none() && s.has_phantom_check()
+}
+
+/// Exact (full-width, no pruning) test whether the side to move forces checkmate within `n` of
+/// its own actions; returns the first mating action found.
+fn exact_mate(s: &State, n: u32) -> Option<MoveSeq> {
+    let (w, ss) = HcInfo::build_hc(s);
+    for a in w.search(s, ss) {
+        let Some(q) = apply_seq(s, &a) else { continue };
+        if is_mated(&q) {
+            return Some(a);
+        }
+        if n <= 1 {
+            continue;
+        }
+        let (wq, ssq) = HcInfo::build_hc(&q);
+        let mut any = false;
+        let mut all = true;
+        for r in wq.search(&q, ssq) {
+            any = true;
+            let Some(q2) = apply_seq(&q, &r) else { all = false; break };
+            if exact_mate(&q2, n - 1).is_none() {
+                all = false;
+                break;
+            }
+        }
+        if any && all {
+            return Some(a);
+        }
+    }
+    None
 }
 
 /// Does the side to move have a mating action among its first `cap` actions?
