@@ -152,6 +152,88 @@ fn main() {
                 writeln!(out, "pos {} dim {} actions {} in {:.1}ms", k, w.dimension(), n, t.elapsed().as_secs_f64() * 1e3).unwrap();
             }
         }
+        "gameprobe" => {
+            // gameprobe <file.g> [ms] : per position, the timelines (all / active), the search's
+            // last report (depth, score, nodes, nps, roots) and the action, with `ms` per move.
+            use kairos::engine::ab::AlphaBeta;
+            use kairos::engine::Limits;
+            let path = args.get(2).expect("gameprobe <file.g> [ms]");
+            let ms: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1000);
+            let text = std::fs::read_to_string(path).expect("positions");
+            let stop = std::sync::atomic::AtomicBool::new(false);
+            for (k, line) in text.lines().filter(|l| l.starts_with("G ")).enumerate() {
+                let s = parse_g_line(line).unwrap();
+                let (l0, l1) = s.get_lines_range();
+                let mut e = AlphaBeta::new();
+                let mut last = String::new();
+                let t = Instant::now();
+                let best = e.find_best_move(&s, &Limits { movetime: Some(ms), ..Default::default() }, &stop, &mut |m| last = m);
+                let (w, _) = HcInfo::build_hc(&s);
+                let (mut phys, mut arr, mut dep) = (0, 0, 0);
+                let u = w.get_universe();
+                for n in 0..w.first_branch_axis() {
+                    for i in u[n].iter() {
+                        match w.entry(n, i) {
+                            kairos::core::hypercuboid::Entry::Physical { .. } => phys += 1,
+                            kairos::core::hypercuboid::Entry::Arriving { .. } => arr += 1,
+                            kairos::core::hypercuboid::Entry::Departing { .. } => dep += 1,
+                            _ => {}
+                        }
+                    }
+                }
+                let br = if w.first_branch_axis() < w.dimension() { u[w.first_branch_axis()].iter().count() } else { 0 };
+                writeln!(out, "pos {} {} lines {} active {} dim {} phys {} arr {} dep {} branch {} | {:.2}s | {} | {}", k, if s.player() { "b" } else { "w" },
+                    l1 - l0 + 1, s.active_timelines(), w.dimension(), phys, arr, dep, br, t.elapsed().as_secs_f64(),
+                    last.split(" pv ").next().unwrap_or(""), best.map(|a| a.to_string()).unwrap_or_default()).unwrap();
+                out.flush().unwrap();
+            }
+            write!(out, "{}", kairos::misc::prof::report()).unwrap();
+        }
+        "nodeorder" => {
+            // nodeorder <file.g> <k> [n] : the first n actions an interior node of the k-th
+            // position would search (ORDER_NO_FUTURE=1: without optional boards, as interior nodes).
+            use kairos::engine::ab::AlphaBeta;
+            let text = std::fs::read_to_string(args.get(2).expect("nodeorder <file.g> <k> [n]")).expect("positions");
+            let k: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let n: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(30);
+            let line = text.lines().filter(|l| l.starts_with("G ")).nth(k).expect("position");
+            let s = parse_g_line(line).unwrap();
+            for (i, a) in AlphaBeta::new().node_order(&s, n).iter().enumerate() {
+                writeln!(out, "{:>3} {}", i, a.iter().map(|m| m.to_string()).collect::<Vec<_>>().join(" ")).unwrap();
+            }
+        }
+        "tlcorpus" => {
+            // tlcorpus <per_bucket> <games.jsonl>... : G lines of positions from the games, up to
+            // per_bucket for each count of active timelines (1, 2, 3, 4-5, 6-7, 8-10, 11+), taking
+            // every 7th position of each game. Prints "G ..." with the bucket as a comment before.
+            use kairos::core::variants::{apply_uci_moves, position_from_uci};
+            let per: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(20);
+            let bucket = |n: usize| match n { 0 | 1 => 0, 2 => 1, 3 => 2, 4 | 5 => 3, 6 | 7 => 4, 8..=10 => 5, _ => 6 };
+            let mut counts = [0usize; 7];
+            'files: for path in &args[3..] {
+                let text = std::fs::read_to_string(path).expect("games");
+                for line in text.lines() {
+                    if counts.iter().all(|&c| c >= per) {
+                        break 'files;
+                    }
+                    let (Some(pos), Some(moves)) = (json_field(line, "position"), json_field(line, "moves")) else { continue };
+                    let acts: Vec<&str> = moves.split(" submit").map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                    let Ok(mut s) = position_from_uci(pos) else { continue };
+                    for (i, a) in acts.iter().enumerate() {
+                        if apply_uci_moves(&mut s, &format!("{} submit", a)).is_err() {
+                            break;
+                        }
+                        let b = bucket(s.active_timelines());
+                        if (i + 1) % 7 == 0 && counts[b] < per && i + 1 < acts.len() {
+                            counts[b] += 1;
+                            writeln!(out, "# tl {}", s.active_timelines()).unwrap();
+                            writeln!(out, "G 1 {} moves {} submit", pos, acts[..=i].join(" submit ")).unwrap();
+                        }
+                    }
+                }
+            }
+            eprintln!("buckets {:?}", counts);
+        }
         "depthstat" => {
             use kairos::engine::ab::AlphaBeta;
             use kairos::engine::Limits;
