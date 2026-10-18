@@ -13,6 +13,7 @@ the side to move in check are left out (see `ktools netdata`); training records 
 favour games of the newest engines); files are memory-mapped and streamed to the device.
 """
 import argparse
+import os
 import struct
 
 import numpy as np
@@ -68,6 +69,8 @@ def main():
     ap.add_argument('--scale', type=float, default=400.0, help='net output to centipawns')
     ap.add_argument('--cap', type=float, default=3000.0)
     ap.add_argument('--seed', type=int, default=1)
+    ap.add_argument('--peras-w', type=float, default=0.0, help='weight of the Peras label (<file>.peras.npy, scripts/chess/peras_align.py) in the target of single-timeline records')
+    ap.add_argument('--peras-k', type=float, default=0.0, help='Peras label from its cp through 1/(1+exp(-cp/K)) instead of its own WDL')
     ap.add_argument('--half', action='store_true', help='keep the inputs as float16 on the device')
     a = ap.parse_args()
     torch.manual_seed(a.seed)
@@ -78,6 +81,19 @@ def main():
     base, teach, wdl = col(NI), col(NI + 1), col(NI + 2)
     game = np.concatenate([np.array(d[:, NI + 3], dtype=np.float64) + k * 1e6 for k, (d, _) in enumerate(parts)])
     weight = np.concatenate([np.full(len(d), w, dtype=np.float32) for d, w in parts])
+    pe = None
+    if a.peras_w > 0:
+        cols = []
+        for spec, (d, _) in zip(a.files, parts):
+            side = spec.partition('@')[0][:-4] + '.peras.npy'
+            if os.path.exists(side):
+                v = np.load(side)
+                assert len(v) == len(d), side
+                v = v[:, 0] if a.peras_k <= 0 else 1 / (1 + np.exp(-v[:, 1].astype(np.float64) / a.peras_k))
+                cols.append(v.astype(np.float32))
+            else:
+                cols.append(np.full(len(d), np.nan, dtype=np.float32))
+        pe = np.concatenate(cols)
     n_all = len(base)
     k = a.k
     if k == 0:
@@ -88,6 +104,10 @@ def main():
     target = wdl.copy()
     tt = 1 / (1 + np.exp(-np.nan_to_num(teach) / k))
     target[has_t] = a.lam * tt[has_t] + (1 - a.lam) * wdl[has_t]
+    if pe is not None:
+        hp = ~np.isnan(pe)
+        target[hp] = (1 - a.peras_w) * target[hp] + a.peras_w * pe[hp]
+        print(f'Peras labels on {hp.mean():.1%} of the records, weight {a.peras_w}')
 
     games = np.unique(game)
     val_games = set(rng.choice(games, size=max(1, len(games) // 10), replace=False).tolist())
