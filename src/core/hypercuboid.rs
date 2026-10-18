@@ -1972,9 +1972,6 @@ pub struct BestFirstCursor {
     budget: u32,
     /// Problems found since the last `restart` of another context (see `ProblemMemo`).
     memo: ProblemMemo,
-    /// `next` stops before the first hypercuboid creating a timeline (see `hold_branching`).
-    hold_branching: bool,
-    held: bool,
 }
 
 /// The first class of a context with one playable board: the coordinates of its axis 0 still
@@ -2097,8 +2094,6 @@ impl Default for BestFirstCursor {
             limit_taken: 0,
             budget: u32::MAX,
             memo: ProblemMemo::default(),
-            hold_branching: false,
-            held: false,
         }
     }
 }
@@ -2127,19 +2122,6 @@ impl BestFirstCursor {
         self.budget == 0
     }
 
-    /// While set, `next` finds no action once only actions creating a timeline are left (the
-    /// classes come in order: those creating none first), and `held` tells that apart from the
-    /// end. A `restart` clears it.
-    pub fn hold_branching(&mut self, hold: bool) {
-        self.hold_branching = hold;
-        self.held = false;
-    }
-
-    /// Whether the last `next` stopped at the actions creating a timeline (`hold_branching`).
-    pub fn held(&self) -> bool {
-        self.held
-    }
-
     /// Forget the problems found so far (see `ProblemMemo`): call before enumerating another
     /// context. A `restart` on the same context keeps them.
     pub fn forget(&mut self) {
@@ -2149,8 +2131,6 @@ impl BestFirstCursor {
     /// Enumerate `ss` (of the context `info`) from the start under the current ordering.
     pub fn restart(&mut self, info: &HcInfo, ss: SearchSpace) {
         self.budget = u32::MAX;
-        self.hold_branching = false;
-        self.held = false;
         self.limit_below = 0;
         self.limit_class = -1;
         self.heap.heap.clear();
@@ -2233,11 +2213,6 @@ impl BestFirstCursor {
             }
             self.budget -= 1;
             let BfItem { key, mut hc } = self.heap.heap.pop().unwrap();
-            if self.hold_branching && (info.first_branch_axis()..hc.dimension()).any(|n| hc[n].has_other_than(0)) {
-                self.heap.heap.push(BfItem { key, hc });
-                self.held = true;
-                return Ok(None);
-            }
             if info.needs_branch(&hc) {
                 self.heap.heap.push(BfItem { key, hc });
                 return Err(NeedBranch);
