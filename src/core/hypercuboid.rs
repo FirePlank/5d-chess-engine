@@ -1809,7 +1809,7 @@ struct ProblemMemo {
 const PROBLEM_MEMO: usize = 32;
 /// Contexts with fewer boards to play (existing axes) keep no memo: their problems are few and
 /// rarely found twice, so it would only cost time.
-const PROBLEM_MEMO_MIN_AXES: usize = 3;
+const PROBLEM_MEMO_MIN_AXES: usize = 2;
 
 /// Turns the problem memos off (diagnostics: `ktools legalcheck` compares the actions found
 /// with and without them).
