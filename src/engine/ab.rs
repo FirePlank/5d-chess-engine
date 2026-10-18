@@ -42,9 +42,6 @@ const ROOT_CAP: usize = 1000;
 const BATCH: usize = 12;
 const QDEPTH: i32 = 3;
 const QCAP: usize = 4;
-/// Singular extension: depth from which the TT action is tested, and the margin per depth.
-const SING_DEPTH: i32 = 8;
-const SING_MARGIN: i32 = 100;
 const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
@@ -387,9 +384,6 @@ pub struct AlphaBeta {
     /// The root is won or lost by enough (or by mate) that pruning which hides long mating
     /// lines is switched off (Stockfish's seekMate).
     seek_mate: bool,
-    /// Singular-extension search: the TT action it excludes and the key of its node.
-    excluded: Option<MoveSeq>,
-    excl_key: u64,
     /// Per-node buffers, reused down the recursion.
     bufs: Vec<Box<NodeBufs>>,
     /// Evaluation terms of recently seen boards.
@@ -725,8 +719,6 @@ impl AlphaBeta {
             stop_ptr: std::ptr::null(),
             proven: false,
             seek_mate: false,
-            excluded: None,
-            excl_key: 0,
             bufs: Vec::new(),
             terms: Box::default(),
             phys_static: std::cell::RefCell::new(Vec::new()),
@@ -794,9 +786,6 @@ impl AlphaBeta {
 
     #[inline]
     fn tt_store(&self, key: u64, depth: i32, bound: Bound, score: i32, proven: bool, action: &MoveSeq) {
-        if key == self.excl_key && self.excluded.is_some() {
-            return;
-        }
         self.tt.store(key, depth, bound, score, proven, action);
     }
 
@@ -1720,10 +1709,9 @@ impl AlphaBeta {
         let mut tt_action: Option<MoveSeq> = None;
         // Ok((score, proven)): a cutoff; Err(action): the remembered action, if any. (Read
         // under the slot's lock, so the score, its proof and the action are one entry's.)
-        let excl_node = self.excluded.is_some() && key == self.excl_key;
         let probe = self.tt.probe(key, |e| {
             let sc = mate_from_tt(e.score, ply);
-            if !pv && e.depth as i32 >= depth && !(excl_node) {
+            if !pv && e.depth as i32 >= depth {
                 let cut = match e.bound {
                     Bound::Exact => true,
                     Bound::Lower => sc >= beta,
@@ -1785,40 +1773,15 @@ impl AlphaBeta {
         // Remembered actions first, before paying for the action space: the TT action,
         // then the killers.
         let mut pre_tried: Vec<MoveSeq> = Vec::new();
-        let mut tt_ext = 0;
-        if depth >= SING_DEPTH && self.excluded.is_none() && ply > 0 {
-            if let Some(ta) = tt_action.clone() {
-                let info = self.tt.probe(key, |e| (mate_from_tt(e.score, ply), e.depth as i32, e.bound));
-                if let Some((sc, ed, bound)) = info {
-                    if ed >= depth - 3 && matches!(bound, Bound::Lower | Bound::Exact) && sc.abs() < MATE - 1000 {
-                        let sb = sc - SING_MARGIN * depth;
-                        self.excluded = Some(ta);
-                        self.excl_key = key;
-                        let v = self.negamax(s, (depth - 1) / 2, ply, sb - 1, sb, false);
-                        self.excluded = None;
-                        self.excl_key = 0;
-                        if self.aborted {
-                            return 0;
-                        }
-                        if v < sb {
-                            tt_ext = 1;
-                        }
-                    }
-                }
-            }
-        }
-        let mut remembered: Vec<MoveSeq> = tt_action.iter().filter(|a| self.excluded.as_ref() != Some(*a)).cloned().collect();
-        if let Some(x) = &self.excluded {
-            pre_tried.push(x.clone());
-        }
+        let mut remembered: Vec<MoveSeq> = tt_action.iter().cloned().collect();
         if ply <= MAX_PLY {
             remembered.extend(self.killers[ply].iter().flatten().filter(|k| tt_action.as_ref() != Some(*k)).cloned());
         }
         for (k, act) in remembered.into_iter().enumerate() {
             let Some(mark) = Self::make_checked(s, &act) else { continue };
             // The TT action keeps the node's PV status; killers after it are null-window.
-            let v = if k == 0 && tt_action.is_some() && self.excluded.as_ref() != tt_action.as_ref() {
-                let v = -self.negamax(s, depth - 1 + tt_ext, ply + 1, -beta, -alpha, pv);
+            let v = if k == 0 && tt_action.is_some() {
+                let v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, pv);
                 s.unmake(mark);
                 v
             } else {
