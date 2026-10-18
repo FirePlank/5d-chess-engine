@@ -1,0 +1,13 @@
+{
+  "name": "evasion_phases3",
+  "old": "2852823",
+  "games": 9000,
+  "shards": 40,
+  "tc": "tc 10+0.1",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self",
+  "book": "data/books/timelines4.g"
+}
