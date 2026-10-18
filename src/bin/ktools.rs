@@ -234,6 +234,40 @@ fn main() {
             }
             eprintln!("buckets {:?}", counts);
         }
+        "chesspos" => {
+            // chesspos <max> <games.jsonl>... : the single-timeline positions of the games and the
+            // move played there, as "<board fen>|<side>|<move>|<file>:<game>:<action>" (the board
+            // is the present one; actions with a travel or another board are left out).
+            use kairos::core::variants::{apply_uci_moves, position_from_uci};
+            let max: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10000);
+            let mut n = 0;
+            'files: for path in &args[3..] {
+                let text = std::fs::read_to_string(path).expect("games");
+                for (g, line) in text.lines().enumerate() {
+                    let (Some(pos), Some(moves)) = (json_field(line, "position"), json_field(line, "moves")) else { continue };
+                    let book: usize = json_field(line, "book").and_then(|b| b.parse().ok()).unwrap_or(0);
+                    let acts: Vec<&str> = moves.split(" submit").map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                    let Ok(mut s) = position_from_uci(pos) else { continue };
+                    for (i, a) in acts.iter().enumerate() {
+                        let (lo, hi) = s.get_lines_range();
+                        if lo == hi && i >= book && !a.contains(' ') && a.matches('(').count() == 1 {
+                            let (t, c) = s.get_timeline_end(lo);
+                            if let Some((_, _, _, fen)) = s.multiverse().get_boards(true).into_iter().find(|b| b.0 == lo && b.1 == t && b.2 == c) {
+                                let mv = &a[a.find(')').unwrap() + 1..];
+                                writeln!(out, "{}|{}|{}|{}:{}:{}", fen, if c { "b" } else { "w" }, mv, path, g, i).unwrap();
+                                n += 1;
+                                if n >= max {
+                                    break 'files;
+                                }
+                            }
+                        }
+                        if apply_uci_moves(&mut s, &format!("{} submit", a)).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         "depthstat" => {
             use kairos::engine::ab::AlphaBeta;
             use kairos::engine::Limits;
