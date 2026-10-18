@@ -752,12 +752,18 @@ impl AlphaBeta {
         let sd = hce::sides_with(s, &mut *self.terms);
         let mut f = hce::features_from(&sd, s, hce::needs_checks(&self.hce));
         let sac = hce::split_sac(&mut f);
-        let base = hce::score(&f, &self.hce, s.get_present().1);
+        let black = s.get_present().1;
+        // The net sees the score damped by the number of timelines (calibrated), and its
+        // correction is added to the undamped one: the search compares scores of positions with
+        // different numbers of timelines (a branch changes the damping), and its margins (RFP,
+        // aspiration windows) are in undamped units.
+        let base = hce::score(&f, &self.hce, black);
+        let raw = hce::score_g(&f, &self.hce, black, 1.0);
         let v = match super::evalnet::embedded() {
-            Some(net) => base + net.residual(&super::evalnet::inputs_from(&sd, s, base)),
-            None => base,
+            Some(net) => raw + net.residual(&super::evalnet::inputs_from(&sd, s, base)),
+            None => raw,
         };
-        let v = v + hce::score(&sac, &self.hce, s.get_present().1);
+        let v = v + hce::score_g(&sac, &self.hce, black, hce::damp(f[hce::fi::ACTIVE_LINES]));
         // Terms add up over every board, so with many timelines the sum can reach the mate
         // range (where it would be taken for a mate score).
         let v = v.clamp(-EVAL_MAX, EVAL_MAX);
