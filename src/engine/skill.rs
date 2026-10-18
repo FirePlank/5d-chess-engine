@@ -2,7 +2,7 @@
 //! The ladder targets even rating steps; actual Elo needs matches at a fixed time control.
 
 pub(super) fn pick(scores: &[i32], level: u8, mut seed: u64) -> Option<usize> {
-    let temperature = [0.28, 0.18, 0.115, 0.073, 0.046, 0.029, 0.018][usize::from(level.clamp(1, 7) - 1)];
+    let temperature = [0.80, 0.18, 0.115, 0.073, 0.046, 0.029, 0.018][usize::from(level.clamp(1, 7) - 1)];
     let mut best = None;
     let mut value = f64::NEG_INFINITY;
     for (k, &score) in scores.iter().enumerate() {
