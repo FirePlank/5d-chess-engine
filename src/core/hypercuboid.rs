@@ -98,6 +98,8 @@ pub struct HcInfo {
     /// Every timeline ends on the mover's turn, so after a point only its moved timelines
     /// can give check.
     all_lines_mine: bool,
+    /// Per existing axis: (board key, generation) of its physical entries (see `phys_tag`).
+    phys_tags: Vec<(u64, u64)>,
     /// Per existing axis (filled on demand, cleared by `rebuild`): every superphysical check
     /// from that timeline's next board, in scan order, when it is the only moved timeline
     /// and still holds all of the opponent's pieces.
@@ -325,7 +327,12 @@ struct PhysSlot {
     board: Board,
     prev: Option<Board>,
     entries: Vec<Entry>,
+    /// Unique to this content (see `HcInfo::phys_tag`).
+    generation: u64,
 }
+
+/// Generations of `PhysSlot` contents, unique across threads.
+static PHYS_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 #[derive(Default)]
 struct PhysCache {
@@ -598,6 +605,21 @@ impl HcInfo {
     pub fn axis_len(&self, n: usize) -> usize {
         if n < self.new_axis { self.axis_coords[n].len() } else { self.branch_moves.len() + 1 }
     }
+    /// (board key, generation) of existing axis `n`'s physical entries (coordinates 1 up to
+    /// `first_jump(n)`): equal tags mean the same entries, in the same order, so whatever is
+    /// worked out from them alone can be kept by tag.
+    #[inline]
+    pub fn phys_tag(&self, n: usize) -> (u64, u64) {
+        self.phys_tags[n]
+    }
+
+    /// Coordinates of existing axis `n` before its first departure or arrival (the null one and
+    /// the physical moves).
+    #[inline]
+    pub fn first_jump(&self, n: usize) -> usize {
+        self.scratch.first_jump[n]
+    }
+
     #[inline(always)]
     pub fn first_branch_axis(&self) -> usize {
         self.new_axis
@@ -703,6 +725,7 @@ impl HcInfo {
             all_lines_mine,
             lone_checks,
             env_checks,
+            phys_tags,
         } = self;
         let BuildScratch {
             playable,
@@ -783,6 +806,7 @@ impl HcInfo {
             cache.slots.clear();
             cache.slots.resize_with(PHYS_SLOTS, || None);
         }
+        phys_tags.clear();
         for (axis, &l) in playable.iter().enumerate() {
             departures[axis].clear();
             let t = s.get_timeline_end(l).0;
@@ -793,17 +817,21 @@ impl HcInfo {
             locs.clear();
             locs.push(Entry::Null);
             let ph = crate::misc::prof::scope(18);
-            let slot = &mut cache.slots[s.multiverse().key_of(l, t, player) as usize % PHYS_SLOTS];
+            let key = s.multiverse().key_of(l, t, player);
+            let slot = &mut cache.slots[key as usize % PHYS_SLOTS];
             match slot {
                 Some(e) if e.lt == (l, t) && e.player == player && e.board == *source && e.prev == prev => {
                     locs.extend_from_slice(&e.entries);
+                    phys_tags.push((key, e.generation));
                 }
                 _ => {
                     gen_physical_entries(s, source, p0, player, memo.get(l, t), size_y, locs);
-                    let e = slot.get_or_insert_with(|| PhysSlot { lt: (l, t), player, board: *source, prev, entries: Vec::new() });
-                    (e.lt, e.player, e.board, e.prev) = ((l, t), player, *source, prev);
+                    let generation = PHYS_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let e = slot.get_or_insert_with(|| PhysSlot { lt: (l, t), player, board: *source, prev, entries: Vec::new(), generation });
+                    (e.lt, e.player, e.board, e.prev, e.generation) = ((l, t), player, *source, prev, generation);
                     e.entries.clear();
                     e.entries.extend_from_slice(&locs[1..]);
+                    phys_tags.push((key, generation));
                 }
             }
             drop(ph);

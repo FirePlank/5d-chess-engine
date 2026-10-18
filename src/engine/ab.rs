@@ -374,6 +374,9 @@ impl KnownCache {
 }
 
 pub struct AlphaBeta {
+    /// Static ordering scores of boards' physical moves, by `HcInfo::phys_tag` (see
+    /// `PhysStatic`).
+    phys_static: std::cell::RefCell<Vec<PhysStaticSlot>>,
     hce: hce::Weights,
     /// Exchange values for the per-board capture search at quiescent leaves.
     local_vals: super::local::Values,
@@ -586,6 +589,30 @@ impl<'a> CheckDetector<'a> {
         scratch.reach = self.reach;
     }
 
+    /// `gives_check` of a physical move past its own board: the moved piece's superphysical
+    /// reach from its line's next board.
+    fn reach_check(&mut self, axis: usize, coord: Index) -> bool {
+        let info: &'a HcInfo = self.info;
+        let Some(mb) = info.get_move_boards(axis, coord) else { return false };
+        let s: &'a State = self.s;
+        if self.checks.is_none() {
+            self.checks = Some(CheckPosition::for_move_candidates_in(s, std::mem::take(&mut self.buf)));
+        }
+        let checks = self.checks.as_mut().unwrap();
+        let player = s.get_present().1;
+        let mv = mb.mv;
+        let at = next_turn((mv.to.t(), player));
+        let l = mv.to.l();
+        let i = match self.reach.iter().position(|r| r.0 == l) {
+            Some(i) => i,
+            None => {
+                self.reach.push((l, checks.sp_reach(l, 2 * at.0 + at.1 as i32 + 1)));
+                self.reach.len() - 1
+            }
+        };
+        self.reach[i].1.attacks(mb.result, mv.to.xy())
+    }
+
     fn gives_check(&mut self, axis: usize, coord: Index) -> bool {
         let info: &'a HcInfo = self.info;
         let Some(mb) = info.get_move_boards(axis, coord) else { return false };
@@ -624,6 +651,28 @@ impl<'a> CheckDetector<'a> {
         checks.gives_check_masked(CheckKind::Superphysical, arrival, player, departure, mask)
     }
 }
+
+/// The part of a physical move's ordering score that depends on its board alone (see
+/// `AlphaBeta::coord_score`): kept per board, so that a board met again needs only its moves'
+/// history values and superphysical checks.
+#[derive(Clone, Copy)]
+struct PhysStatic {
+    /// Score without the history value and the check bonus.
+    base: i32,
+    history: u16,
+    capture: bool,
+    /// Gives check on its own board.
+    physical_check: bool,
+}
+
+#[derive(Default)]
+struct PhysStaticSlot {
+    tag: (u64, u64),
+    moves: Vec<PhysStatic>,
+}
+
+/// Slots of `AlphaBeta::phys_static`.
+const PHYS_STATIC_SLOTS: usize = 1024;
 
 /// Scratch of `node_ordering`.
 #[derive(Default)]
@@ -687,6 +736,7 @@ impl AlphaBeta {
             seek_mate: false,
             bufs: Vec::new(),
             terms: Box::default(),
+            phys_static: std::cell::RefCell::new(Vec::new()),
             known_check: None,
             known: KnownCache::new(),
             last_score: 0,
@@ -774,6 +824,23 @@ impl AlphaBeta {
 
     /// Ordering score of one HC coordinate.
     /// Ordering score of one HC coordinate; `history` overrides the history table's value.
+    /// The board-only part of a physical coordinate's `coord_score`.
+    fn phys_static(s: &State, info: &HcInfo, n: usize, i: Index) -> PhysStatic {
+        let Entry::Physical { m, b, mover, victim } = info.entry(n, i) else { unreachable!("physical coordinate") };
+        let (mover, victim) = (*mover, *victim);
+        let mut base = -10 * exchange_loss(b, m.to.xy(), s.get_present().1, piece_value(mover));
+        if victim != NO_PIECE {
+            base += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
+        }
+        if (mover == PAWN_W || mover == BRAWN_W) && m.to.y() == promotion_rank(s.get_board_size().1, s.get_present().1) {
+            base += 9000;
+        }
+        if mover == KING_W || mover == COMMON_KING_W {
+            base -= 200;
+        }
+        PhysStatic { base, history: history_index_of(mover, m) as u16, capture: victim != NO_PIECE, physical_check: has_physical_check(b, !s.get_present().1) }
+    }
+
     fn coord_score(&self, s: &State, info: &HcInfo, n: usize, i: Index, checks: &mut Option<CheckDetector>, history: Option<i32>) -> i32 {
         match info.entry(n, i) {
             Entry::Null => -5,
@@ -859,12 +926,45 @@ impl AlphaBeta {
                 continue;
             }
             sc.resize(u[n].max().map(|i| i as usize + 1).unwrap_or(0), 0);
+            // The physical moves' board-only parts, kept per board (see `PhysStatic`).
+            let mut cache = self.phys_static.borrow_mut();
+            let statics: Option<&[PhysStatic]> = if n < fba {
+                if cache.is_empty() {
+                    cache.resize_with(PHYS_STATIC_SLOTS, PhysStaticSlot::default);
+                }
+                let tag = info.phys_tag(n);
+                let fj = info.first_jump(n);
+                let slot = &mut cache[tag.0 as usize % PHYS_STATIC_SLOTS];
+                if slot.tag != tag || slot.moves.len() != fj.saturating_sub(1) {
+                    slot.tag = tag;
+                    slot.moves.clear();
+                    slot.moves.extend((1..fj).map(|i| Self::phys_static(s, info, n, i as Index)));
+                }
+                Some(&slot.moves)
+            } else {
+                None
+            };
             // Sort keys: score descending, then coordinate ascending.
             let v = &mut scratch.sort;
             v.clear();
             for i in u[n].iter() {
                 let recorded = if n == fba && branch == BranchOrder::Recorded { Some(scratch.branch_history[i as usize]) } else { None };
-                let score = self.coord_score(s, info, n, i, &mut detector, recorded);
+                let score = match statics {
+                    Some(st) if i >= 1 && (i as usize) <= st.len() => {
+                        let p = st[i as usize - 1];
+                        let mut sc = p.base;
+                        if !p.capture {
+                            sc += self.history[p.history as usize].clamp(-5000, 5000);
+                        }
+                        if let Some(d) = detector.as_mut() {
+                            if p.physical_check || d.reach_check(n, i) {
+                                sc += CHECK_BONUS;
+                            }
+                        }
+                        sc
+                    }
+                    _ => self.coord_score(s, info, n, i, &mut detector, recorded),
+                };
                 sc[i as usize] = score;
                 v.push(((!((score as u32) ^ 0x8000_0000) as u64) << 32) | i as u64);
             }
