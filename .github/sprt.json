@@ -1,0 +1,13 @@
+{
+  "name": "lmr_no_tt",
+  "old": "da3a86f",
+  "games": 11700,
+  "shards": 39,
+  "tc": "tc 10+0.1",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self",
+  "book": "data/books/mixed.g"
+}
