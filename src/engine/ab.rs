@@ -1751,29 +1751,13 @@ impl AlphaBeta {
         let depth = if tt_action.is_none() && depth >= IIR_DEPTH && !self.seek_mate { depth - 1 } else { depth };
 
         if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| self.in_check(s)) {
-            // The static eval, replaced by the table's score when that is a bound on the
-            // right side of it.
-            let stat = self.static_eval(s);
-            let eval = self
-                .tt
-                .probe(key, |e| {
-                    let sc = mate_from_tt(e.score, ply);
-                    match e.bound {
-                        Bound::Exact => Some(sc),
-                        Bound::Lower if sc > stat => Some(sc),
-                        Bound::Upper if sc < stat => Some(sc),
-                        _ => None,
-                    }
-                })
-                .flatten()
-                .filter(|sc| sc.abs() < MATE - 1000)
-                .unwrap_or(stat);
             if depth <= RFP_DEPTH {
-                if eval - RFP_MARGIN * depth >= beta {
-                    return eval;
+                let e = self.static_eval(s);
+                if e - RFP_MARGIN * depth >= beta {
+                    return e;
                 }
             }
-            if depth >= NMP_MIN_DEPTH && !self.seek_mate && Self::has_null_material(s) && eval >= beta {
+            if depth >= NMP_MIN_DEPTH && !self.seek_mate && Self::has_null_material(s) && self.static_eval(s) >= beta {
                 let r = NMP_R + depth / NMP_DIV;
                 let mark = s.make_null();
                 let v = -self.negamax(s, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
