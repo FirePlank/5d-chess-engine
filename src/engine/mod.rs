@@ -1,5 +1,7 @@
 pub mod ab;
 pub mod book;
+pub mod chess;
+pub mod chess_tab;
 pub mod evalnet;
 pub mod hce;
 pub mod local;
