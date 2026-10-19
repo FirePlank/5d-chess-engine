@@ -278,7 +278,7 @@ pub fn tuned_weights() -> Weights {
         ("ch_psqt", 15.8),
         ("ch_pawn", 6.4),
         ("ch_piece", 10.6),
-        ("ch_threat", 0.0),
+        ("ch_threat", 8.0),
         ("ch_king", 43.9),
         ("ch_mob", 10.5),
         ("chm_pawn", -533.5),
