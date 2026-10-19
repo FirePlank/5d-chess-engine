@@ -42,8 +42,6 @@ const ROOT_CAP: usize = 1000;
 const BATCH: usize = 12;
 const QDEPTH: i32 = 3;
 const QCAP: usize = 4;
-/// Summed history of an action at or above which its late-move reduction is one ply less.
-const HIST_GOOD: i32 = 2000;
 /// Internal iterative reduction: nodes of this depth or more without a TT action lose a ply.
 const IIR_DEPTH: i32 = 4;
 /// Singular extension: depth from which the TT action is tested, and the margin per depth.
@@ -1993,7 +1991,6 @@ impl AlphaBeta {
                         skipped = true;
                         break;
                     }
-                    let hist: i32 = act.iter().map(|m| self.history[history_index(s, m)]).sum();
                     let mark = Self::make(s, &act);
                     let quiet = sc < 10_000;
                     let mut r = 0;
@@ -2003,7 +2000,7 @@ impl AlphaBeta {
                         let ic = self.in_check(s);
                         child_check = Some(ic);
                         if !ic {
-                            r = (lmr(depth, searched) - pv as i32 - (hist >= HIST_GOOD) as i32).clamp(0, depth - 2);
+                            r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
                         }
                     }
                     let mut v;
