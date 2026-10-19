@@ -47,8 +47,6 @@ const IIR_DEPTH: i32 = 4;
 /// Singular extension: depth from which the TT action is tested, and the margin per depth.
 const SING_DEPTH: i32 = 4;
 const SING_MARGIN: i32 = 100;
-/// Margin per depth below the singular bound past which the extension is two plies.
-const SING_DOUBLE: i32 = 150;
 const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
@@ -1942,8 +1940,7 @@ impl AlphaBeta {
                             return 0;
                         }
                         if v < sb {
-                            // Singular by a wide margin: a double extension.
-                            tt_ext = 1 + (v < sb - SING_DOUBLE * depth) as i32;
+                            tt_ext = 1;
                         }
                     }
                 }
