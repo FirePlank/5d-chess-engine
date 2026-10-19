@@ -1,0 +1,13 @@
+{
+  "name": "chess_x06",
+  "old": "f3ac1cf",
+  "games": 8775,
+  "shards": 39,
+  "tc": "tc 10+0.1",
+  "elo0": 0,
+  "elo1": 5,
+  "new_args": "",
+  "old_args": "",
+  "base": "self",
+  "book": "data/books/mixed.g"
+}

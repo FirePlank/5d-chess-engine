@@ -274,13 +274,13 @@ pub fn tuned_weights() -> Weights {
         // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
         // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
         // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        ("ch_mat", 7.8),
-        ("ch_psqt", 15.8),
-        ("ch_pawn", 6.4),
-        ("ch_piece", 10.6),
-        ("ch_threat", 8.0),
-        ("ch_king", 43.9),
-        ("ch_mob", 10.5),
+        ("ch_mat", 4.7),
+        ("ch_psqt", 9.5),
+        ("ch_pawn", 3.8),
+        ("ch_piece", 6.4),
+        ("ch_threat", 4.8),
+        ("ch_king", 26.3),
+        ("ch_mob", 6.3),
         ("chm_pawn", -533.5),
         ("chm_knight", -1055.4),
         ("chm_bishop", -1316.5),
