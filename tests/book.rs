@@ -211,3 +211,31 @@ fn openings_are_named_where_they_are_reached() {
     assert_eq!(name("Standard - Turn Zero", "(0T1)g1f3 submit (0T1)g8f6 submit (0T2)h2h3 submit"), None);
     assert!(b.probe(&position("Standard - Defended Pawn", "")).unwrap().iter().any(|m| m.play && m.lan == "(0T1)c2c4"));
 }
+
+#[test]
+fn api_opening_follows_the_selected_branch_and_survives_leaving_the_book() {
+    let mut api = Api::new();
+    let mut call = |request: &str| {
+        let response = api.call(request, &mut |_| {});
+        let json = kairos::web::json::Json::parse(&response).unwrap();
+        assert_eq!(json.get("ok").bool(), Some(true), "{response}");
+        json
+    };
+    call(r#"{"cmd":"new","position":"Standard - Turn Zero"}"#);
+    let mut node = 0;
+    for lan in ["(0T1)g1f3", "(0T1)g8f6", "(0T2)b1a3"] {
+        node = call(&format!(r#"{{"cmd":"play","node":{node},"lan":"{lan}"}}"#)).get("node").int().unwrap();
+    }
+    let book = call(&format!(r#"{{"cmd":"book","node":{node}}}"#));
+    assert_eq!(book.get("opening").get("name").str(), Some("Digolian Attack"));
+    assert_eq!(book.get("opening").get("ply").int(), Some(3));
+    let next = call(&format!(r#"{{"cmd":"play","node":{node},"lan":"(0T2)h7h5"}}"#)).get("node").int().unwrap();
+    let book = call(&format!(r#"{{"cmd":"book","node":{next}}}"#));
+    assert_eq!(book.get("opening").get("name").str(), Some("Digolian Attack"));
+    assert_eq!(book.get("opening").get("node").int(), Some(node));
+    let other = call(r#"{"cmd":"play","node":2,"lan":"(0T2)h2h3"}"#).get("node").int().unwrap();
+    assert!(call(&format!(r#"{{"cmd":"book","node":{other}}}"#)).get("opening").is_null());
+    assert!(call(r#"{"cmd":"book","node":0}"#).get("opening").is_null());
+    call(r#"{"cmd":"new","position":"Standard"}"#);
+    assert!(call(r#"{"cmd":"book","node":0}"#).get("opening").is_null());
+}
