@@ -2977,7 +2977,7 @@ impl AlphaBeta {
             let depth = if ahead { (base_depth + 1).min(max_depth) } else { base_depth };
             let prev_best = best.clone();
             // seekMate bar: 3000 + 100000 / depth^2 (Stockfish's form, in our units).
-            self.seek_mate = depth > 1 && best_score.abs() >= 3000 + 100_000 / (depth * depth);
+            self.seek_mate = depth > 1 && best_score.abs() > MATE - 1000;
             // Aspiration window around the last completed depth's score (see ASP_WINDOW).
             let prev_score = best_score;
             let aspire = depth >= ASP_MIN_DEPTH && completed_depth > 0 && prev_score.abs() < MATE - 1000;
