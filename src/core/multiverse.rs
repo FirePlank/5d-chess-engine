@@ -375,12 +375,6 @@ impl Multiverse {
     pub fn hash(&self) -> u64 {
         self.hash
     }
-    /// XOR of the `board_key` of every timeline's last board: the boards in play, whatever
-    /// history (move order, earlier boards, branch points) led to them.
-    #[inline]
-    pub fn frontier_hash(&self) -> u64 {
-        self.lines.iter().filter_map(|tl| tl.keys.last()).fold(0, |h, k| h ^ k)
-    }
     /// `board_key` of the board (l, t, c), which must exist.
     #[inline(always)]
     pub fn key_of(&self, l: i32, t: i32, c: bool) -> u64 {
