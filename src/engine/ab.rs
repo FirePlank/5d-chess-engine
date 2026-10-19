@@ -1991,6 +1991,7 @@ impl AlphaBeta {
                         skipped = true;
                         break;
                     }
+                    let hist: i32 = act.iter().map(|m| self.history[history_index(s, m)]).sum();
                     let mark = Self::make(s, &act);
                     let quiet = sc < 10_000;
                     let mut r = 0;
@@ -2000,7 +2001,7 @@ impl AlphaBeta {
                         let ic = self.in_check(s);
                         child_check = Some(ic);
                         if !ic {
-                            r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
+                            r = (lmr(depth, searched) - pv as i32 + (hist == 0) as i32).clamp(0, depth - 2);
                         }
                     }
                     let mut v;
