@@ -1852,7 +1852,7 @@ impl AlphaBeta {
             return self.static_eval(s);
         }
         let alpha0 = alpha;
-        let key = s.hash();
+        let key = s.live_hash();
         let mut tt_action: Option<MoveSeq> = None;
         // Ok((score, proven)): a cutoff; Err(action): the remembered action, if any. (Read
         // under the slot's lock, so the score, its proof and the action are one entry's.)
@@ -2387,7 +2387,7 @@ impl AlphaBeta {
             line.push(act.clone());
         }
         while line.len() < len {
-            let Some(act) = self.tt.probe(s.hash(), |e| e.action.clone()) else { break };
+            let Some(act) = self.tt.probe(s.live_hash(), |e| e.action.clone()) else { break };
             if act.is_empty() || Self::make_checked(&mut s, &act).is_none() {
                 break;
             }

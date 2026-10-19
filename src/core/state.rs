@@ -101,6 +101,12 @@ impl State {
     pub fn hash(&self) -> u64 {
         self.m.hash() ^ (self.player as u64).wrapping_mul(0x9e3779b97f4a7c15) ^ (self.present as u64).wrapping_mul(0xd6e8feb86659fd93)
     }
+    /// `hash` without the history of the inactive timelines (see `Multiverse::live_hash`):
+    /// the transposition table's key.
+    #[inline]
+    pub fn live_hash(&self) -> u64 {
+        self.m.live_hash() ^ (self.player as u64).wrapping_mul(0x9e3779b97f4a7c15) ^ (self.present as u64).wrapping_mul(0xd6e8feb86659fd93)
+    }
     #[inline(always)]
     pub fn apparent_present(&self) -> Turn {
         self.m.get_present()
