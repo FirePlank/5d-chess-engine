@@ -74,8 +74,8 @@ const ROOT_TRAVEL_MATE_COMPLETIONS: usize = 512;
 /// and as a share of the optimum with one.
 const ROOT_MATE_SCAN_MS: u64 = 100;
 const ROOT_MATE_SCAN_DIV: u64 = 40;
-/// Time for the part of that scan that looks for a discovered check.
-const ROOT_DISCOVERED_SCAN_MS: u64 = 5;
+/// The most time of that scan for the actions with a checking entry.
+const ROOT_CHECKING_SCAN_MS: u64 = 8;
 /// Hypercuboids the cursor may take on a capturing travel (`travel_captures`) before it gives
 /// it up (when most of its combinations with the other boards' moves are illegal, finding one
 /// can take thousands).
@@ -1349,11 +1349,9 @@ impl AlphaBeta {
         None
     }
 
-    /// A checkmate in one among the legal actions of `s`, within the time. A mating action
-    /// leaves the opponent in check, so one of its moves gives check: only the actions with a
-    /// checking move are tested first (they are found from the precomputed checking entries,
-    /// so a position with none costs next to nothing), then, for a discovered check, the rest
-    /// for a short time. Returns the first mating action found.
+    /// A checkmate in one among the legal actions of `s`, within the time: first the actions
+    /// containing a precomputed checking entry (most mates), then all of them. Returns the
+    /// first mating action found.
     fn root_mate_scan(&mut self, s: &State, info: &mut HcInfo, ss: &SearchSpace, end: Instant, stop: &AtomicBool) -> Option<MoveSeq> {
         let dim = info.dimension();
         let fba = info.first_branch_axis();
@@ -1398,30 +1396,50 @@ impl AlphaBeta {
                     }
                 }
             }
-            if let Some(a) = self.scan_for_mate(s, info, &mut scratch, space, &mut work) {
-                return Some(a);
+            // A quarter of the time, at most a few ms (it finds the usual mates at once): the
+            // rest is for the full scan below.
+            let quarter = (end.saturating_duration_since(Instant::now()) / 4).min(Duration::from_millis(ROOT_CHECKING_SCAN_MS));
+            let found = {
+                let _first = interrupt_on(stop, Some(Instant::now() + quarter));
+                self.scan_for_mate(s, info, &mut scratch, space, &mut work)
+            };
+            if found.is_some() {
+                return found;
             }
-            if interrupted() {
+            if Instant::now() >= end || stop.load(Ordering::Relaxed) {
                 return None;
             }
         }
-        // A discovered check: no move of the action gives check itself.
-        let left = end.saturating_duration_since(Instant::now());
-        let _short = interrupt_on(stop, Some(Instant::now() + left.min(Duration::from_millis(ROOT_DISCOVERED_SCAN_MS)).min(left / 4)));
+        // Then every legal action, with whatever time is left: the checking entries are not a
+        // sure necessary condition (a mate can come from a discovered check or one the detector
+        // does not flag), and a position with few actions is scanned whole in a moment.
         self.scan_for_mate(s, info, &mut scratch, SearchSpace::from_vec(ss.hcs.clone()), &mut work)
     }
 
-    /// The first action of `space` (checking ones first) after which `work`, a copy of `s`, is
-    /// checkmate.
+    /// The first action of `space` after which `work`, a copy of `s`, is checkmate. Two
+    /// enumerations take turns, the best-first one (checks, then captures) and the natural
+    /// order: with millions of actions either may reach a mate long before the other.
     fn scan_for_mate(&mut self, s: &State, info: &HcInfo, scratch: &mut OrderScratch, space: SearchSpace, work: &mut State) -> Option<MoveSeq> {
-        let mut cursor = BestFirstCursor::default();
-        self.start_actions(s, info, &mut cursor, scratch, space, false);
-        loop {
-            let act = cursor.next(info, s);
+        let mut natural = HcCursor::new(SearchSpace::from_vec(space.hcs.clone()), HcOrdering::Natural);
+        let mut best_first = BestFirstCursor::default();
+        self.start_actions(s, info, &mut best_first, scratch, space, false);
+        let (mut natural_done, mut best_done) = (false, false);
+        let mut turn = 0usize;
+        while !(natural_done && best_done) {
+            turn += 1;
+            let use_natural = (turn % 2 == 0 && !natural_done) || best_done;
+            let act = if use_natural { natural.next(info, s) } else { best_first.next(info, s) };
             if interrupted() {
                 return None;
             }
-            let act = act?;
+            let Some(act) = act else {
+                if use_natural {
+                    natural_done = true;
+                } else {
+                    best_done = true;
+                }
+                continue;
+            };
             let mark = Self::make(work, &act);
             // Most checks have an evasion within a step or two: only an action without one
             // found is looked at exactly.
@@ -1431,6 +1449,7 @@ impl AlphaBeta {
                 return Some(act);
             }
         }
+        None
     }
 
     /// Root actions with a move on a board the side to move need not play (the ones
@@ -2770,6 +2789,16 @@ impl AlphaBeta {
             let end = Instant::now() + Duration::from_millis(budget);
             self.root_mate_scan(root, &mut hc, &ss, deadline.map_or(end, |d| d.min(end)), stop)
         });
+        // A checkmate in one the probes found is proven (each confirms the mate exactly): it is
+        // played at once, with no root actions generated and no search (MultiPV wants the
+        // other lines too).
+        if let (Some(m), true) = (&future_mate, self.multipv <= 1) {
+            info(self.info_text(root, 1, self.line_tag(1), MATE - 1, std::slice::from_ref(m), self.nodes, start.elapsed().as_secs_f64(), 1));
+            self.last_score = MATE - 1;
+            self.last_proven = true;
+            self.resume = None;
+            return Some(Action::from_moveseq(m, root));
+        }
         let mut agen = BestFirstCursor::default();
         let mut first = Self::without_future(root, &hc, &ss);
         let travels = self.travel_captures(root, &hc, &ss, &mut first);
@@ -3536,6 +3565,23 @@ mod tests {
         let seq: MoveSeq = a.moves().iter().map(|m| m.fm).collect();
         assert_eq!(AlphaBeta::child(&s, &seq).get_mate_type(), MateType::Checkmate, "played {:?}", seq);
         assert!(last.contains("score mate 1 "), "{}", last);
+    }
+
+    /// Mate in one with 18 million legal actions in the position (the root is in check): the
+    /// root's scan of every action finds it at once (Standard Turn Zero game, reported by a
+    /// user as taking seconds).
+    #[test]
+    fn mate_in_one_among_millions_of_actions_is_instant() {
+        let s = crate::core::perft::parse_g_line("G 1 size 8x8 odd fen [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:0:b] [r*nbqk*bnr*/p*p*p*p*p*p*p*p*/8/8/8/8/P*P*P*P*P*P*P*P*/R*NBQK*BNR*:0:1:w] moves (0T1)g1f3 submit (0T1)g8f6 submit (0T2)g2g3 submit (0T2)b8c6 submit (0T3)f1g2 submit (0T3)e7e6 submit (0T4)e1g1 submit (0T4)f8b4 submit (0T5)a2a3 submit (0T5)b4(0T4)b5 submit (-1T5)b1c3 (0T6)b1c3 submit (-1T5)b5a6 submit (-1T6)d2d4 submit (-1T6)a6(0T6)b6 submit (-1T7)d4d5 (0T7)d2d4 submit (-1T7)f6d5 (0T7)e8(-1T7)e7 submit (-1T8)c3d5 (0T8)d4d5 submit (0T8)f6d5 (-1T8)f8d6 submit (-1T9)d5e3 (0T9)c3d5 submit (0T9)e6d5 (-1T9)d8f6 submit (-2T8)d5c6 (-1T10)c2c3 (0T10)c1f4 submit (0T10)d8f6 (-1T10)h7h5 submit (-1T11)f3d4 (0T11)f1e1 submit (0T11)c8(-1T11)b8 submit (-1T12)d4c6 (0T12)c2c3 submit (0T12)b6(-1T12)c6 submit (-1T13)d1d4 (0T13)e2e4 submit (0T13)d7d6 (-1T13)b7b6 submit (-1T14)d4f6 (0T14)e4d5 submit (0T14)a7a6 (-1T14)g7f6 submit (-1T15)e3c4 (0T15)d5c6 submit (0T15)b7c6 (-1T15)c8a6 submit (-1T16)c4d6 (0T16)f4g5 submit (0T16)f6f5 (-1T16)e8(-1T15)e7 submit (-3T16)c4d6 (-1T17)d6f7 (0T17)d1b1 submit (0T17)g7g6 (-1T17)h8g8 submit (-1T18)g2c6 (0T18)b1f5 submit (0T18)g6f5 (-1T18)d7c6 submit (-1T19)f7(0T19)f5 submit (0T19)a8b8 (-1T19)a6e2 submit (-1T20)f1e1 (0T20)e1e7 submit (0T20)b8b5 (-1T20)e2f3 submit (0T21)f5(-1T21)f3 submit (0T21)h8d8 (-1T21)e6e5 submit (0T22)g5(-1T22)h5 submit (0T22)b5b2 (-1T22)g8h8 submit (-1T23)h5(0T23)g5 submit (0T23)b2b5 (-1T23)h8h3 submit (0T24)g5(-1T24)g4 submit (0T24)d8c8 (-1T24)h3h2 submit (-1T25)f3h2 (0T25)e7f7 submit (-1T25)b8(0T25)b7 submit (-1T26)c1h6 (0T26)f7h7 submit (0T26)c8e8 (-1T26)a8h8 submit (-1T27)h6g7 (0T27)h7c7 submit (0T27)e8e2 (-1T27)h8h2 submit (-1T28)g1h2 (0T28)f3d4 submit (0T28)e2f2 (-1T28)c7(0T27)c7 submit (-1T29)g7f6 (0T29)g1f2 submit (0T29)b5b2 (-1T29)e5(0T29)e5 submit (-1T30)g4f3 (0T30)f2g1 submit (0T30)b2g2 (-1T30)b6(0T30)b6 submit (-1T31)f3c6 (0T31)g1g2 submit (0T31)b7(-1T31)c7 submit (-1T32)e1e7 (0T32)c7c6 submit (-1T32)c7(0T32)c6 submit").unwrap();
+        let mut e = AlphaBeta::new();
+        let stop = AtomicBool::new(false);
+        let mut last = String::new();
+        let t = Instant::now();
+        let a = e.find_best_move(&s, &Limits { depth: Some(3), ..Default::default() }, &stop, &mut |m| last = m).unwrap();
+        let seq: MoveSeq = a.moves().iter().map(|m| m.fm).collect();
+        assert_eq!(AlphaBeta::child(&s, &seq).get_mate_type(), MateType::Checkmate, "played {:?}", seq);
+        assert!(last.contains("score mate 1 "), "{}", last);
+        assert!(t.elapsed() < Duration::from_millis(2000), "took {:?}", t.elapsed());
     }
 
     /// Turn Zero engine game, Black's move 30: (-2T16)Na5xb3 loses to the knight travel
