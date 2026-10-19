@@ -8,7 +8,7 @@ use crate::core::state::State;
 
 use super::chess::{self, BoardChess};
 
-pub const NF: usize = 130;
+pub const NF: usize = 115;
 
 /// The standard-chess terms are only worked out with at most this many active timelines (their
 /// fade is zero beyond).
@@ -17,9 +17,6 @@ pub const CHESS_MAX_LINES: i32 = 1;
 /// Whether the eval net sees the chess terms in its base score (a net trained for them) or the
 /// search adds them after the net's correction (`split_chess`).
 pub const CHESS_IN_NET: bool = true;
-
-/// Whether the counter-travel reach (`jur_line`, features `fi::JUR` ..) is worked out.
-pub const JUR_ON: bool = false;
 
 /// Feature indices.
 pub mod fi {
@@ -122,20 +119,6 @@ pub mod fi {
     /// features are 0).
     pub const FADE: usize = 107;
     pub const END: usize = 115;
-    /// Counter-travel reach ("Jurassic" rooks and queens): landing squares into the past of the
-    /// own pieces that move along time alone (rook class), along time and one board axis
-    /// (bishop class) and along time and two (unicorn class) on the latest boards of active
-    /// timelines, white's minus black's, and the first two classes times the danger to the
-    /// side's own royals (`royal_danger`).
-    pub const JUR: usize = 115;
-    /// Piece counts (pawn, knight, bishop, rook, queen) times the present turn (capped at 40):
-    /// piece values that change with the length of the game.
-    pub const TT: usize = 119;
-    /// The same times how far the pieces have thinned out (14 minus the knights, bishops, rooks
-    /// and queens per active board): values that change with the material left.
-    pub const TP: usize = 124;
-    /// Knights on f3 (white) and f6 (black), white's minus black's.
-    pub const KNF: usize = 129;
 }
 
 pub const FEATURE_NAMES: [&str; NF] = [
@@ -157,10 +140,6 @@ pub const FEATURE_NAMES: [&str; NF] = [
     "ch_mat", "ch_psqt", "ch_pawn", "ch_piece", "ch_threat", "ch_king", "ch_mob",
     "chm_pawn", "chm_knight", "chm_bishop", "chm_rook", "chm_queen",
     "fade1", "fade2", "fade3", "fade4", "fade5", "fade6", "fade7", "fade8",
-    "jur_rook", "jur_bishop", "jur_unicorn", "jur_danger",
-    "tt_pawn", "tt_knight", "tt_bishop", "tt_rook", "tt_queen",
-    "tp_pawn", "tp_knight", "tp_bishop", "tp_rook", "tp_queen",
-    "kn_f3",
 ];
 
 pub type Features = [i32; NF];
@@ -308,17 +287,6 @@ pub fn tuned_weights() -> Weights {
         ("chm_rook", -1561.8),
         ("chm_queen", -1312.2),
         ("fade1", 1.000),
-        // Strategy-guide terms (`fi::JUR` ..), fitted by the tuner on top of the eval net.
-        ("tt_pawn", 2.7),
-        ("tt_knight", -9.4),
-        ("tt_bishop", -21.5),
-        ("tt_rook", -26.6),
-        ("tt_queen", -8.7),
-        ("tp_pawn", -34.6),
-        ("tp_knight", -28.8),
-        ("tp_bishop", 5.0),
-        ("tp_rook", 30.8),
-        ("tp_queen", -25.6),
     ])
 }
 
@@ -505,8 +473,6 @@ pub struct Sides {
     pub chess: [[i32; chess::NG]; 2],
     /// Whether the chess terms were worked out (at most `CHESS_MAX_LINES` active timelines).
     pub chess_on: bool,
-    /// Counter-travel reach per colour by piece class (`jur_line`), over the active timelines.
-    pub jur: [[i32; 3]; 2],
 }
 
 /// Extra per-side term indices of `Sides`.
@@ -568,9 +534,7 @@ pub mod ex {
     pub const KINGLESS: usize = 28;
     /// Enemy non-pawn pieces on those boards.
     pub const KL_SWARM: usize = 29;
-    /// Own knights on f3 (white) or f6 (black).
-    pub const KNF: usize = 30;
-    pub const COUNT: usize = 31;
+    pub const COUNT: usize = 30;
 }
 
 /// Squares within king distance 2.
@@ -588,9 +552,6 @@ fn board_extra(b: &Board, extra: &mut [[i32; ex::COUNT]; 2], w: i32, h: i32, att
         let (me, them) = (colors[c], colors[1 - c]);
         let (own_p, their_p) = (b.lpawn() & me, b.lpawn() & them);
         let f = &mut extra[c];
-        if w == 8 && h == 8 {
-            f[ex::KNF] += (b.lknight() & me & pmask(if c == 0 { 21 } else { 45 })).count_ones() as i32;
-        }
         for sq in marked_pos(own_p) {
             let (x, y) = (sq & 7, sq >> 3);
             let file = A_FILE << x;
@@ -870,7 +831,6 @@ pub fn sides_with(s: &State, src: &mut impl TermSource) -> Sides {
         extra: [[0; ex::COUNT]; 2],
         chess: [[0; chess::NG]; 2],
         chess_on: false,
-        jur: [[0; 3]; 2],
     };
     let (l_min, l_max) = s.get_lines_range();
     let (amin, amax) = s.get_active_range();
@@ -963,17 +923,6 @@ pub fn sides_with(s: &State, src: &mut impl TermSource) -> Sides {
         }
     }
     royal_5d(s, &mut sd, src, &atts);
-    if JUR_ON {
-        let g = Geo { m: s.multiverse(), lo: l_min, hi: l_max };
-        for l in amin..=amax {
-            for ci in 0..2 {
-                let j = jur_line(&g, l, ci == 1);
-                for k in 0..3 {
-                    sd.jur[ci][k] += j[k];
-                }
-            }
-        }
-    }
     if super::sac::active() {
         sac_terms(s, &mut sd, src);
     }
@@ -1166,45 +1115,6 @@ fn spread1(r: Bitboard) -> Bitboard {
 /// there can land: [those no other enemy piece defends, and those among them `c` also covers]. (Landings
 /// on other timelines' past boards are left out: rarer, and they would tie the result to every
 /// neighbouring line.)
-/// Past boards a counter-travel is looked for on.
-const JUR_DEPTH: i32 = 8;
-
-/// Landing squares into the past of the pieces of colour `c` on line `l`'s latest board, by piece
-/// class (time axis alone: rooks, queens; time and one board axis: bishops; time and two: unicorns),
-/// summed over the next `JUR_DEPTH` own-turn boards back until the path meets a piece. A rook that
-/// has just moved onto a square nothing stood on for many turns reaches far ("Jurassic rook").
-fn jur_line(g: &Geo, l: i32, c: bool) -> [i32; 3] {
-    let mut out = [0i32; 3];
-    let tl = g.m.timeline(l);
-    let Some(b0) = tl.boards.last() else { return out };
-    let vs = src_v(tl.end(), c);
-    let mine = b0.hostile(!c);
-    let comp = [b0.lrook() & mine, b0.lbishop() & mine, b0.lunicorn() & mine];
-    if comp.iter().all(|&x| x == 0) {
-        return out;
-    }
-    for (j, &(sx, sy)) in XY9.iter().enumerate() {
-        let ci = (sx != 0) as usize + (sy != 0) as usize;
-        let mut pos = comp[ci];
-        if pos == 0 {
-            continue;
-        }
-        let st = STEP9[j];
-        for n in 0..JUR_DEPTH {
-            let k = vs - 2 * (n + 1) - tl.start;
-            if k < 0 {
-                break;
-            }
-            pos = step(pos, st) & !tl.boards[k as usize].occupied();
-            if pos == 0 {
-                break;
-            }
-            out[ci] += pos.count_ones() as i32;
-        }
-    }
-    out
-}
-
 fn past_line(g: &Geo, l: i32, c: bool) -> [i32; 2] {
     let mut past = [0i32; 2];
     // The latest board (`at(l, src_v(end, c))`) and the past boards before it.
@@ -1603,23 +1513,6 @@ pub fn features_from(sd: &Sides, s: &State, checks: bool) -> Features {
             f[fi::CH_MF + j] = f[fi::MAT_A + k];
         }
     }
-    {
-        for k in 0..3 {
-            f[fi::JUR + k] = sd.jur[0][k] - sd.jur[1][k];
-        }
-        let dg = [royal_danger(&sd.side[0]), royal_danger(&sd.side[1])];
-        let r = |c: usize| (sd.jur[c][0] + sd.jur[c][1]).min(16);
-        f[fi::JUR + 3] = r(0) * dg[0] - r(1) * dg[1];
-        let turn = s.get_present().0.clamp(0, 40);
-        let np = |c: usize| (2..6).map(|k| sd.side[c][si::MAT_A + k]).sum::<i32>();
-        let stage = (14 - (np(0) + np(1)) / sd.active.max(1)).clamp(0, 14);
-        for (j, k) in [0usize, 2, 3, 4, 5].into_iter().enumerate() {
-            let m = sd.side[0][si::MAT_A + k] - sd.side[1][si::MAT_A + k];
-            f[fi::TT + j] = m * turn;
-            f[fi::TP + j] = m * stage;
-        }
-        f[fi::KNF] = sd.extra[0][ex::KNF] - sd.extra[1][ex::KNF];
-    }
     f[fi::PAWN_ADV] = d(si::PAWN_ADV);
     f[fi::PAWN_NEAR] = d(si::PAWN_NEAR);
     f[fi::KING_CENT] = d(si::KING_CENT);
@@ -1749,9 +1642,6 @@ pub fn needs_checks(w: &Weights) -> bool {
 pub fn linear(f: &Features, w: &Weights) -> f32 {
     let mut acc = 0f32;
     for i in 0..fi::CH {
-        acc += w[i] * f[i] as f32;
-    }
-    for i in fi::END..NF {
         acc += w[i] * f[i] as f32;
     }
     acc + chess_linear(f, w)
@@ -2103,7 +1993,7 @@ mod royal_tests {
     }
 
     fn zero() -> Sides {
-        Sides { side: [[0; si::COUNT]; 2], heavy: 0, active: 0, inactive: 0, mandatory: 0, extra: [[0; ex::COUNT]; 2], chess: [[0; chess::NG]; 2], chess_on: false, jur: [[0; 3]; 2] }
+        Sides { side: [[0; si::COUNT]; 2], heavy: 0, active: 0, inactive: 0, mandatory: 0, extra: [[0; ex::COUNT]; 2], chess: [[0; chess::NG]; 2], chess_on: false }
     }
 
     #[test]
