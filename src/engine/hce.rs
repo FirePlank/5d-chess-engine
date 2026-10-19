@@ -276,7 +276,7 @@ pub fn tuned_weights() -> Weights {
         // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
         ("ch_mat", 8.7),
         ("ch_psqt", 16.6),
-        ("ch_pawn", 7.4),
+        ("ch_pawn", 0.0),
         ("ch_piece", 13.1),
         ("ch_threat", 12.0),
         ("ch_king", 47.4),
