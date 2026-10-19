@@ -42,6 +42,8 @@ const ROOT_CAP: usize = 1000;
 const BATCH: usize = 12;
 const QDEPTH: i32 = 2;
 const QCAP: usize = 4;
+/// While a mate is being proven (`seek_mate`) the action cap of a node is this many times wider.
+const SEEK_MATE_CAP_MULT: usize = 4;
 /// Internal iterative reduction: nodes of this depth or more without a TT action lose a ply.
 const IIR_DEPTH: i32 = 4;
 /// Singular extension: depth from which the TT action is tested, and the margin per depth.
@@ -1866,7 +1868,7 @@ impl AlphaBeta {
         let depth = if tt_action.is_none() && depth >= IIR_DEPTH && !self.seek_mate && !known_check.unwrap_or_else(|| self.in_check(s)) { depth - 1 } else { depth };
 
         if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| self.in_check(s)) {
-            if depth <= RFP_DEPTH {
+            if depth <= RFP_DEPTH && !self.seek_mate {
                 let e = self.static_eval(s);
                 if e - RFP_MARGIN * depth >= beta {
                     return e;
@@ -1895,6 +1897,7 @@ impl AlphaBeta {
         let (mut best_proven, mut all_proven) = (false, true);
         let mut cap = {
             let base = LMP[(depth as usize).min(LMP.len() - 1)];
+            let base = if self.seek_mate { base * SEEK_MATE_CAP_MULT } else { base };
             if pv { base * PV_CAP_MULT } else { base }
         };
         // When every action searched loses to a mate, the cap is raised once by its own size:
@@ -2113,7 +2116,7 @@ impl AlphaBeta {
                     let mut r = 0;
                     let mut child_check = None;
                     // Checking actions are not reduced: mating lines run through them.
-                    if depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet {
+                    if depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet && !self.seek_mate {
                         let ic = self.in_check(s);
                         child_check = Some(ic);
                         if !ic {
