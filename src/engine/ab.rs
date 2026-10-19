@@ -2550,7 +2550,8 @@ impl AlphaBeta {
         limited.nodes = Some(limited.nodes.unwrap_or(nodes[level]).min(nodes[level]));
         limited.resume = false;
         let saved = (self.multipv, self.threads, self.own_book);
-        self.multipv = 32;
+        // The top limited level trades candidate breadth for deeper tactical search.
+        self.multipv = if self.skill_level == 7 { 8 } else { 32 };
         self.threads = 1;
         self.resume = None;
         let fallback = self.find_best_move_full(root, &limited, stop, info);
@@ -2707,28 +2708,6 @@ impl AlphaBeta {
             }
         }
         roots.sort_by(|a, b| b.0.cmp(&a.0));
-        // A beginner sometimes overlooks the reply instead of always seeing tactics
-        // through quiescence, even at depth one.
-        let seed = if self.skill_level == 1 { super::book::random_seed() } else { 0 };
-        if self.skill_level == 1 && seed % 3 == 0 {
-            self.terms.sac_root = super::sac::root_travels(root);
-            let mut work = root.clone();
-            work.enable_undo();
-            let mut scores = Vec::new();
-            for (_, act) in roots.iter().take(32) {
-                if !scores.is_empty() && (stop.load(Ordering::Relaxed) || deadline.is_some_and(|d| Instant::now() >= d)) {
-                    break;
-                }
-                let mark = Self::make(&mut work, act);
-                scores.push(-self.static_eval(&work));
-                work.unmake(mark);
-            }
-            let k = super::skill::pick(&scores, 1, seed ^ 0x243f6a8885a308d3).unwrap_or(0);
-            self.last_score = scores[k];
-            self.last_proven = false;
-            info(self.info_text(root, 0, 0, scores[k], std::slice::from_ref(&roots[k].1), self.nodes, start.elapsed().as_secs_f64(), roots.len()));
-            return Some(Action::from_moveseq(&roots[k].1, root));
-        }
         // The probe's mate is a root action, searched first: every depth's line (and a
         // resumed search) has it.
         if let Some(m) = &future_mate {
