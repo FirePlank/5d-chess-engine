@@ -795,6 +795,14 @@ impl AlphaBeta {
     }
 
     #[inline]
+    /// Whether the table already shows this node's score below `beta` (an upper bound or an
+    /// exact score searched nearly as deep): a null move cannot be expected to fail high.
+    fn tt_below(&self, key: u64, depth: i32, ply: usize, beta: i32) -> bool {
+        self.tt
+            .probe(key, |e| e.depth as i32 >= depth - 3 && matches!(e.bound, Bound::Upper | Bound::Exact) && mate_from_tt(e.score, ply) < beta)
+            .unwrap_or(false)
+    }
+
     fn tt_store(&self, key: u64, depth: i32, bound: Bound, score: i32, proven: bool, action: &MoveSeq) {
         if key == self.excl_key && self.excluded.is_some() {
             return;
@@ -1757,7 +1765,7 @@ impl AlphaBeta {
                     return e;
                 }
             }
-            if depth >= NMP_MIN_DEPTH && !self.seek_mate && Self::has_null_material(s) && self.static_eval(s) >= beta {
+            if depth >= NMP_MIN_DEPTH && !self.seek_mate && Self::has_null_material(s) && self.static_eval(s) >= beta && !self.tt_below(key, depth, ply, beta) {
                 let r = NMP_R + depth / NMP_DIV;
                 let mark = s.make_null();
                 let v = -self.negamax(s, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
