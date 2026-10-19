@@ -1996,6 +1996,9 @@ pub struct BestFirstCursor {
     /// The limited class being enumerated and the hypercuboids it has taken.
     limit_class: i32,
     limit_taken: u32,
+    /// Hypercuboids (and walked points) it may still look at, when bounded (`set_budget`): once
+    /// none is left `next` finds no further action (`budget_spent` tells that from the end).
+    budget: Option<u32>,
     /// Problems found since the last `restart` of another context (see `ProblemMemo`).
     memo: ProblemMemo,
 }
@@ -2118,6 +2121,7 @@ impl Default for BestFirstCursor {
             limit_steps: 0,
             limit_class: -1,
             limit_taken: 0,
+            budget: None,
             memo: ProblemMemo::default(),
         }
     }
@@ -2188,6 +2192,29 @@ impl BestFirstCursor {
         self.limit_class = -1;
     }
 
+    /// Bound the enumeration to `steps` more hypercuboids (and walked points), or lift the bound:
+    /// a count, so the same on any machine and for any time given to the search.
+    pub fn set_budget(&mut self, steps: Option<u32>) {
+        self.budget = steps;
+    }
+
+    /// Whether the bound of `set_budget` ran out (so that no action found is not the end).
+    pub fn budget_spent(&self) -> bool {
+        self.budget == Some(0)
+    }
+
+    /// Spend a step of the budget; false when none is left.
+    fn spend(&mut self) -> bool {
+        match &mut self.budget {
+            None => true,
+            Some(0) => false,
+            Some(b) => {
+                *b -= 1;
+                true
+            }
+        }
+    }
+
     /// Drop the rest of the actions of class `class`, the one being enumerated.
     pub fn drop_class(&mut self, class: i32) {
         while self.heap.heap.peek().is_some_and(|it| it.key.0 == -class) {
@@ -2205,6 +2232,16 @@ impl BestFirstCursor {
             let HcOrdering::Precomputed(o) = &self.heap.order else { unreachable!() };
             let order = o.axis(0);
             while walk.pos < order.len() {
+                if !match &mut self.budget {
+                    None => true,
+                    Some(0) => false,
+                    Some(b) => {
+                        *b -= 1;
+                        true
+                    }
+                } {
+                    return Ok(None);
+                }
                 let i = order[walk.pos];
                 walk.pos += 1;
                 if !walk.hc[0].contains(i) || !matches!(info.entry(0, i), Entry::Physical { .. } | Entry::Null) {
@@ -2221,7 +2258,7 @@ impl BestFirstCursor {
         let mut steps = 0u32;
         while !self.heap.heap.is_empty() {
             steps += 1;
-            if steps % INTERRUPT_EVERY == 0 && interrupted() {
+            if steps % INTERRUPT_EVERY == 0 && interrupted() || !self.spend() {
                 return Ok(None);
             }
             let BfItem { key, mut hc } = self.heap.heap.pop().unwrap();
