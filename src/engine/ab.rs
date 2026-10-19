@@ -1750,7 +1750,7 @@ impl AlphaBeta {
         }
         // Internal iterative reduction: with no remembered action the node is searched a ply
         // shallower, which also leaves one for the next iteration to find.
-        let depth = if tt_action.is_none() && depth >= IIR_DEPTH && !self.seek_mate && !known_check.unwrap_or_else(|| self.in_check(s)) { depth - 1 } else { depth };
+        let depth = if tt_action.is_none() && depth >= IIR_DEPTH && !self.seek_mate { depth - 1 } else { depth };
 
         if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| self.in_check(s)) {
             if depth <= RFP_DEPTH {
