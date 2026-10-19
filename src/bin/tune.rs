@@ -17,19 +17,27 @@ type Packed = [i16; NF];
 struct Sample {
     f: Packed,
     r: f32,
+    /// Fixed addition to the linear score (white's view): the eval net's correction with `--net`.
+    off: f32,
 }
 
 fn pack(f: &hce::Features) -> Packed {
     std::array::from_fn(|i| f[i].clamp(i16::MIN as i32, i16::MAX as i32) as i16)
 }
 
+/// Weighted sum of the features, with the chess terms faded by the number of active timelines
+/// (as `hce::linear`).
 #[inline]
 fn linear(f: &Packed, w: &Weights) -> f32 {
     let mut acc = 0f32;
-    for i in 0..NF {
+    for i in 0..hce::fi::CH {
         acc += w[i] * f[i] as f32;
     }
-    acc
+    let mut ch = 0f32;
+    for i in hce::fi::CH..hce::fi::FADE {
+        ch += w[i] * f[i] as f32;
+    }
+    acc + ch * w[hce::fi::FADE + (f[hce::fi::ACTIVE_LINES].clamp(1, 8) - 1) as usize]
 }
 
 fn field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
@@ -68,6 +76,8 @@ fn quiet(s: &State) -> bool {
     })
 }
 
+static W0: std::sync::OnceLock<Weights> = std::sync::OnceLock::new();
+static USE_NET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static QUIET_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn game_samples(line: &str, out: &mut Vec<Sample>) -> Option<()> {
@@ -140,7 +150,26 @@ fn game_samples(line: &str, out: &mut Vec<Sample>) -> Option<()> {
         if QUIET_ONLY.load(std::sync::atomic::Ordering::Relaxed) && !quiet(&st) {
             continue;
         }
-        out.push(Sample { f: pack(&hce::features(&st)), r: white_result });
+        let mut off = 0f32;
+        let f = if USE_NET.load(std::sync::atomic::Ordering::Relaxed) {
+            // Net-in-the-loop: the search's evaluation is the handcrafted score without the chess
+            // terms plus the net's correction of it (which never saw them); only the chess terms
+            // are tuned on top.
+            let sd = hce::sides(&st);
+            let full = hce::features_from(&sd, &st, false);
+            let mut rest = full;
+            let _ = hce::split_chess(&mut rest);
+            let stm = st.get_present().1;
+            let base = hce::score(&rest, W0.get_or_init(hce::tuned_weights), stm);
+            if let Some(net) = kairos::engine::evalnet::embedded() {
+                let res = net.residual(&kairos::engine::evalnet::inputs_from(&sd, &st, base)) as f32;
+                off = if stm { -res } else { res };
+            }
+            full
+        } else {
+            hce::features(&st)
+        };
+        out.push(Sample { f: pack(&f), r: white_result, off });
     }
     Some(())
 }
@@ -152,7 +181,7 @@ fn sigmoid(x: f64) -> f64 {
 fn loss(samples: &[Sample], w: &Weights, k: f64) -> f64 {
     let mut acc = 0.0;
     for s in samples {
-        let p = sigmoid(k * linear(&s.f, w) as f64);
+        let p = sigmoid(k * (linear(&s.f, w) + s.off) as f64);
         acc += (s.r as f64 - p).powi(2);
     }
     acc / samples.len().max(1) as f64
@@ -168,6 +197,7 @@ fn main() {
     let lr: f64 = arg(&args, "--lr", 2.0);
     let threads: usize = arg(&args, "--threads", 14);
     let out_path: String = arg(&args, "--out", "games/tuned_weights.txt".to_string());
+    USE_NET.store(args.iter().any(|a| a == "--net"), std::sync::atomic::Ordering::Relaxed);
     QUIET_ONLY.store(args.iter().any(|a| a == "--quiet"), std::sync::atomic::Ordering::Relaxed);
     let files: Vec<String> = args[1..]
         .iter()
@@ -282,6 +312,37 @@ fn main() {
         eprintln!("draw positions {:.3}", draws as f64 / all.len() as f64);
         return;
     }
+    if args.iter().any(|a| a == "--fadefit") {
+        // Coordinate search of the fade factors (weights fade1..fade8), everything else fixed.
+        let k: f64 = arg(&args, "--k", 0.004);
+        let mut wf = w;
+        eprintln!("start holdout {:.6} train {:.6}", loss(valid, &wf, k), loss(train, &wf, k));
+        for round in 0..4 {
+            for slot in 0..8 {
+                let i = hce::fi::FADE + slot;
+                let (mut best, mut bl) = (wf[i], f64::MAX);
+                let c0 = wf[i];
+                for step in 0..=24 {
+                    let v = if round == 0 { step as f32 * 0.125 } else { c0 + (step as f32 - 12.0) * 0.02 * (4 - round) as f32 };
+                    if v < 0.0 {
+                        continue;
+                    }
+                    wf[i] = v;
+                    let l = loss(train, &wf, k);
+                    if l < bl {
+                        bl = l;
+                        best = v;
+                    }
+                }
+                wf[i] = best;
+            }
+            eprintln!("round {} fades {:?} train {:.6} holdout {:.6}", round, &wf[hce::fi::FADE..], loss(train, &wf, k), loss(valid, &wf, k));
+        }
+        for i in 0..NF {
+            println!("{:<16} {:10.4}", hce::FEATURE_NAMES[i], wf[i]);
+        }
+        return;
+    }
     // Logistic scale per centipawn (fixed: with free weights it only sets their units).
     let k: f64 = arg(&args, "--k", 0.004);
     let l2: f64 = arg(&args, "--l2", 1e-7);
@@ -321,10 +382,14 @@ fn main() {
                     sc.spawn(move || {
                         let mut g = [0f64; NF];
                         for s in ch.iter() {
-                            let p = sigmoid(k * linear(&s.f, &wf) as f64);
+                            let p = sigmoid(k * (linear(&s.f, &wf) + s.off) as f64);
                             let d = 2.0 * (p - s.r as f64) * p * (1.0 - p) * k;
-                            for i in 0..NF {
+                            let fa = wf[hce::fi::FADE + (s.f[hce::fi::ACTIVE_LINES].clamp(1, 8) - 1) as usize] as f64;
+                            for i in 0..hce::fi::CH {
                                 g[i] += d * s.f[i] as f64;
+                            }
+                            for i in hce::fi::CH..hce::fi::FADE {
+                                g[i] += d * s.f[i] as f64 * fa;
                             }
                         }
                         g

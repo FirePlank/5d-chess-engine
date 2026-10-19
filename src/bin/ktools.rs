@@ -293,6 +293,83 @@ fn main() {
                 }
             }
         }
+        "chessfeat" => {
+            // chessfeat <labels.tsv> <out.bin> [every=1] [max=1000000]: raw standard-chess term
+            // counts (white minus black) of the labelled positions ("<fen>	<expected>	<cp>",
+            // scripts/chess/peras_label.py), for scripts/chess/fit_chess.py. Skips positions with
+            // the side to move in check, mates and non-8x8-chess boards. Record: i16 phase,
+            // i16 side to move (1 black), i32 cp (side to move), then `chess::t::COUNT` i16.
+            use kairos::core::board::Board;
+            use kairos::engine::chess::{analyze, terms, threats, t, CountSink};
+            let every: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(1);
+            let max: usize = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(1_000_000);
+            let text = std::fs::read_to_string(&args[2]).expect("labels");
+            let mut w = std::io::BufWriter::new(std::fs::File::create(&args[3]).expect("out"));
+            let mut n = 0usize;
+            for (li, line) in text.lines().enumerate() {
+                if li % every != 0 {
+                    continue;
+                }
+                let mut it = line.split('\t');
+                let (Some(fen), _, Some(cp)) = (it.next(), it.next(), it.next()) else { continue };
+                let Ok(cp) = cp.parse::<i32>() else { continue };
+                let mut ff = fen.split(' ');
+                let (Some(place), Some(side)) = (ff.next(), ff.next()) else { continue };
+                let Ok(b) = Board::from_fen(place, 8, 8) else { continue };
+                let Some(info) = analyze(&b, 8, 8, true) else { continue };
+                let black = side == "b";
+                if info.in_check(black as usize) {
+                    continue;
+                }
+                let mut v = [0i32; t::COUNT];
+                for c in 0..2 {
+                    let mut sink = CountSink([0; t::COUNT]);
+                    terms(&info, c, &mut sink);
+                    threats(&info, c, if (c == 1) == black { t::THREAT_M } else { t::THREAT_W }, &mut sink);
+                    for i in 0..t::COUNT {
+                        v[i] += if c == 0 { sink.0[i] } else { -sink.0[i] };
+                    }
+                }
+                w.write_all(&(info.phase as i16).to_le_bytes()).unwrap();
+                w.write_all(&(black as i16).to_le_bytes()).unwrap();
+                w.write_all(&cp.to_le_bytes()).unwrap();
+                for x in v {
+                    w.write_all(&(x.clamp(-32000, 32000) as i16).to_le_bytes()).unwrap();
+                }
+                n += 1;
+                if n >= max {
+                    break;
+                }
+            }
+            writeln!(out, "{} records of {} terms", n, t::COUNT).unwrap();
+        }
+        "chessbench" => {
+            // chessbench <labels.tsv> [n=20000] [reps=20]: ns per board of the standard-chess terms
+            // next to the rest of `hce::board_terms`.
+            use kairos::core::board::Board;
+            let n: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20000);
+            let reps: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(20);
+            let text = std::fs::read_to_string(&args[2]).expect("labels");
+            let boards: Vec<Board> =
+                text.lines().step_by(97).filter_map(|l| Board::from_fen(l.split(' ').next()?, 8, 8).ok()).take(n).collect();
+            let mut acc = 0i64;
+            let t0 = Instant::now();
+            for _ in 0..reps {
+                for b in &boards {
+                    let c = kairos::engine::chess::board_chess(std::hint::black_box(b), 8, 8);
+                    acc += c.v[0][1] as i64 + c.thr[1][0] as i64;
+                }
+            }
+            let ns = t0.elapsed().as_nanos() as f64 / (reps * boards.len()) as f64;
+            let t1 = Instant::now();
+            for _ in 0..reps {
+                for b in &boards {
+                    acc += std::mem::size_of_val(&kairos::engine::hce::board_terms(std::hint::black_box(b), 8, 8)) as i64;
+                }
+            }
+            let ns2 = t1.elapsed().as_nanos() as f64 / (reps * boards.len()) as f64;
+            writeln!(out, "{} boards: chess {:.0} ns/board, rest of board_terms {:.0} ns/board (checksum {})", boards.len(), ns, ns2, acc).unwrap();
+        }
         "legalcheck" => {
             // legalcheck <file.g>... : every legal action of each position, enumerated with and
             // without the problem memos (best-first in the engine's order, and depth-first in
