@@ -1,0 +1,855 @@
+﻿e3 b4 Bb2
+                                Anti F-Sac theory
+
+
+
+
+Here I wanna go over the reasons why trying to go for an fsac on both sides will lead to almost lost or straight up lost positions. Black has a few options to go for a bishop travel, as well as white having an option to go for a Queen travel with recommended play from black. So let me show every possibility and why the counterpart has just enough resources to fight back
+
+
+
+
+
+
+ v      
+3. c3
+
+
+  
+
+
+
+If white pushes the c pawn to open up the diagonal for the queen to go to b3 to attempt the fsac black can now play Ng4. Thats threaten f4 preparing the bishop phase
+
+
+  
+
+
+
+usually white is faster with his mate as the queen travel comes first, but if white is insisting to go for the travel, the knight just needs to give a check on e3 followed by Qh4 threatening a lethal protected travel onto f2
+
+
+  
+
+
+
+meanwhile white has nothing to counter the  f pawn push for the bishop phase to t0
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+3. Bb2 Nd5
+
+
+  
+
+
+
+
+
+so now that we covered that e6 is completely okay for black to play. We can start why bishop b2 counters the main attempts of blacks f pawn push. starting with Nd5 as it is the lesser complex line.
+
+
+Here white has freedom to play Qh5 which pins the f pawn while starting to threaten travels against it and attacking the knight that is currently only defended by the e pawn which can’t retake it as it will blunder mate in 1 with Be5
+  
+
+but it will get worse. If black plays g6 to stop white's travel ideas from h5 it opens up the diagonal to the rook. so if that happens you can take the knight with the Queen while still threatening the rook. Black now has 2 ideas to proceed Qh4 and f5, f5 will block white's lethal travel and allows for a bishop travel onto t2. while Qh4 might threaten more immediate ideas while still making f6 or f5 possible for the t2 travel. luckily for white the bishop on the backrank is so amazing in defending -1L that our response to both ideas simply can be BxR
+but against Qh4 first we have to play g3 after BxR to block the queen's protected travel onto f2. Because the Bh8 defense is used in other similar lines as well it got its own section at a later point in this guide.
+
+
+
+
+
+
+
+
+
+
+
+
+3. Bb2 / Ng4
+
+
+  
+
+
+
+
+
+If you know the Ng4 lines where White’s knight will block f7 this entire line will look similar to you. but there are little differences.
+First we take the knight with the queen as it is a free piece, and if black pushes f5 it is a semi forced checkmate line for white where black has 1 opportunity for a travel which white can exile from to stall long enough for a winning countertravel. We now go through each move step by step.
+  
+
+
+
+Bf6 now threatens the queen with check while threatening the move Qh5#
+so if black chooses to play g6 or h5 to stop Qh5 we just win the queen with a checkmate soon to follow. So the only move for black is to trade the queens while our check stops blacks travel opportunities because after black's king takes back. White’s bishop stops black’s bishop tracks in time.
+
+
+  
+
+the bishops path through time:
+  
+
+
+
+
+
+Now the main differences to the 2.ng4 line comes to shine. because we played b4 we can now play c3 and black’s knight has no path to reach white’s king to give a check before white travels.  
+
+
+So after c3 it literally doesn't matter what black does, white follows up with f4(or f3 if it doesn't matter) and then takes any piece that might be able to check white in the next move.
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Now we are at the critical time for the bishop travels where white can exile to d1 and stall long enough.   if black tries to just travel again with the bishop white doesnt need to generate another timeline to exile too.
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+now white needs to stall until turn 8 (zoom in to the turn timer under the lowest timeline to make sure) when his countertravel will be a checkmate
+
+
+  
+
+  
+
+
+
+
+
+
+
+
+
+
+
+If black can mate earlier white is in serious trouble though but there are no ways found yet for black to force a checkmate in time. White's weak squares are e3 and e1.
+If black adds pressure on e3 you wanna protect it with the bishop. if black leaves its pressure of e1 (with for example Bxe3) you wanna play Qf3 to threaten a check. on the lower timeline you always wanna play h5 to make it impossible for the queen to get to a good square in time. There are not very many opportunities for black before t8.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ps:
+black can attempt to counter exile behind an inactive timeline with that 
+but he first has to create a buffer timeline with his king (to make it impossible for white to reach -1L) from +1L and defending the kings until they are all exiled is definitely a task on its own.
+also it's a lot of timelines black is creating.
+with how late the softmate is and how many inactive timelines any queen jurassic might be too much material deficit especially considering that the jurassic timeline is almost completely separated
+
+
+example on how it could look like
+  
+
+
+
+
+
+3. Bb2 / Ne4
+
+
+overlooked at first is this a really tricky move.
+it threatens other forcing ideas than just the check for the bishop travel like Ng4 and Nd5 does.
+it will attack f2 for another lethal f sac turn while allowing the pawn push.
+also it isn't attacked by the queen so it defends f6 while from f6 the knight can defend h5 again. but like in Nd5 lines, we still have Qh5, and after g6 we can just go back to f3, now f5 must happen or the queen's travel will be lethal. We can now take the rook with the bishop and the only travel from black is the travel on t2 which is covered with the Bh8 defense at its own section. the main problem with this line is that Qh4 instead of f5 will lead to a very intense 3 timeline game which I give chances for both colors. black is a little more solid over the h5 e8 tri- and quadragonal and white has a few more Queens out.
+If you look for a more solid position that doesnt end in timetravel you can also go for Qf3
+there is a little more to it because we defend against the t0 travel a little like Ng4 lines.
+
+
+  
+
+
+
+The missing piece is Bxg7 which threatens checkmate on h5 and threatens the bishop that wants to travel. Black will have a permanent weakness on the Kingside while white has a little less development.
+
+If instead of f5 f6 happens the Knight is undefended and has no retreat square that defends h5 anymore, so just Bc4 or b5 to have a check and after g6 or h5 happens to defend against the mate you just check the king and take the Knight. here the instant Qh4 is not a problem because you can just play g3. When the travel happens there is no Knight check that doesnt get parallel captured from the Queen which will end up defending h4.
+
+
+  
+
+
+
+black usually accidently defends against f7 travels like this but if not of course white will eventually have some good travels at some point.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+3. Bb2 / g6
+here i just want you to play Qf3 to put pressure on the knight, if the knight moves to give way for an f pawn push to t2 sac its only good square is h5 where you can just take the rook.
+Now with the Bishop on h8 you again have the Bh8 defense.
+
+
+
+
+
+
+2. b4 / Ng4
+
+
+  
+
+
+
+The instant ng4 is a tricky move as it can easily transition to e6 ng4 lines with the added benefit that black can instantly push the f pawn which also protects the knight if it's necessary.
+
+
+Here I recommend taking the knight with the queen and considering what black does next, adding pressure onto the f pawn or going into this sharp line.
+3. QxN / f5
+if black pushes the f pawn while attacking the queen white can enter this line to essentially force a checkmating travel or equalizing on pieces while having the safer king and more active pieces. So checkmate will soon follow.
+
+
+First we take the pawn with the queen to which black's answer has to be g6.
+white plays Be2 making the Queen invulnerable for a turn because if gxQ happens Bh5 is checkmate
+
+
+  
+
+black has no legal king moves after Bh5#
+
+
+so blacks only good move is to play e6. now white will have to check so that black can’t get the bishop to travel to t0.
+The only check is Qf7, but that is not a problem. it will lure the king to a good square in time while forcing black to respond correctly.
+After the king takes the bishop, all of his bishop travels are blocked and we can play Bf3 to threaten checkmate at some point but actually we already threaten a defended tchaikovsky travel to turn 5.  
+which means Black has to give the Queen back which ends up with equal material (whites a pawn up actually) but a wide open black king and 2 developed pieces against 0.
+
+
+
+
+3. QxN / any other move preparing f5
+
+any other move usually means you can pile up pressure on the f pawn.
+Bc4 Queen reroutes and you gotta win eventually.
+if necessary you can give the piece back.
+
+
+
+
+
+
+
+
+
+
+
+
+Other second moves for black
+First of all any other move than 2nd … c5/a5/e6/d5 will allow for white to inactive softmate black (pseudos counter travel, and thus also tones later travel doesn't work because b4 covers Qa5 which is the square for black to reach f5 on t0) and because e3 was played as the first move this is considered a draw (where only white can win) by today's standards.
+(the ruling change makes about exiled kings shifts this to a possible line for black)
+
+
+That being said, if black is Ok in playing for this, or if he wants to force other moves out of white, there might be reasons to play like that. Although many attempts in going for the fsac after these 2nd moves may still result in forced mates for white or just worse positions for black.
+
+
+
+
+2. c5 / a5
+
+
+those will disallow the usage of c3 as a resource as they can push to c4/a4 covering b3 
+but it will fall into some sharp lines where you usually end up sacrificing your queen to lure out the king, because e6 can't be played fast enough. Black’s Queenside is completely stuck and can't help the king survive the onslaught of both bishops. similar to the 2nd … ng4 lines
+but you have to find Be5 after you sacrifice the queen. Now because black hasn't played e6 yet, he will always be one move behind to your threats down the f file.
+  
+
+Bf4 won't attack the past king yet but if black doesn't move the king against Be5 then whites travel from f4 will result in a tchaikovsky over the cool diagonal of the bishop
+  
+
+The countertravel of the queen here only lands on protected squares by either the queen or the bishop. so nothing to worry about. and with the resource of the move Be2 it is very easy to find a way to either force this travel or force straight up the checkmate.
+
+
+So what if black instantly goes back with the king. we technically could still go for this travel, but because this tempo loss means he is reacting to everything we can force black into 0 counterplay, when we mindlessly go for this travel for a late tchaikovsky hardmate then black can make things messy with his own counter travel, even though it shouldn't work, the way I show here will make it much smoother for white to win.
+
+
+
+
+
+
+
+
+  
+
+
+
+First we just calmly play Be2 threatening Bf4 checkmate Blacks only 2 options to defend against this are g5 and Bh6, g5 is easily answered with Bh5 which forces black to exile his king and the checkmate is soon to follow
+  
+
+
+
+This leaves Bh6 as a possibility. which has multiple counters, the easiest is just taking the rook to threaten Bf3 hardmate
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+2. h5
+This move gives black the most short term safety in almost any e3 b4 position. that beeing said its long term weaknesses can show very fast in some positions, so black usually has to make some form of travel to end the game quickly. In these cases it won’t end well for black though.
+
+
+3. c3
+this will threaten the travel to t1f7 this basically means we can limit blacks responses. to defend the softmate black has to 
+
+
+3. .. c6
+my only recommendation right now is going for the inactive softmate. but, there are a few tricks black can go for denying it. Black can play Qa5 anyway and sacrifice it for Nd5 and f5, you simply slide the Queen back to c2 after capturing the queen, you can eye up on g6. if the opponent plays f6 he blunders mate in 1 on g6. If the opponent plays f5 you wanna set up a danrelle with Qh5 on the softmate timeline. After you set up the danrelle you can counter travel to g6 with the queen, then you either play Qxf7, you hardmate with another check while the Queen on g6 checks across timelines, or play QxQ if the Queen blocks with Qd5, opponent has to take on g6 and now you can just travel one turn back to get this auto hardmate.
+  
+
+3. ..Ng4
+
+
+this is the other trick black has, sacrificing the knight on the crucial turn for even more short term safety to force through several travels
+here it is important to take with the f pawn, it will activate the bishop for counter travel opportunities.
+black plays e6 now and we have to answer with Qc4 to defend the mate in 1 threat on h4
+  
+
+
+
+now black has 2 different options to attack, either the immediate threat of a winning timetravel with Qf6 or f5 which is a timetravel in 2 turns. its easy for white to remember what to do though to counter, because white will threaten counter travel with the respective piece the opponent wants to travel with, e.g. if f5 the bishop is already good enough for countertravels and if Qf6 we slide the queen over to f4. Blacks bishop travel threatens t2f2 which we counter with a danrelle on -1L. blacks Queen travel we counter with this approach of a buffer timeline  
+
+
+in any other Qf6 line we will try to trade queens asap while looking for this bishop travel
+  
+
+
+
+  
+
+This feels a lot like the normal t0 sacs although only Nh3 seems to be a forced win for white.
+After that you either play Qf3 or Ng5 depending on which way the king stays open. shouldn't be too hard to figure out. more lines than not allow for a hardmate which is good as you usually need to survive counter travels as well.
+
+
+
+
+
+
+this is the bishop countertravel in the f5 lines
+  
+
+
+
+
+
+2. g6
+
+
+g6 makes the f5 pawn push safe so you can't just take the knight with the queen and expect her to be able to sacrifice on f7. Because we know that we can’t sac the queen we need another piece that can for sure reach f7 fast enough. In this case it's the knight.
+
+
+we need to play nf3 to reach f7 in time before we play Bb2.
+
+
+  
+
+
+
+  
+
+
+
+After the following moves black’s queen is attacked and the crucial bishop travels are blocked.
+so if black doesn't take the knight with the king he will lose the queen with check and you are up a queen.
+
+
+So after black takes the knight you obviously wanna take his knight with your queen.
+and after the f pawn takes the queen you have plenty of time to play Bb2.
+Because the king didn't move asap you have the tchaikovski travel 1 turn before the mate that you are also able to threaten.
+The travel of black this time can come first if the king moves back in the first 2 moves, and it looks a little lost, but because your travel is a mate and not just a check, white actually can exile while black can't.
+but you have to travel from the main timeline first and exile after. so that your bishop still looks onto the king on 0L and not on something on +1L you created with the exile
+  
+
+white wants to exile because if he doesn't blacks second bishop travel will be a tchaikovski on the moving king thus ending in an inactive softmate which will deny your countertravel
+  
+
+it probably is not lost but why make it difficult and annoying when the travel and exile is just winning on the spot (the inactive softmate is probably not lost, this configuration shown in the picture is lost for white although it is very poorly played)
+3. Nf3 / Nd5 
+ The second biggest issue I had was what to do when black doesn't go to g4 but to d5 instead. But it's a fairly simple fix. You attack the knight with Bishop c4, if the opponent wants to push the f pawn you can take the knight, and now there is nothing black can do against the counter sac. on either e6 or f7. which blocks the only good timing with a check that the pawn push can open on this turn.
+  
+
+
+
+The shown travel only goes to t1. So white can easily take the bishop and play Nf3 after and be fine. 
+
+
+
+
+
+
+3. Nf3 / Ne4
+
+
+ Now to the biggest Issue. Ne4 is completely out of harm's way of anything while still annoyingly looking on f2. The problem is that black doesn't sacrifice the knight so we can’t sacrifice something back. while we also can't rip open the file for the bishops.
+but there's another opening to f7 which we can abuse, the triagonal from b3.
+so we play 4. Ne5  because g5 is controlled by the knight. and then if f5 we can block the diagonal with Nf7.
+Now when the king takes the knight we play c3 followed by Qb3.
+depending on blacks response to c3 we need to either travel onto f7 for a softmateing sequence or one turn later when the knight protects f7
+  
+
+
+
+
+
+When e6 is played in response to c3, Qb3 can get matched with Qh4 by black, that is when we can't travel first as his travel would be mating before our softmateing sequence. So we just make sure with g3 that black can't check us when Qh4 lands.
+When any other move lands that is threatening to check us without creating serious travel threats we can also travel for the softmateing sequence.
+when d5 is played we have to travel onto the softmateing sequence board because the later one is blocked.
+Now I only show what the softmateing sequence could look like, and as long as you can defend against possible jurassics, you are good to go.
+  
+
+
+
+Theory for upcoming turns of fsacs.
+
+
+
+
+Usually most openings end here in terms of forced softmate fsacs as most openings have at least blocked the file already. but with recommended play from black he will have 2 more turns as a target to his fsacs. that is when b4 was played and one turn after when Bb2 was played.
+  
+
+for the latter it is fairly simple to block it.
+you can play 
+4.Nh3 … 
+5. Nf4
+or just 4. something f3 (N or Q)
+
+
+so the problem turn is the one previous to that as you would need to play f4 to block a travel onto it.
+but because it is not a fast softmate white has several turns to prepare counters for it.
+
+
+  
+
+3. Bb2 / h5
+  
+
+
+
+h5 is currently the only way to safely force Ng4 for an early enough pawn push.
+
+
+Because Ng4 comes with a lot more problems white wants to play Qf3 to defend the f pawn from future problems and also block the other crucial f sac turn.
+
+
+
+
+Now black can play Qe7 which is a protective move that helps him later in the multiple timelines game. We need to play a3 here to stabilize the b4 square which otherwise would create issues in some specific lines in the following f sacs. (specifically the e1 b4 triagonal)
+
+
+Now black can safely play Ng4 for the pawn push which we answer with Qg3 to be able to push our pawn to f3 in response to his pawn push because it's now his last chance to do so.
+Now black's Qe7 comes into play and black is closing the door to his bishop with Qf7, but also protecting the king over the upcoming parallel threats. this is the reason we only played f3 so we can now play Qf4 to have a jurassic counter travel.
+
+
+  
+
+If Qf7 doesn't happen, white doesnt need to set up the Jurassic with Qf4 because the Triagonal is good enough for White.
+
+
+
+
+Now to the lines after the f sac always dependent if you need the Jurassic or if you can play for the Triagonal.
+Bishop countertravel
+
+
+
+
+If Black’s Queen covers the Jurassic square for White's Queen instead of plugging the hole in the Triagonal (or any other way to deny the Jurassic) White has to play -1L out allowing the Bishop softmate to happen.
+
+
+  
+[Kxf2 / Ne4 | Ke1 / e6 | Qf3 / Qh4 | g3 / Qxg3 | hxg3 / f5 | Qh5 / g6]
+
+
+Now on 0L we travel as far back with the bishop as possible landing on f6 capturing the knight.
+  
+
+From here there are many possibilities for black to play.
+but black has too many holes they can't cover. The most important ones I show here.
+  
+
+
+
+
+
+if the travel onto the first board on the new timeline doesn't work because the King moved at the end of -1L it will for the second one.
+just remember that you have to travel from e2
+  
+
+
+
+If black plays g6 in the first 2 moves it will stop this queen travel from working and if black moves the king at the end of -1L it will also defend against backrank timeline diagonals.
+but that ends up being too much material and holes on +1L for white that the situation is unstable long enough.
+
+
+The best shot black has is to take the traveled bishop with the queen which we retake with the other bishop. 
+  
+
+
+
+now black has to play g6 to cover the timeline triagonals which whites answer is Bd8 luring the king to a more vulnerable square
+
+
+  
+
+
+
+After Qf3 from white blacks best shot is to prepare a check as it would line up with the bishop softmate from -1L and white has a tchaikovsky travel onto c7 with the queen that he needs to set up in one more move (Qf4 in this case)
+  
+
+
+
+so whites only move is to play Qf6 to stop the check and checking the opponent that can capture the queen via a parallel jump from 0L (if a3 didn't happen that queen could counter travel here to b4 which isn't mate yet, but white has no way to attack the queen without allowing a hardmate from the knight, with a3 played on that board we can just take the knight with the queen while his queen is still attacked by a3)
+  
+
+but this gives us another move on 0L which we can use to tchaikovsky anyway
+
+
+
+
+  
+
+
+
+Jurassic Version
+          
+
+
+you wanna set up this danrelle as soon as possible. It will be the reason for the Jurassic to work. if the opponent plays anything preventing you from playing Qh4 it will mess up with his timings for the softmate. (you most likely trade queens or sac your queen to block the time diagonal to your king) (look at the end for more detailed information)
+after you set up this danrelle you can jurassic on the main timeline. The Danrelle will force black to move the g8 knight or else something like this will happen which will force black to move the king and get checkmated the next move on h5. or in 2 moves if the king moves to g6 covering h5. 
+  
+
+  
+
+
+
+starting with Nf6 as it's fairly simple to debunk that. you simply take the Knight and play e4 after no matter blacks play. After e4 if blacks threaten a check you get the reinforcement of the danrelle queen and saccing into f7. if black defends f7 you play Qe2 and threaten a lethal travel to e5
+
+
+  
+
+if black takes e4 here with the queen QxQ is just mate
+  
+
+If black took with the g pawn instead of the e pawn, just a random move will do after the check
+
+
+Nh6 is a little more precise, but its falls to similar tactics as black can’t easily play e6 
+  
+
+you take on f7 play e3 and then if the opponent plays e6 you jump with the queen to take the knight.
+Now to not blunder checkmate in one, the king has to go to g6 where you calmly play Bd3 check and let the opponent mate you on the upper board.
+Because your next travel will go to h5 checking the king on g6.
+  
+
+
+
+
+
+
+
+Jurassic version stopping the Danrelle
+
+
+Black has several ways to stop the danrelle but loses out on the one timing for the bishop softmate. The resulting position with current known best play from black will look like this, black has a queen for a bishop and a far more protected king. While White has to survive a good bit to find opportunities for winning travels. 
+
+
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+Bishop h8 defense lines
+
+
+  
+
+
+
+
+
+there are certain lines where you need to defend -1L with the bishop on h8 on 0L
+The earlier you can play bishop takes h8 the better usually because Qe7 and some other moves might get forced because of this. (this is an 3rd g6 attempt which is quite similar to 3rd Nd5 attempts)
+
+
+These moves shown in the picture are almost forceable by white. There are some variations but they are either worse or already losing. That being said black now has 2 options that are both losing to similar ideas, black now either checks with the queen or moves the f pawn 2 forward. either or we take the Queen with a pawn. then the opponent has to either move the f pawn or has to close the triagonal to the king with g6.
+
+
+if opponent plays Qxg3 first
+  
+
+if opponent plays f5 first
+  
+
+
+
+The major difference is that Qxg3 allows for black to move the king instead of pushing g6 or closing the door with Nf6 while still softmating with the bishop. but that doesn't matter because simply capturing the softmating bishop will cause a hardmate with the Queen on h5 checking a past king while the bishop checks the king on 0L.
+
+
+so if the king moves with the Queen on h5 you just have to capture the bishop with your countertravel. If the king doesnt move you just have to travel two times to boards where the bishop is on h5.
+
+
+  
+
+
+
+if you don't need to you dont wanna travel with the bishop on h8 from 0L. Always take stuff that can check you or just check yourself with those travels. The worst that can happen is that black somehow defends this softmate and you have to take the softmating bishop so you still have to play a game afterwards that is still a little unclear.
+If you can find hardmate in those situations it's also easier to convert. The counter travels of black are almost never good enough because your bishop is already on h5 that will just auto check at a certain point.
+maybe a few examples of different positions that defend via Bh8:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Short sample of 2nd d5 versions of fsac turns.
+clarifier:this might all be wrong due to some different move order in the softmateing timeline
+but you can just keep the bishop on f6 to block the travels by yourself if you really need to block the travels.
+
+
+  
+
+
+
+
+
+c6 here is not straight up losing. Black has a trick to counterattack up his sleeve targeting this exact board on f2. (and as we know the previous board is also still a target)
+
+
+The problem for black is, he will open up everything with white having lots of opportunity to counterattack. but the travels all don't look too good on their own. It's just because of blacks openness and the 2nd travel being possible that they magically work out in the end
+
+
+
+
+The line goes like this.
+  
+
+
+
+[3rd: Bb2 / c6 4rd: Bxf6 / h5 5th: Bxe7 / Qxe7 6th: Qf3 / f5 7th: Qg3 / g5 8th: Nf3]
+
+
+now this is blacks first travel opportunity
+you wanna play out to the softmate like in e6 versions except for the last move (very important). and then counter travel the queen from the main timeline to g7 
+  
+
+
+
+
+
+This is now threatening to take on f7 to have a future mate with the queen on -1L h5 so the furthest black can get is taking the queen. After bishop takes back we threaten a few checks to travel with the Qf3 on -1L onto h5 +1L over the Quadragonal. After Rook takes and Queen takes Black has only a knight travel where white has to play g3(very important) so the last Queen travel from black doesn't mate over the triagonal.  
+
+
+For the second turn the pawn push can travel; we need to get to better squares for the queen to travel to.
+
+
+After Nf3 from white we attack 2 squares that only black’s queen is covering right now, that is e5 and g5. so if either one is defended you can just go to the other one. but first i will put here the full line for blacks travel that it resolves into.
+
+
+  
+
+
+
+so now the two fairly easy counter travels, first from e5 to the rook on h8.
+  
+
+
+
+We do threaten a lot here.
+
+
+black has to cover h5 because of obvious reasons (just a travel one turn back will be softmate) g8 will softmate in 2 turns as well. and a travel onto g6 is also possible the one line i will show is this one
+  
+
+
+
+The travel from g5 is simply one turn back to g6 instantly getting the softmate over the tri- and quadragonal. 
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+the problem i mentioned in the clarifier is in a slight change in the softmating line
+  
+
+basically instead of blocking with the c pawn you block with the queen which allows the king to move in the end which breaks the immediate counter travel ideas. but obviously the Q on e5 is able to jurassic to turn 1 from where she could target the now moved king because d7  and c7 are open for a lot of time on 0L. jurassics usually tend to not work out with perfect play when there isn't something up on other boards but maybe things can be found
+also because the King on f2 is very vulnerable allowing too many counter counter travels will also be bad.

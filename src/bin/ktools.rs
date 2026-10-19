@@ -1139,6 +1139,51 @@ fn main() {
             args.get(4).and_then(|s| s.parse().ok()).unwrap_or(1),
             &mut out,
         ),
+        "bookcover" => {
+            // bookcover <file>: for each 5dpgn line (one game per line) how far the opening book
+            // knows it: the actions that are book moves ("play" or "know") and the first one
+            // that is not (its position, if known, still lists the book's other actions).
+            use kairos::core::variants::state_from_setup;
+            use kairos::engine::book::Book;
+            use kairos::web::pgn::{action_to_pgn_short, parse_5dpgn};
+            let book = Book::theory();
+            let text = std::fs::read_to_string(args.get(2).expect("file")).expect("read");
+            for (n, line) in text.lines().enumerate() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                let g = match parse_5dpgn(line, None) {
+                    Ok(g) => g,
+                    Err(e) => {
+                        writeln!(out, "L{} PARSE ERROR: {}", n + 1, e).unwrap();
+                        continue;
+                    }
+                };
+                let Ok(mut s) = state_from_setup(&g.setup) else { continue };
+                let (mut plies, mut known, mut first_miss) = (0, 0, None);
+                for a in g.root.mainline() {
+                    plies += 1;
+                    let txt = action_to_pgn_short(&s, a);
+                    let lan = kairos::web::tree::action_lan(&s, a);
+                    let in_book = book.probe(&s).is_some_and(|ms| ms.iter().any(|m| m.lan == lan));
+                    if in_book && first_miss.is_none() {
+                        known += 1;
+                    } else if first_miss.is_none() {
+                        let pos_known = book.probe(&s).is_some();
+                        first_miss = Some(format!("ply {} {} ({})", plies, txt, if pos_known { "position in book, move new" } else { "position not in book" }));
+                    }
+                    match s.can_apply_action(a) {
+                        Some(next) => s = next,
+                        None => break,
+                    }
+                }
+                match first_miss {
+                    None => writeln!(out, "L{} COVERED {}/{} ", n + 1, known, plies).unwrap(),
+                    Some(m) => writeln!(out, "L{} {}/{} first new: {}", n + 1, known, plies, m).unwrap(),
+                }
+            }
+        }
         "pgn2g" => {
             // pgn2g [all] <file.5dpgn>... : the "G" line of each game's main-line end ("all":
             // of every position along the main line).

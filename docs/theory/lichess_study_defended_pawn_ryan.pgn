@@ -1,0 +1,198 @@
+[Event "5D Chess Defended Pawn Ryan's Opening: Why This Opening Probably Doesn't Work"]
+[Date "2022.02.13"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5D Chess Defended Pawn Ryan's Opening"]
+[ChapterName "Why This Opening Probably Doesn't Work"]
+[ChapterURL "https://lichess.org/study/PSMKzNf9/hN2ld4ry"]
+[Annotator "https://lichess.org/@/RyanFourLC"]
+[FEN "rqb1k2r/ppppppbp/4nnp1/8/2P5/1P3N2/PB1PPPPP/RQ1NKB1R w KQkq - 3 3"]
+[SetUp "1"]
+[UTCDate "2022.02.13"]
+[UTCTime "16:01:26"]
+[ChapterMode "gamebook"]
+
+{ I am officially retiring this opening, because it seems that it is just bad, at least at a high level.
+
+I'll leave this study up as there are some good ideas and there is an important lesson to learn as to why the opening is bad.
+
+The thinking of the opening is that it is worth being slow in development if you gain the option to castle and quickly make your king safe. But after lots of analysis in T0 and in DP, the move g6 seems to never hold up. }
+3. h4 { The reason is simple, the plan of playing h4 then h5 is a good and effective plan, taking advantage of the move g6 which creates a target for the h-pawn. This will guarantee the white rook is activated, and weaken the g6 square.. This h4 h5 plan is good regardless of whether black has castled or not. It is even good regardless of what black has done with their dark squared bishop.
+So, because white is given an effective plan that is good even if we delay castling, the opening has no advantages.
+One last note, the g6 square itself is important to defend in general, in both T0 and DP, as it is on the diagonal to your king, the move g6 somewhat counterintuitively has the effect of making it easier for your opponent to target g6, so never play it.
+In normal chess never play f6, in 5D chess never play g6 or f6 and also probably several other pawn moves. } *
+
+
+[Event "5D Chess Defended Pawn Ryan's Opening: The Desired Setup"]
+[Date "2021.10.24"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5D Chess Defended Pawn Ryan's Opening"]
+[ChapterName "The Desired Setup"]
+[ChapterURL "https://lichess.org/study/PSMKzNf9/4UDc693z"]
+[Annotator "https://lichess.org/@/RyanFourLC"]
+[FEN "rqb2rk1/ppppppbp/4nnp1/8/8/8/8/8 w - - 0 1"]
+[SetUp "1"]
+[UTCDate "2021.10.24"]
+[UTCTime "16:18:11"]
+[ChapterMode "gamebook"]
+
+{ In 5D chess, the pawns near the king are often difficult to move without making serious weaknesses. To me this means that developing pieces into the centre and skipping early pawn moves is viable, as enemy pawns are unlikely to harass them.
+
+Another thing, is that in 5D chess you usually can't castle without getting a piece in front of your g pawn, or pushing your g pawn. But, castling remains a very strong move, so we fianchetto to prepare castling, and then castle.
+
+This setup is very solid (notice that all squares near our king are very inaccessible to travels, and are also defended), and we are incredibly flexible in how we continue from here.
+
+We will look at this opening from the perspective of black, as black is the side that can have trouble reaching this setup. }
+ *
+
+
+[Event "5D Chess Defended Pawn Ryan's Opening: Optional Chapter: Too Slow"]
+[Date "2021.10.24"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5D Chess Defended Pawn Ryan's Opening"]
+[ChapterName "Optional Chapter: Too Slow"]
+[ChapterURL "https://lichess.org/study/PSMKzNf9/ACxlnCA1"]
+[Annotator "https://lichess.org/@/RyanFourLC"]
+[FEN "rqbnkbnr/pppppppp/8/8/8/8/PPPPPPPP/RQBNKBNR w KQkq - 0 1"]
+[SetUp "1"]
+[UTCDate "2021.10.24"]
+[UTCTime "16:28:15"]
+
+{ This Chapter will go over a line where we spend one turn with a pawn move, which leads to us being too slow to develop, allowing the opponent to force us to give up going for our desired setup. }
+1. c4 c5 { C5 is too slow, and doesn't really help us at all with our planned development. } 2. Nf3 Nf6 3. b3 Ne6 4. Bb2 g6 { Stubbornly trying to continue with the plan will lead to a very uncomfortable position } 5. Nc3 Bg7 6. Nd5 { Now we cannot castle, as Nxe7 is checkmate. There is also the simple threat of Nxe7+ Kxe7 Ne5+, and we must give up the queen for 2 knights.
+We'll show one sample line from here, but at this point it should be clear this is very undesirable.
+We try capturing the knight. } 6... Nxd5 7. cxd5 { Capturing the bishop and allowing the queen onto the diagonal is certainly losing, so we'll try Nd4 } 7... Nd4 { This move also has serious flaws. A bishop or a queen travelling onto e7 on this board would lead to mate. } 8. e3 Nxf3+ 9. gxf3 Bxb2 10. Qxb2 f6 11. e4 Qe5 12. Be2 { White has just calmly forced trades and setup a bishop travel onto e7. } *
+
+
+[Event "5D Chess Defended Pawn Ryan's Opening: 1. c4"]
+[Date "2021.10.24"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5D Chess Defended Pawn Ryan's Opening"]
+[ChapterName "1. c4"]
+[ChapterURL "https://lichess.org/study/PSMKzNf9/0aU33DpJ"]
+[Annotator "https://lichess.org/@/RyanFourLC"]
+[FEN "rqbnkbnr/pppppppp/8/8/8/8/PPPPPPPP/RQBNKBNR w KQkq - 0 1"]
+[SetUp "1"]
+[UTCDate "2021.10.24"]
+[UTCTime "16:49:49"]
+[ChapterMode "gamebook"]
+
+1. c4 { Develop towards the setup with the moves that leave you as flexible as possible. } 1... Nf6 { This knight always goes to f6, so this is the most flexible move. } (1... Ne6 { This undefends f7, and is generally less flexible than another move. }) (1... g6 { This is the most inflexible move that tries to reach the desired setup. }) (1... c5 { too slow, see the optional chapter }) (1... b5 { too slow, see the optional chapter }) 2. Nf3 { Keep going } 2... Ne6 { We still have not committed to the fianchetto, it is good to commit to the 3 turn plan of g6, Bg7, O-O as late as possible in case opponent does something that makes us want to deviate. } (2... g6 { We can't play Bg7 without undefending the weak e7 pawn, so g6 has no purpose yet. }) 3. b3 g6 { The opponent hasn't done anything crazy, so we can finally commit fully to the setup. } 4. Bb2 Bg7 5. Nc3 { Nd5 can be an annoying move, hitting the vulernable e7 pawn, prevent it. } 5... c6 (5... O-O { Now Nd5 attacks the e7 pawn, and to defend it we must play Re7, but this allows opponent to execute the very simple plan of Bc3, Qb2 lining up three attackers on your f6 knight. } 6. Nd5) 6. Ne4 { This is the opponent's only remaining way to try to pressure our position, but we don't need to worry about it, continue as normal. } 6... O-O { The remainder of this chapter, and the next 2 chapters will cover lines where the opponent captures the knight on f6. Capturing the knight on f6 is ineffective as far as I can tell, but defending can be tricky. } 7. Nxf6+ { A very important idea in this opening is that we are completely fine with getting doubled f-pawns, it opens the e-file for our use, and having a pawn blocking paths to your king is good.
+Also our dark squared bishop is our biggest asset. } 7... exf6 8. Bc3 { Opponent is desperately trying to continue to attack us, but this is actually a big mistake. They are planning to try to form a bishop-queen battery and take on f6, but they have a weakness in their position, try to find a move that lets you target that weakness. } 8... a6!! { Setting up Qa7 and then travelling back onto the earliest turn where opponent undefended the f2 pawn. } (8... b5 { This move is very reasonable, to set up Qb6, but there is a better square to target f2 from. }) (8... Qd6 { This move is good, it prepares to defend f6, and also prepares to go to c5 to target f2. But there is a better square to target f2 from. }) (8... a5 { This move is just as good as the move a6, which is the intended move. }) (8... Qc7 { A reasonable move, to try to play Qb6 and target f2, but there is a better square to target f2 from. }) 9. Bd4 { The only move that stops Qa7, but now we can get rid of our opponent's best piece. } 9... Nxd4 10. Nxd4 { Now go in for the kill. } 10... Qf4 { Threatening a mating travel onto f2, and attacking the knight. } *
+
+
+[Event "5D Chess Defended Pawn Ryan's Opening: 1. c4 with 7. Bxf6"]
+[Date "2021.10.24"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5D Chess Defended Pawn Ryan's Opening"]
+[ChapterName "1. c4 with 7. Bxf6"]
+[ChapterURL "https://lichess.org/study/PSMKzNf9/m7tz4tGa"]
+[Annotator "https://lichess.org/@/RyanFourLC"]
+[FEN "rqb2rk1/pp1pppbp/2p1nnp1/8/2P1N3/1P3N2/PB1PPPPP/RQ2KB1R w KQ - 2 7"]
+[SetUp "1"]
+[UTCDate "2021.10.24"]
+[UTCTime "17:44:47"]
+[ChapterMode "gamebook"]
+
+7. Bxf6 exf6 (7... Bxf6) 8. Qb2 { Opponent has given up their best counter to our dark squared bishop, if we can defend the f6 pawn we will be comfortable. } 8... Qf4 9. d3 { If we can get rid of the e4 knight we are completely safe, try to force it away. } 9... d5 (9... f5 { This allows Nf6+, which is incredibly annoying. }) (9... Ng5 { This move is probably fine, but try to get rid of the enemy knight more forcefully. }) 10. e3 { This is the only difficult move to deal with that remains. Consider it a puzzle, if you just want to know the move, press the get hint button. } 10... dxe4!! { A queen sacrifice for two knights, the reason this is good will become apparent very soon. } (10... Qg4 { This undefends our f6 pawn. }) (10... Qh6 { This undefends our f6 pawn. }) (10... Qf5 { This move gets the queen trapped!
+Ng3 Qg4 h3 and the queen is lost. } 11. Ng3 Qg4 12. h3) 11. exf4 exf3 { Now the e-file is wide open, and all we have to do is put a bishop somewhere on that file to get checkmate. } 12. O-O-O { The only hope for opponent is to try to put a rook on the e-file to trade away the bishop that will deliver check. But, now the enemy king is very vulnerable to our dark squared bishop. } 12... f5 13. d4 { The only move that doesn't hang mate, and saves the queen. Remember that now we can checkmate the opponent by getting a bishop onto the e-file. } 13... Nxd4 (13... Nc5 { There is a better knight move. }) (13... Nc7 { There is a better knight move. }) (13... Nd8 { There is a better knight move. }) (13... Nxf4 { There is a better knight move. }) (13... Ng5 { There is a better knight move. }) 14. Re1 { Again the only move that doesn't hang mate. Now find the tactical finisher. } 14... Ne2+ 15. Rxe2 { Now both of Bxb2 and xe2 will win. We will look at Bxb2. } 15... Bxb2+ 16. Rxb2 { Note that Be6 is one turn too late to be checkmate. } 16... Bd7 { Be8 will be checkmate, just in time. Opponent must sacrifice the rook to stop it. } 17. Re2 fxe2 *
+
+
+[Event "5D Chess Defended Pawn Ryan's Opening: 1. c4 with 7. Bxf6 with 12. f5"]
+[Date "2021.10.24"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5D Chess Defended Pawn Ryan's Opening"]
+[ChapterName "1. c4 with 7. Bxf6 with 12. f5"]
+[ChapterURL "https://lichess.org/study/PSMKzNf9/xfV5tdXG"]
+[Annotator "https://lichess.org/@/RyanFourLC"]
+[FEN "r1b2rk1/pp3pbp/2p1npp1/8/2P2P2/1P1P1p2/PQ3PPP/R3KB1R w KQ - 0 12"]
+[SetUp "1"]
+[UTCDate "2021.10.24"]
+[UTCTime "18:43:03"]
+[ChapterMode "gamebook"]
+
+12. f5 { This is another attempt at defending this position for white, and there are probably several paths to victory, but try to find a knight move that attacks several weak squares in the enemy position. } 12... Nf4 { Opponent now definitely has to castle to try to control the e-file and keep the bishops away. } 13. O-O-O { There is only one thing currently preventing Be6#. } 13... Bxf5 (13... gxf5 { quadrupled pawns is of course very good, but there is a slightly better way of capturing the f5 pawn }) 14. Re1 { There are again probably several ways to win, but take advantage of the fact that the white bishop needs to remain defending d3, otherwise a game-ending fork will occur. } 14... fxg2 { Now there is no way for opponent to retain the only queen. We can stop here as it is very clearly game over. } *
+
+
+[Event "5D Chess Defended Pawn Ryan's Opening: 1. c4 with 7. Bc3"]
+[Date "2021.10.25"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5D Chess Defended Pawn Ryan's Opening"]
+[ChapterName "1. c4 with 7. Bc3"]
+[ChapterURL "https://lichess.org/study/PSMKzNf9/N6JVeyYb"]
+[Annotator "https://lichess.org/@/RyanFourLC"]
+[FEN "rqb2rk1/pp1pppbp/2p1nnp1/8/2P1N3/1P3N2/PB1PPPPP/RQ2KB1R w KQ - 2 7"]
+[SetUp "1"]
+[UTCDate "2021.10.25"]
+[UTCTime "19:53:01"]
+[ChapterMode "gamebook"]
+
+7. Bc3 { Capturing our knight immediately doesn't work well, so opponent may try to line up the queen-bishop battery before capturing.
+We have many ideas that we learned from previous chapters, a6 to play Qa7 and counter-attack f2, d5 to force the knight to make a decision, and Qf4 to pressure the opponent's knight.
+Which idea works best? } 7... d5 (7... a6 { Opponent can counter this with c5, they even have a check with Nxf6 do completely close the triagonal, so this doesn't quite work. }) (7... a5 { Opponent can counter this with c5, they even have a check with Nxf6 do completely close the triagonal, so this doesn't quite work. }) (7... Qf4 { This move is probably fine, but it is too complex for the purposes of this study. }) 8. cxd5 cxd5 9. Nxf6+ { Opponent has to capture now, or retreat with it and lose all of their pressure. } 9... exf6 10. Qb2 { When we played d5 we didn't just want to force the knight to capture, that pawn has a grand purpose. } 10... d4 11. Bxd4 { Opponent can't take the pawn with knight, as we've seen before Qf4 is deadly. } 11... Nxd4 12. Qxd4 { Opponent's king is far less safe than ours, but we should take one more precaution to safeguard our one weakness. } 12... h5 { We will stop here as all danger is gone from our position.
+The plans from here are very simple:
+Play Bg4, trade the knight and play f5 to activate the dark squared bishop.
+Put rooks on the open e/d files.
+Stockfish thinks this position is completely equal, which should mean that in 5D chess where king safety is more relevant, black is better. } *
+
+
+[Event "5D Chess Defended Pawn Ryan's Opening: 1. b4"]
+[Date "2021.10.25"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5D Chess Defended Pawn Ryan's Opening"]
+[ChapterName "1. b4"]
+[ChapterURL "https://lichess.org/study/PSMKzNf9/4O657JvV"]
+[Annotator "https://lichess.org/@/RyanFourLC"]
+[FEN "rqbnkbnr/pppppppp/8/8/8/8/PPPPPPPP/RQBNKBNR w KQkq - 0 1"]
+[SetUp "1"]
+[UTCDate "2021.10.25"]
+[UTCTime "20:16:36"]
+[ChapterMode "gamebook"]
+
+1. b4 { 1. b4 is barely different from 1. c4 at all. } 1... Nf6 2. Nf3 Ne6 3. Bb2 g6 4. Nc3 { If opponent moved the c-pawn here, we'd just transpose to an almost identical version of 1.c4. But doing this knight move is completely unimpressive, as it can't move to either of d5/e4. } 4... Bg7 { Here opponent has nothing, so 1. b4 will either transpose to 1.c4 or allow you to reach the setup with no difficulty. } *
+
+
+[Event "5D Chess Defended Pawn Ryan's Opening: 1. c4 with 3. d4"]
+[Date "2021.10.25"]
+[Result "*"]
+[Variant "Standard"]
+[ECO "?"]
+[Opening "?"]
+[StudyName "5D Chess Defended Pawn Ryan's Opening"]
+[ChapterName "1. c4 with 3. d4"]
+[ChapterURL "https://lichess.org/study/PSMKzNf9/hwJ8rH8f"]
+[Annotator "https://lichess.org/@/RyanFourLC"]
+[FEN "rqb1kb1r/pppppppp/4nn2/8/2P5/5N2/PP1PPPPP/RQBNKB1R w KQkq - 3 3"]
+[SetUp "1"]
+[UTCDate "2021.10.25"]
+[UTCTime "20:26:03"]
+[ChapterMode "gamebook"]
+
+3. d4 { Now we are rewarded for playing the most flexible knight moves, opponent has opened a line to their king, try to undermine the enemy pawns and open up the queen. } 3... b5 { d5 here is not possible for white as xc4 poses a checkmate threat with Qb4, and wins a pawn.
+c5 is not concerning to us, as then they can never play d5 to harass our knight } (3... c5 { d5 here is quite annoying, but this line is probably playable for black }) 4. b3 { Opponent tries to hold on to their plan of playing d5, but now we can strike back with our queen. } 4... Qb6 (4... bxc4 { Doing this to force a queen trade is fine. }) 5. Bd2 { Opponent has to stop the Qa5 mate threat, and now we can win a pawn.
+In general d4 is not a troubling move so long as you quickly attack their d4/c4 pawns and harass the open diagonal to their king. } *
+
+
