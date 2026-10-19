@@ -274,57 +274,6 @@ pub fn tuned_weights() -> Weights {
         // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
         // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
         // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
         ("ch_mat", 7.8),
         ("ch_psqt", 15.8),
         ("ch_pawn", 6.4),
