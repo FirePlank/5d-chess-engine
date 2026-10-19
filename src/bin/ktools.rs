@@ -1998,14 +1998,13 @@ fn netdata(args: &[String], out: &mut impl Write) {
     let want_fen = fen_path.is_some();
     // Base score: the evaluation the search uses (the tuned feature HCE).
     let ep = tuned_weights();
-    let chunks: Vec<(Vec<f32>, Vec<String>, Vec<f32>)> = std::thread::scope(|sc| {
+    let chunks: Vec<(Vec<f32>, Vec<String>)> = std::thread::scope(|sc| {
         let hs: Vec<_> = (0..threads)
             .map(|tid| {
                 let (lines, ep) = (&lines, &ep);
                 sc.spawn(move || {
                     let mut rec: Vec<f32> = Vec::new();
                     let mut fens: Vec<String> = Vec::new();
-                    let mut side: Vec<f32> = Vec::new();
                     let mut g = tid;
                     while g < lines.len() {
                         let line = &lines[g];
@@ -2046,7 +2045,7 @@ fn netdata(args: &[String], out: &mut impl Write) {
                         let Ok(mut s) = position_from_uci(pos) else { continue };
                         let mut ok = true;
                         let mut first_player = None;
-                        let mut pending: Vec<(String, Vec<f32>, bool, [f32; 15])> = Vec::new();
+                        let mut pending: Vec<(String, Vec<f32>, bool)> = Vec::new();
                         for (i, a) in acts.iter().enumerate() {
                             if i == opening {
                                 first_player = Some(s.get_present().1);
@@ -2069,11 +2068,7 @@ fn netdata(args: &[String], out: &mut impl Write) {
                                         fen = format!("{}|{}", s.board(lo, t, c).get_fen(true), if c { "b" } else { "w" });
                                     }
                                 }
-                                // The strategy-guide features (fi::JUR ..), from the side to move's view.
-                                let fv = kairos::engine::hce::features_with(&s, false);
-                                let sg = if s.get_present().1 { -1.0 } else { 1.0 };
-                                let sv: [f32; 15] = std::array::from_fn(|j| sg * fv[kairos::engine::hce::fi::JUR + j] as f32);
-                                pending.push((fen, r, s.get_present().1, sv));
+                                pending.push((fen, r, s.get_present().1));
                             }
                             if apply_uci_moves(&mut s, &format!("{} submit", a)).is_err() {
                                 ok = false;
@@ -2087,8 +2082,7 @@ fn netdata(args: &[String], out: &mut impl Write) {
                         // NEW's colour and the result for white.
                         let new_black = if new_first { first } else { !first };
                         let white = if score == 0.5 { 0.5 } else if (score == 1.0) != new_black { 1.0 } else { 0.0 };
-                        for (fen, mut r, stm_black, sv) in pending {
-                            side.extend_from_slice(&sv);
+                        for (fen, mut r, stm_black) in pending {
                             r.push(if stm_black { 1.0 - white } else { white });
                             r.push(g as f32 - threads as f32);
                             rec.extend(r);
@@ -2097,7 +2091,7 @@ fn netdata(args: &[String], out: &mut impl Write) {
                             }
                         }
                     }
-                    (rec, fens, side)
+                    (rec, fens)
                 })
             })
             .collect();
@@ -2105,22 +2099,16 @@ fn netdata(args: &[String], out: &mut impl Write) {
     });
     let mut bytes: Vec<u8> = Vec::new();
     let mut n = 0usize;
-    let mut side_bytes: Vec<u8> = Vec::new();
-    for (c, _, sd) in &chunks {
-        for v in sd {
-            side_bytes.extend_from_slice(&v.to_le_bytes());
-        }
+    for (c, _) in &chunks {
         n += c.len() / (NI + 4);
         for v in c {
             bytes.extend_from_slice(&v.to_le_bytes());
         }
     }
     std::fs::write(out_path, &bytes).expect("write records");
-    // Sidecar: the 15 strategy-guide features per record (f32), for training a net on any weights of them.
-    std::fs::write(format!("{}.side", out_path), &side_bytes).expect("write sidecar");
     if let Some(p) = &fen_path {
         let mut text = String::new();
-        for (_, f, _) in &chunks {
+        for (_, f) in &chunks {
             for line in f {
                 text.push_str(line);
                 text.push('\n');
