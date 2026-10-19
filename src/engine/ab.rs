@@ -18,7 +18,7 @@ use crate::misc::geometry::Hc;
 use crate::core::multiverse::{active_range_for, next_turn};
 use crate::core::piece::*;
 use crate::core::state::promotion_rank;
-use crate::core::state::{Mark, State};
+use crate::core::state::{Mark, MateType, State};
 use crate::misc::geometry::SearchSpace;
 use crate::misc::integer_set::Index;
 use crate::misc::ordering::{AxisOrders, HcOrdering};
@@ -52,27 +52,20 @@ const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
 const ROOT_LMR_MIN_INDEX: usize = 6;
-/// The most time (ms) the sac table's probes before the search may take whatever the time plan:
-/// a share of the optimum, which for an unbounded analysis (a day's `movetime`) is hours,
-/// while depth 1 should come at once.
+/// The most time (ms) each of the root's probes before the search (a checkmate in one by a
+/// move on an optional board or by a travel, the scan of every action for one, the sac table's
+/// probes) may take whatever the time plan: they are shares of the optimum, which for an
+/// unbounded analysis (a day's `movetime`) is hours, while depth 1 should come at once. It only
+/// binds past a move budget of 8 s (10 s for the scan), which no game on a clock at the SPRT time controls comes near.
 const ROOT_PROBE_CAP_MS: u64 = 250;
-/// What the root does before its first iteration is bounded by counts (hypercuboids looked at,
-/// actions tried), never by time: the same work on any machine and for any `movetime` (an
-/// analysis may run forever, its depth 1 must not wait for a budget that scales with that).
-/// Hypercuboids per checking travel in the probes for a checkmate in one:
-const ROOT_PROBE_STEPS: u32 = 2048;
-/// Hypercuboids of each enumeration of the scan of every action for a checkmate in one, and the
-/// most actions it tries; the same for the first scan of the actions with a checking entry.
-const ROOT_SCAN_STEPS: u32 = 4096;
-const ROOT_SCAN_ACTIONS: usize = 1024;
-const ROOT_CHECKING_SCAN_STEPS: u32 = 512;
-const ROOT_CHECKING_SCAN_ACTIONS: usize = 64;
-/// Hypercuboids to the first root action in the space without moves on optional boards (past
-/// them the whole space is enumerated instead), and to the rest of the root actions.
-const ROOT_FIRST_STEPS: u32 = 1 << 16;
-const ROOT_GEN_STEPS: u32 = 1 << 20;
+/// The same for enumerating the root actions (a quarter of the optimum; an eighth to the first
+/// action).
+const ROOT_GEN_CAP_MS: u64 = 4000;
+const ROOT_FIRST_CAP_MS: u64 = 2000;
 /// Root actions with a move on an optional board tried for a checkmate in one.
 const ROOT_FUTURE_MATE_PROBE: usize = 16;
+/// Time for that probe without a time plan (with one: a 32nd of the optimum).
+const ROOT_FUTURE_MATE_MS: u64 = 50;
 /// Root actions with a move on an optional board added when every root action loses to a
 /// mate (interior nodes take up to their action cap).
 const ROOT_WIDEN_CAP: usize = 256;
@@ -87,6 +80,12 @@ const TRAVEL_MATE_STEPS: u32 = 64;
 const TRAVEL_MATE_COMPLETIONS: usize = 8;
 /// The same at the root, which has the time for more.
 const ROOT_TRAVEL_MATE_COMPLETIONS: usize = 512;
+/// Time of the root's scan of every legal action for a checkmate in one: without a time plan,
+/// and as a share of the optimum with one.
+const ROOT_MATE_SCAN_MS: u64 = 100;
+const ROOT_MATE_SCAN_DIV: u64 = 40;
+/// The most time of that scan for the actions with a checking entry.
+const ROOT_CHECKING_SCAN_MS: u64 = 8;
 /// Hypercuboids the cursor may take on a capturing travel (`travel_captures`) before it gives
 /// it up (when most of its combinations with the other boards' moves are illegal, finding one
 /// can take thousands).
@@ -1082,7 +1081,7 @@ impl AlphaBeta {
     /// travel moving the present back (a new active timeline in the past). A check with no
     /// evasion within `TRAVEL_MATE_STEPS` hypercuboids is a mate. The checking travels tried
     /// (each alone, as an action) are added to `checks` when given.
-    fn travel_mate(&mut self, s: &mut State, info: &mut HcInfo, ss: &SearchSpace, scratch: &mut OrderScratch, mut checks: Option<&mut Vec<MoveSeq>>, completions: usize, steps: Option<u32>) -> Option<MoveSeq> {
+    fn travel_mate(&mut self, s: &mut State, info: &mut HcInfo, ss: &SearchSpace, scratch: &mut OrderScratch, mut checks: Option<&mut Vec<MoveSeq>>, completions: usize) -> Option<MoveSeq> {
         let dim = info.dimension();
         let fba = info.first_branch_axis();
         let present = s.get_present();
@@ -1149,7 +1148,6 @@ impl AlphaBeta {
             // captures or blocks, which the natural order reaches last.
             let mut probe = BestFirstCursor::default();
             self.start_actions(s, info, &mut probe, scratch, SearchSpace::from_vec(vec![h]), false);
-            probe.set_budget(steps);
             for k in 0..completions {
                 if interrupted() {
                     return None;
@@ -1285,9 +1283,9 @@ impl AlphaBeta {
     /// travels back from a board the side to move need not play (ahead of the present, or
     /// on an inactive timeline) and gives check on arrival, with moves on the boards that must
     /// be played. Only the first `ROOT_FUTURE_MATE_PROBE` actions (best first) of each such
-    /// travel are tried, within `ROOT_PROBE_STEPS` hypercuboids, each a mate when its check has
-    /// no evasion within `TRAVEL_MATE_STEPS` hypercuboids (`has_evasion`): counts, not time.
-    fn future_mate_in_one(&mut self, s: &mut State, info: &HcInfo, ss: &SearchSpace, scratch: &mut OrderScratch) -> Option<MoveSeq> {
+    /// travel are tried. Proving that a travel has no legal action at all can take seconds:
+    /// the caller bounds the time (see `interrupt_on`).
+    fn future_mate_in_one(&mut self, s: &State, info: &HcInfo, ss: &SearchSpace) -> Option<MoveSeq> {
         let present = s.get_present();
         let (amin, amax) = s.get_active_range();
         let (lo, hi) = s.get_lines_range();
@@ -1302,7 +1300,8 @@ impl AlphaBeta {
         // travel branches off a new timeline, arrival (axis, coordinate).
         let fba = info.first_branch_axis();
         let mut travels = Vec::new();
-        let mut det = CheckDetector::new(info, s, scratch);
+        let mut scratch = OrderScratch::default();
+        let mut det = CheckDetector::new(info, s, &mut scratch);
         let u = info.get_universe();
         // Branch axes share their entries: the first one stands for all.
         for n in 0..info.dimension().min(fba + 1) {
@@ -1315,8 +1314,10 @@ impl AlphaBeta {
                 }
             }
         }
-        det.finish(scratch);
+        det.finish(&mut scratch);
         let mut cursor = BestFirstCursor::default();
+        let mut work = s.clone();
+        work.enable_undo();
         for (k, &(fa, idx, arrival)) in travels.iter().enumerate() {
             let mut space = SearchSpace::default();
             for hc in &ss.hcs {
@@ -1336,11 +1337,10 @@ impl AlphaBeta {
                 space.hcs.push(h);
             }
             if k == 0 {
-                self.start_actions(s, info, &mut cursor, scratch, space, false);
+                self.start_actions(s, info, &mut cursor, &mut scratch, space, false);
             } else {
                 cursor.restart(info, space);
             }
-            cursor.set_budget(Some(ROOT_PROBE_STEPS));
             for _ in 0..ROOT_FUTURE_MATE_PROBE {
                 let act = cursor.next(info, s);
                 // An interrupted enumeration finds no action, mate or not.
@@ -1348,9 +1348,9 @@ impl AlphaBeta {
                     return None;
                 }
                 let Some(act) = act else { break };
-                let mark = Self::make(s, &act);
-                let mate = self.in_check(s) && !self.has_evasion(s);
-                s.unmake(mark);
+                let mark = Self::make(&mut work, &act);
+                let mate = self.in_check(&work) && work.get_mate_type() == MateType::Checkmate;
+                work.unmake(mark);
                 if mate && !interrupted() {
                     return Some(act);
                 }
@@ -1359,18 +1359,19 @@ impl AlphaBeta {
         None
     }
 
-    /// A checkmate in one among the legal actions of `s`, as far as the counts go
-    /// (`ROOT_CHECKING_SCAN_*`, `ROOT_SCAN_*`): first the actions containing a precomputed
-    /// checking entry (most mates), then all of them. Returns the first mating action found.
-    fn root_mate_scan(&mut self, s: &mut State, info: &mut HcInfo, ss: &SearchSpace, scratch: &mut OrderScratch) -> Option<MoveSeq> {
+    /// A checkmate in one among the legal actions of `s`, within the time: first the actions
+    /// containing a precomputed checking entry (most mates), then all of them. Returns the
+    /// first mating action found.
+    fn root_mate_scan(&mut self, s: &State, info: &mut HcInfo, ss: &SearchSpace, end: Instant, stop: &AtomicBool) -> Option<MoveSeq> {
         let dim = info.dimension();
         let fba = info.first_branch_axis();
         info.materialize_branch(s);
         let info: &HcInfo = info;
+        let mut scratch = OrderScratch::default();
         // The entries giving check (branch axes share theirs: the first one stands for all).
         let mut checking: Vec<(usize, Index)> = Vec::new();
         {
-            let mut det = CheckDetector::new(info, s, scratch);
+            let mut det = CheckDetector::new(info, s, &mut scratch);
             let u = info.get_universe();
             for n in 0..dim.min(fba + 1) {
                 for i in u[n].iter() {
@@ -1379,8 +1380,11 @@ impl AlphaBeta {
                     }
                 }
             }
-            det.finish(scratch);
+            det.finish(&mut scratch);
         }
+        let _probe = interrupt_on(stop, Some(end));
+        let mut work = s.clone();
+        work.enable_undo();
         if !checking.is_empty() {
             let mut space = SearchSpace::default();
             for &(n, i) in &checking {
@@ -1402,35 +1406,36 @@ impl AlphaBeta {
                     }
                 }
             }
-            // A few actions (it finds the usual mates at once): the rest is for the full scan below.
-            let found = self.scan_for_mate(s, info, scratch, space, ROOT_CHECKING_SCAN_ACTIONS, ROOT_CHECKING_SCAN_STEPS);
+            // A quarter of the time, at most a few ms (it finds the usual mates at once): the
+            // rest is for the full scan below.
+            let quarter = (end.saturating_duration_since(Instant::now()) / 4).min(Duration::from_millis(ROOT_CHECKING_SCAN_MS));
+            let found = {
+                let _first = interrupt_on(stop, Some(Instant::now() + quarter));
+                self.scan_for_mate(s, info, &mut scratch, space, &mut work)
+            };
             if found.is_some() {
                 return found;
             }
-            if interrupted() {
+            if Instant::now() >= end || stop.load(Ordering::Relaxed) {
                 return None;
             }
         }
-        // Then every legal action, as far as the counts go: the checking entries are not a
+        // Then every legal action, with whatever time is left: the checking entries are not a
         // sure necessary condition (a mate can come from a discovered check or one the detector
         // does not flag), and a position with few actions is scanned whole in a moment.
-        self.scan_for_mate(s, info, scratch, SearchSpace::from_vec(ss.hcs.clone()), ROOT_SCAN_ACTIONS, ROOT_SCAN_STEPS)
+        self.scan_for_mate(s, info, &mut scratch, SearchSpace::from_vec(ss.hcs.clone()), &mut work)
     }
 
-    /// The first of the first `limit` actions of `space` after which `s` is checkmate, each
-    /// enumeration looking at `steps` hypercuboids at most. Two enumerations take turns, the
-    /// best-first one (checks, then captures) and the natural order: with millions of actions
-    /// either may reach a mate long before the other.
-    fn scan_for_mate(&mut self, s: &mut State, info: &HcInfo, scratch: &mut OrderScratch, space: SearchSpace, limit: usize, steps: u32) -> Option<MoveSeq> {
+    /// The first action of `space` after which `work`, a copy of `s`, is checkmate. Two
+    /// enumerations take turns, the best-first one (checks, then captures) and the natural
+    /// order: with millions of actions either may reach a mate long before the other.
+    fn scan_for_mate(&mut self, s: &State, info: &HcInfo, scratch: &mut OrderScratch, space: SearchSpace, work: &mut State) -> Option<MoveSeq> {
         let mut natural = HcCursor::new(SearchSpace::from_vec(space.hcs.clone()), HcOrdering::Natural);
-        natural.budget = steps;
         let mut best_first = BestFirstCursor::default();
         self.start_actions(s, info, &mut best_first, scratch, space, false);
-        best_first.set_budget(Some(steps));
         let (mut natural_done, mut best_done) = (false, false);
         let mut turn = 0usize;
-        let mut tried = 0usize;
-        while !(natural_done && best_done) && tried < limit {
+        while !(natural_done && best_done) {
             turn += 1;
             let use_natural = (turn % 2 == 0 && !natural_done) || best_done;
             let act = if use_natural { natural.next(info, s) } else { best_first.next(info, s) };
@@ -1445,10 +1450,11 @@ impl AlphaBeta {
                 }
                 continue;
             };
-            tried += 1;
-            let mark = Self::make(s, &act);
-            let mate = self.in_check(s) && !self.has_evasion(s);
-            s.unmake(mark);
+            let mark = Self::make(work, &act);
+            // Most checks have an evasion within a step or two: only an action without one
+            // found is looked at exactly.
+            let mate = self.in_check(work) && !self.has_evasion(work) && work.get_mate_type() == MateType::Checkmate;
+            work.unmake(mark);
             if mate && !interrupted() {
                 return Some(act);
             }
@@ -2004,7 +2010,7 @@ impl AlphaBeta {
         if ply <= TRAVEL_MATE_PLY {
             let mate = {
                 let NodeBufs { info, order, .. } = &mut *nb;
-                self.travel_mate(s, info, &ss, order, if ply == 1 { Some(&mut tchecks) } else { None }, TRAVEL_MATE_COMPLETIONS, None)
+                self.travel_mate(s, info, &ss, order, if ply == 1 { Some(&mut tchecks) } else { None }, TRAVEL_MATE_COMPLETIONS)
             };
             if let Some(act) = mate {
                 self.bufs.push(nb);
@@ -2765,22 +2771,34 @@ impl AlphaBeta {
         // Root actions (all of them, up to the root cap), ordered heuristically.
         let (mut hc, ss) = HcInfo::build_hc(root);
         // The root (like every node) leaves out moves on optional boards: a mate in one by a
-        // travel back from one of them is played unless the search finds a mate in one. Then
-        // a checkmate in one by a travel the root's actions come to late or never (one creating
-        // a timeline comes after every other action, and the root takes at most ROOT_CAP), as
-        // interior nodes look for it (`travel_mate`): the checking travels it tries are root
-        // actions too (see below). Then every legal action tested for checkmate, checking ones
-        // first (a mate in one needs specific helper moves on the other boards that no probe
-        // before is sure to pick). All bounded by counts, none by time.
-        let mut travel_checks: Vec<MoveSeq> = Vec::new();
+        // travel back from one of them is played unless the search finds a mate in one.
         let future_mate = {
+            let budget = plan.as_ref().map_or(ROOT_FUTURE_MATE_MS, |p| (p.optimum / 32).clamp(1, ROOT_PROBE_CAP_MS));
+            let end = Instant::now() + Duration::from_millis(budget);
+            let _probe = interrupt_on(stop, Some(deadline.map_or(end, |d| d.min(end))));
+            self.future_mate_in_one(root, &hc, &ss)
+        };
+        // A checkmate in one by a travel the root's actions come to late or never (one creating
+        // a timeline comes after every other action, and the root takes at most ROOT_CAP), as
+        // interior nodes look for it (`travel_mate`).
+        // The checking travels it tries are root actions too (see below).
+        let mut travel_checks: Vec<MoveSeq> = Vec::new();
+        let future_mate = future_mate.or_else(|| {
             let mut s = root.clone();
             s.enable_undo();
-            let mut scratch = OrderScratch::default();
-            self.future_mate_in_one(&mut s, &hc, &ss, &mut scratch)
-                .or_else(|| self.travel_mate(&mut s, &mut hc, &ss, &mut scratch, Some(&mut travel_checks), ROOT_TRAVEL_MATE_COMPLETIONS, Some(ROOT_PROBE_STEPS)))
-                .or_else(|| self.root_mate_scan(&mut s, &mut hc, &ss, &mut scratch))
-        };
+            let budget = plan.as_ref().map_or(ROOT_FUTURE_MATE_MS, |p| (p.optimum / 32).clamp(1, ROOT_PROBE_CAP_MS));
+            let end = Instant::now() + Duration::from_millis(budget);
+            let _probe = interrupt_on(stop, Some(deadline.map_or(end, |d| d.min(end))));
+            self.travel_mate(&mut s, &mut hc, &ss, &mut OrderScratch::default(), Some(&mut travel_checks), ROOT_TRAVEL_MATE_COMPLETIONS)
+        });
+        // Every legal action tested for checkmate, checking ones first, as far as the time goes
+        // (a mate in one needs specific helper moves on the other boards that no probe above
+        // is sure to pick).
+        let future_mate = future_mate.or_else(|| {
+            let budget = plan.as_ref().map_or(ROOT_MATE_SCAN_MS, |p| (p.optimum / ROOT_MATE_SCAN_DIV).clamp(1, ROOT_PROBE_CAP_MS));
+            let end = Instant::now() + Duration::from_millis(budget);
+            self.root_mate_scan(root, &mut hc, &ss, deadline.map_or(end, |d| d.min(end)), stop)
+        });
         // A checkmate in one the probes found is proven (each confirms the mate exactly): it is
         // played at once, with no root actions generated and no search (MultiPV wants the
         // other lines too).
@@ -2802,23 +2820,26 @@ impl AlphaBeta {
         // Enumerating every root action can take seconds with many timelines: spend at most
         // a quarter of the budget on it (always keeping at least one action), and stop at once
         // when told to.
-        let mut gen_bounded = false;
+        let gen_deadline = plan.as_ref().map(|p| start + Duration::from_millis((p.optimum / 4).min(ROOT_GEN_CAP_MS)));
         let mut complete = false;
         while roots.len() < ROOT_CAP {
-            if !roots.is_empty() && stop.load(Ordering::Relaxed) {
+            if !roots.is_empty() && (gen_deadline.map(|d| Instant::now() >= d).unwrap_or(false) || stop.load(Ordering::Relaxed)) {
                 break;
             }
-            // The space without moves on optional boards gets ROOT_FIRST_STEPS hypercuboids to yield
-            // a first action: when most of its points fail it can take far longer than the whole
-            // space (whose actions are then generated instead). The rest of the actions get
-            // ROOT_GEN_STEPS.
-            if roots.is_empty() {
-                agen.set_budget(if full.is_some() { Some(ROOT_FIRST_STEPS) } else { None });
-            } else if !gen_bounded {
-                agen.set_budget(Some(ROOT_GEN_STEPS));
-                gen_bounded = true;
-            }
-            let next = agen.next(&hc, root);
+            // The space without moves on optional boards gets an eighth of the time to yield a
+            // first action: when most of its points fail it can take far longer than the whole
+            // space (whose actions are then generated instead).
+            let quick = match (roots.is_empty() && full.is_some(), plan.as_ref()) {
+                (true, Some(p)) => Some(start + Duration::from_millis((p.optimum / 8).min(ROOT_FIRST_CAP_MS))),
+                _ => None,
+            };
+            let next = match quick {
+                Some(q) => {
+                    let _quick = interrupt_on(stop, Some(deadline.map_or(q, |d| d.min(q))));
+                    agen.next(&hc, root)
+                }
+                None => agen.next(&hc, root),
+            };
             match next {
                 Some(a) => {
                     if full.is_some() && Self::travel_class(&mut agen, travels) {
@@ -2831,8 +2852,6 @@ impl AlphaBeta {
                 // Out of time: with no action found yet, none can be played.
                 None if interrupted() => break,
                 None if roots.is_empty() && full.is_some() => agen.restart(&hc, full.take().unwrap()),
-                // Out of steps with actions found: the root searches those.
-                None if agen.budget_spent() => break,
                 None => {
                     complete = true;
                     break;
@@ -3339,7 +3358,6 @@ impl AlphaBeta {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::state::MateType;
 
     /// A thread's result; mate scores proven.
     fn result(from: u32, score: i32, depth: i32, thread_id: usize) -> ThreadResult {
