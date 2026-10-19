@@ -37,6 +37,8 @@ jobs:
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/site_key -o IdentitiesOnly=yes"
           git clone --depth 1 git@github.com:FirePlank/5d-chess-lab.git site
           cd site
+          # Deleted and created again: moving a tag to the commit it is already on starts nothing.
+          git push origin :refs/tags/engine-sync 2>/dev/null || true
           git tag -f engine-sync
-          git push -f origin engine-sync
+          git push origin engine-sync
           echo "Notified 5D Chess Lab of $GITHUB_SHA"
