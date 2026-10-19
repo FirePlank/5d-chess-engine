@@ -42,8 +42,6 @@ const ROOT_CAP: usize = 1000;
 const BATCH: usize = 12;
 const QDEPTH: i32 = 2;
 const QCAP: usize = 4;
-/// Static eval units past beta for each further ply of the null-move reduction.
-const NMP_EVAL_DIV: i32 = 3000;
 /// Internal iterative reduction: nodes of this depth or more without a TT action lose a ply.
 const IIR_DEPTH: i32 = 4;
 /// Singular extension: depth from which the TT action is tested, and the margin per depth.
@@ -1898,8 +1896,7 @@ impl AlphaBeta {
                 }
             }
             if depth >= NMP_MIN_DEPTH && !self.seek_mate && Self::has_null_material(s) && self.static_eval(s) >= beta {
-                // The further the static eval is past beta, the deeper the null move is cut.
-                let r = NMP_R + depth / NMP_DIV + ((self.static_eval(s) - beta) / NMP_EVAL_DIV).clamp(0, 3);
+                let r = NMP_R + depth / NMP_DIV;
                 let mark = s.make_null();
                 let v = -self.negamax(s, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
                 s.unmake(mark);
