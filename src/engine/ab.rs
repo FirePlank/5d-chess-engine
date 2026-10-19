@@ -1789,7 +1789,6 @@ impl AlphaBeta {
 
         // Remembered actions first, before paying for the action space: the TT action,
         // then the killers.
-        let no_tt = tt_action.is_none();
         let mut pre_tried: Vec<MoveSeq> = Vec::new();
         let mut tt_ext = 0;
         if depth >= SING_DEPTH && self.excluded.is_none() && ply > 0 {
@@ -2001,7 +2000,7 @@ impl AlphaBeta {
                         let ic = self.in_check(s);
                         child_check = Some(ic);
                         if !ic {
-                            r = (lmr(depth, searched) - pv as i32 + no_tt as i32).clamp(0, depth - 2);
+                            r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
                         }
                     }
                     let mut v;
