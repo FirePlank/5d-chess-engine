@@ -1,8 +1,9 @@
 # Tell 5D Chess Lab (FirePlank/5d-chess-lab), which builds this engine for the browser, that
-# the engine changed: its Pages workflow then moves its engine pin to this commit, checks the
-# browser build and deploys. Needs a SITE_DISPATCH_TOKEN secret (a fine-grained token with
-# Contents: read and write on 5d-chess-lab); without one, the site still picks the change up
-# within the hour.
+# the engine changed: moving its `engine-sync` tag starts its Pages workflow, which moves its
+# engine pin to this commit, checks the browser build and deploys. The SITE_DEPLOY_KEY secret
+# is the private half of a deploy key (write access) on 5d-chess-lab only; a push with it, unlike
+# one with this repository's GITHUB_TOKEN, starts workflows there. Without the secret the site
+# still picks the change up when its own schedule runs.
 name: Notify 5D Chess Lab
 
 on:
@@ -14,6 +15,7 @@ on:
       - 'build.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
+  workflow_dispatch: {}
 
 permissions: {}
 
@@ -21,17 +23,20 @@ jobs:
   notify:
     runs-on: ubuntu-24.04
     steps:
-      - name: repository_dispatch to FirePlank/5d-chess-lab
+      - name: Move 5d-chess-lab's engine-sync tag
         env:
-          TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
+          KEY: ${{ secrets.SITE_DEPLOY_KEY }}
         run: |
-          if [ -z "$TOKEN" ]; then
-            echo "No SITE_DISPATCH_TOKEN secret: the site's hourly check picks this commit up."
+          if [ -z "$KEY" ]; then
+            echo "No SITE_DEPLOY_KEY secret: the site picks this commit up when its schedule runs."
             exit 0
           fi
-          curl -fsS -X POST \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/FirePlank/5d-chess-lab/dispatches \
-            -d "{\"event_type\":\"engine-updated\",\"client_payload\":{\"sha\":\"$GITHUB_SHA\"}}"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/site_key && chmod 600 ~/.ssh/site_key
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/site_key -o IdentitiesOnly=yes"
+          git clone --depth 1 git@github.com:FirePlank/5d-chess-lab.git site
+          cd site
+          git tag -f engine-sync
+          git push -f origin engine-sync
           echo "Notified 5D Chess Lab of $GITHUB_SHA"
