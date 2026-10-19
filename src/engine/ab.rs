@@ -48,7 +48,7 @@ const IIR_DEPTH: i32 = 4;
 const SING_DEPTH: i32 = 4;
 const SING_MARGIN: i32 = 100;
 const LMR_MIN_DEPTH: i32 = 3;
-const LMR_MIN_INDEX: usize = 3;
+const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
 const ROOT_LMR_MIN_INDEX: usize = 6;
