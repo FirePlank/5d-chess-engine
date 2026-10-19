@@ -52,6 +52,16 @@ const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
 const ROOT_LMR_MIN_INDEX: usize = 6;
+/// The most time (ms) each of the root's probes before the search (a checkmate in one by a
+/// move on an optional board or by a travel, the scan of every action for one, the sac table's
+/// probes) may take whatever the time plan: they are shares of the optimum, which for an
+/// unbounded analysis (a day's `movetime`) is hours, while depth 1 should come at once. It only
+/// binds past a move budget of 8 s (10 s for the scan), which no game on a clock at the SPRT time controls comes near.
+const ROOT_PROBE_CAP_MS: u64 = 250;
+/// The same for enumerating the root actions (a quarter of the optimum; an eighth to the first
+/// action).
+const ROOT_GEN_CAP_MS: u64 = 4000;
+const ROOT_FIRST_CAP_MS: u64 = 2000;
 /// Root actions with a move on an optional board tried for a checkmate in one.
 const ROOT_FUTURE_MATE_PROBE: usize = 16;
 /// Time for that probe without a time plan (with one: a 32nd of the optimum).
@@ -2735,7 +2745,7 @@ impl AlphaBeta {
         // The f7 sac table: local outcomes of the travels (and created timelines) this
         // position may need, kept for the rest of the game.
         match plan.as_ref() {
-            Some(p) => super::sac::prepare(root, u64::MAX, Some(start + Duration::from_millis(p.optimum / SAC_PREP_DIV)), Some(stop), super::sac::PROBE_NODES, false),
+            Some(p) => super::sac::prepare(root, u64::MAX, Some(start + Duration::from_millis((p.optimum / SAC_PREP_DIV).min(ROOT_PROBE_CAP_MS))), Some(stop), super::sac::PROBE_NODES, false),
             None => super::sac::prepare(root, 0, None, Some(stop), super::sac::PROBE_NODES, false),
         };
         self.begin_search(stop, limits.nodes, deadline);
@@ -2763,7 +2773,7 @@ impl AlphaBeta {
         // The root (like every node) leaves out moves on optional boards: a mate in one by a
         // travel back from one of them is played unless the search finds a mate in one.
         let future_mate = {
-            let budget = plan.as_ref().map_or(ROOT_FUTURE_MATE_MS, |p| (p.optimum / 32).max(1));
+            let budget = plan.as_ref().map_or(ROOT_FUTURE_MATE_MS, |p| (p.optimum / 32).clamp(1, ROOT_PROBE_CAP_MS));
             let end = Instant::now() + Duration::from_millis(budget);
             let _probe = interrupt_on(stop, Some(deadline.map_or(end, |d| d.min(end))));
             self.future_mate_in_one(root, &hc, &ss)
@@ -2776,7 +2786,7 @@ impl AlphaBeta {
         let future_mate = future_mate.or_else(|| {
             let mut s = root.clone();
             s.enable_undo();
-            let budget = plan.as_ref().map_or(ROOT_FUTURE_MATE_MS, |p| (p.optimum / 32).max(1));
+            let budget = plan.as_ref().map_or(ROOT_FUTURE_MATE_MS, |p| (p.optimum / 32).clamp(1, ROOT_PROBE_CAP_MS));
             let end = Instant::now() + Duration::from_millis(budget);
             let _probe = interrupt_on(stop, Some(deadline.map_or(end, |d| d.min(end))));
             self.travel_mate(&mut s, &mut hc, &ss, &mut OrderScratch::default(), Some(&mut travel_checks), ROOT_TRAVEL_MATE_COMPLETIONS)
@@ -2785,7 +2795,7 @@ impl AlphaBeta {
         // (a mate in one needs specific helper moves on the other boards that no probe above
         // is sure to pick).
         let future_mate = future_mate.or_else(|| {
-            let budget = plan.as_ref().map_or(ROOT_MATE_SCAN_MS, |p| (p.optimum / ROOT_MATE_SCAN_DIV).max(1));
+            let budget = plan.as_ref().map_or(ROOT_MATE_SCAN_MS, |p| (p.optimum / ROOT_MATE_SCAN_DIV).clamp(1, ROOT_PROBE_CAP_MS));
             let end = Instant::now() + Duration::from_millis(budget);
             self.root_mate_scan(root, &mut hc, &ss, deadline.map_or(end, |d| d.min(end)), stop)
         });
@@ -2810,7 +2820,7 @@ impl AlphaBeta {
         // Enumerating every root action can take seconds with many timelines: spend at most
         // a quarter of the budget on it (always keeping at least one action), and stop at once
         // when told to.
-        let gen_deadline = plan.as_ref().map(|p| start + Duration::from_millis(p.optimum / 4));
+        let gen_deadline = plan.as_ref().map(|p| start + Duration::from_millis((p.optimum / 4).min(ROOT_GEN_CAP_MS)));
         let mut complete = false;
         while roots.len() < ROOT_CAP {
             if !roots.is_empty() && (gen_deadline.map(|d| Instant::now() >= d).unwrap_or(false) || stop.load(Ordering::Relaxed)) {
@@ -2820,7 +2830,7 @@ impl AlphaBeta {
             // first action: when most of its points fail it can take far longer than the whole
             // space (whose actions are then generated instead).
             let quick = match (roots.is_empty() && full.is_some(), plan.as_ref()) {
-                (true, Some(p)) => Some(start + Duration::from_millis(p.optimum / 8)),
+                (true, Some(p)) => Some(start + Duration::from_millis((p.optimum / 8).min(ROOT_FIRST_CAP_MS))),
                 _ => None,
             };
             let next = match quick {
