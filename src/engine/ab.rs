@@ -123,6 +123,8 @@ const RFP_MARGIN: i32 = 250;
 const NMP_MIN_DEPTH: i32 = 3;
 const NMP_R: i32 = 2;
 const NMP_DIV: i32 = 4;
+/// A hint bound (see `TtTable::hints`) cuts a non-PV node off when it clears the window by this.
+const HINT_MARGIN: i32 = 200;
 const DEFAULT_HASH_MB: usize = 64;
 /// Static evaluations are kept within +-EVAL_MAX, well clear of mate scores.
 const EVAL_MAX: i32 = 20000;
@@ -163,6 +165,11 @@ struct TtSlot {
 /// clearing it costs nothing until slots are used.
 struct TtTable {
     slots: Vec<TtSlot>,
+    /// The hint table: a quarter as many slots, keyed by `State::frontier_hash`, so a position
+    /// reached by another move order (other earlier boards, the same boards in play) finds
+    /// what was learnt about it. Its actions are only tried first, after a legality check;
+    /// its scores are never trusted for a cutoff.
+    hints: Vec<TtSlot>,
     /// Some stored action spilled to the heap (entries then need dropping one by one).
     spilled: AtomicBool,
 }
@@ -178,17 +185,20 @@ impl TtTable {
 
     /// An empty table of `n` slots.
     fn with_len(n: usize) -> Self {
+        TtTable { slots: Self::zeroed(n), hints: Self::zeroed((n / 4).max(1)), spilled: AtomicBool::new(false) }
+    }
+
+    fn zeroed(n: usize) -> Vec<TtSlot> {
         let layout = std::alloc::Layout::array::<TtSlot>(n).expect("tt size");
         // SAFETY: an all-zero `TtSlot` is valid (unlocked, empty bound, empty inline action),
         // and the block is allocated with the layout `Vec` uses for this capacity.
-        let slots = unsafe {
+        unsafe {
             let p = std::alloc::alloc_zeroed(layout) as *mut TtSlot;
             if p.is_null() {
                 std::alloc::handle_alloc_error(layout);
             }
             Vec::from_raw_parts(p, n, n)
-        };
-        TtTable { slots, spilled: AtomicBool::new(false) }
+        }
     }
 
     fn len(&self) -> usize {
@@ -199,7 +209,18 @@ impl TtTable {
     /// another position or another thread holds the lock.
     #[inline]
     fn probe<R>(&self, key: u64, f: impl FnOnce(&TtEntry) -> R) -> Option<R> {
-        let slot = &self.slots[(key as usize) & (self.slots.len() - 1)];
+        Self::probe_in(&self.slots, key, f)
+    }
+
+    /// The hint table's action for the frontier key `fkey` (see `hints`), if any.
+    #[inline]
+    fn hint(&self, fkey: u64) -> Option<(i32, i32, Bound, MoveSeq)> {
+        Self::probe_in(&self.hints, fkey, |e| (e.score, e.depth as i32, e.bound, e.action.clone())).filter(|h| !h.3.is_empty())
+    }
+
+    #[inline]
+    fn probe_in<R>(slots: &[TtSlot], key: u64, f: impl FnOnce(&TtEntry) -> R) -> Option<R> {
+        let slot = &slots[(key as usize) & (slots.len() - 1)];
         if slot.lock.swap(true, Ordering::Acquire) {
             return None;
         }
@@ -211,7 +232,17 @@ impl TtTable {
     }
 
     fn store(&self, key: u64, depth: i32, bound: Bound, score: i32, proven: bool, action: &MoveSeq) {
-        let slot = &self.slots[(key as usize) & (self.slots.len() - 1)];
+        self.store_in(&self.slots, key, depth, bound, score, proven, action);
+    }
+
+    /// Remember `action` (the best one found at `depth`) for the frontier key `fkey`.
+    fn store_hint(&self, fkey: u64, depth: i32, bound: Bound, score: i32, action: &MoveSeq) {
+        self.store_in(&self.hints, fkey, depth, bound, score, false, action);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn store_in(&self, slots: &[TtSlot], key: u64, depth: i32, bound: Bound, score: i32, proven: bool, action: &MoveSeq) {
+        let slot = &slots[(key as usize) & (slots.len() - 1)];
         if slot.lock.swap(true, Ordering::Acquire) {
             return;
         }
@@ -236,7 +267,10 @@ impl Drop for TtTable {
     fn drop(&mut self) {
         if !*self.spilled.get_mut() {
             // SAFETY: no entry owns heap memory, so nothing is leaked by skipping their drops.
-            unsafe { self.slots.set_len(0) };
+            unsafe {
+                self.slots.set_len(0);
+                self.hints.set_len(0);
+            }
         }
     }
 }
@@ -817,11 +851,17 @@ impl AlphaBeta {
     }
 
     #[inline]
-    fn tt_store(&self, key: u64, depth: i32, bound: Bound, score: i32, proven: bool, action: &MoveSeq) {
+    /// Store a node's result under its key, and its action in the hint table under its
+    /// frontier key `fkey`.
+    #[allow(clippy::too_many_arguments)]
+    fn tt_store(&self, key: u64, fkey: u64, depth: i32, bound: Bound, score: i32, proven: bool, action: &MoveSeq) {
         if key == self.excl_key && self.excluded.is_some() {
             return;
         }
         self.tt.store(key, depth, bound, score, proven, action);
+        if !action.is_empty() {
+            self.tt.store_hint(fkey, depth, bound, score, action);
+        }
     }
 
     fn check_abort(&mut self) -> bool {
@@ -1880,8 +1920,31 @@ impl AlphaBeta {
             Some(Err(a)) => tt_action = a,
             None => {}
         }
+        // With no action remembered for this very position, the one remembered for the same
+        // boards in play reached by another move order (see `TtTable::hints`): only tried
+        // first, never trusted for a score.
+        let fkey = s.frontier_hash();
+        let hint = if tt_action.is_none() && !excl_node { self.tt.hint(fkey) } else { None };
+        if let Some((sc, ed, bound, _)) = &hint {
+            // The same boards in play, reached by another history: its bound is trusted only
+            // when it clears the window by a margin, at least as deep, off the PV, never a mate.
+            if !pv && *ed >= depth && sc.abs() < MATE - 1000 {
+                let cut = match bound {
+                    Bound::Exact => *sc >= beta + HINT_MARGIN || *sc <= alpha - HINT_MARGIN,
+                    Bound::Lower => *sc >= beta + HINT_MARGIN,
+                    Bound::Upper => *sc <= alpha - HINT_MARGIN,
+                    Bound::Empty => false,
+                };
+                if cut {
+                    self.proven = false;
+                    return *sc;
+                }
+            }
+        }
+        let hint_action = hint.map(|h| h.3);
         // Internal iterative reduction: with no remembered action the node is searched a ply
-        // shallower, which also leaves one for the next iteration to find.
+        // shallower, which also leaves one for the next iteration to find. (A hint action does
+        // not count: it was found for another history.)
         let depth = if tt_action.is_none() && depth >= IIR_DEPTH && !known_check.unwrap_or_else(|| self.in_check(s)) { depth - 1 } else { depth };
 
         if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| self.in_check(s)) {
@@ -1946,18 +2009,19 @@ impl AlphaBeta {
                 }
             }
         }
-        let mut remembered: Vec<MoveSeq> = tt_action.iter().filter(|a| self.excluded.as_ref() != Some(*a)).cloned().collect();
+        let mut remembered: Vec<MoveSeq> = tt_action.iter().chain(hint_action.iter()).filter(|a| self.excluded.as_ref() != Some(*a)).cloned().collect();
         if let Some(x) = &self.excluded {
             pre_tried.push(x.clone());
         }
         if ply <= MAX_PLY {
-            remembered.extend(self.killers[ply].iter().flatten().filter(|k| tt_action.as_ref() != Some(*k)).cloned());
+            remembered.extend(self.killers[ply].iter().flatten().filter(|k| tt_action.as_ref() != Some(*k) && hint_action.as_ref() != Some(*k)).cloned());
         }
         for (k, act) in remembered.into_iter().enumerate() {
             let Some(mark) = Self::make_checked(s, &act) else { continue };
             let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act);
-            // The TT action keeps the node's PV status; killers after it are null-window.
-            let v = if k == 0 && tt_action.is_some() && self.excluded.as_ref() != tt_action.as_ref() {
+            // The TT (or hint) action keeps the node's PV status; killers after it are
+            // null-window.
+            let v = if k == 0 && (tt_action.is_some() || hint_action.is_some()) && self.excluded.as_ref() != tt_action.as_ref() {
                 let v = -self.negamax(s, child_depth - 1 + tt_ext, ply + 1, -beta, -alpha, pv);
                 s.unmake(mark);
                 v
@@ -1983,7 +2047,7 @@ impl AlphaBeta {
             if alpha >= beta {
                 self.on_cutoff(s, &act, depth, ply);
                 let proven = mate_proven(best, best_proven, false);
-                self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
+                self.tt_store(key, fkey, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
                 self.proven = proven;
                 return best;
             }
@@ -2009,7 +2073,7 @@ impl AlphaBeta {
                 if pv {
                     self.pv_update(ply, &act);
                 }
-                self.tt_store(key, depth, Bound::Exact, mate_to_tt(v, ply), true, &act);
+                self.tt_store(key, fkey, depth, Bound::Exact, mate_to_tt(v, ply), true, &act);
                 self.proven = true;
                 return v;
             }
@@ -2042,7 +2106,7 @@ impl AlphaBeta {
                 self.bufs.push(nb);
                 self.on_cutoff(s, &act, depth, ply);
                 let proven = mate_proven(best, best_proven, false);
-                self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
+                self.tt_store(key, fkey, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
                 self.proven = proven;
                 return best;
             }
@@ -2175,7 +2239,7 @@ impl AlphaBeta {
                     if alpha >= beta {
                         self.on_cutoff(s, &act, depth, ply);
                         let proven = mate_proven(best, best_proven, false);
-                        self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
+                        self.tt_store(key, fkey, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
                         self.proven = proven;
                         break 'search Some(best);
                     }
@@ -2253,7 +2317,7 @@ impl AlphaBeta {
                     if alpha >= beta {
                         self.on_cutoff(s, &act, depth, ply);
                         let proven = mate_proven(best, best_proven, false);
-                        self.tt_store(key, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
+                        self.tt_store(key, fkey, depth, Bound::Lower, mate_to_tt(best, ply), proven, &best_action);
                         self.proven = proven;
                         break 'widen Some(best);
                     }
@@ -2295,7 +2359,7 @@ impl AlphaBeta {
         // might score higher (e.g. the only mating move), and a stored "at most" would poison
         // deeper searches of this node.
         if bound != Bound::Upper || (exhausted && !skipped) {
-            self.tt_store(key, depth, bound, mate_to_tt(best, ply), proven, &best_action);
+            self.tt_store(key, fkey, depth, bound, mate_to_tt(best, ply), proven, &best_action);
         }
         self.proven = proven;
         best
