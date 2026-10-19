@@ -42,6 +42,8 @@ const ROOT_CAP: usize = 1000;
 const BATCH: usize = 12;
 const QDEPTH: i32 = 3;
 const QCAP: usize = 4;
+/// Internal iterative reduction: nodes of this depth or more without a TT action lose a ply.
+const IIR_DEPTH: i32 = 4;
 /// Singular extension: depth from which the TT action is tested, and the margin per depth.
 const SING_DEPTH: i32 = 4;
 const SING_MARGIN: i32 = 100;
@@ -1744,6 +1746,9 @@ impl AlphaBeta {
             Some(Err(a)) => tt_action = a,
             None => {}
         }
+        // Internal iterative reduction: with no remembered action the node is searched a ply
+        // shallower, which also leaves one for the next iteration to find.
+        let depth = if tt_action.is_none() && depth >= IIR_DEPTH && !self.seek_mate { depth - 1 } else { depth };
 
         if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| self.in_check(s)) {
             if depth <= RFP_DEPTH {
