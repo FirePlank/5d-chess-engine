@@ -8,6 +8,7 @@
 //! # comment
 //! P <G line>                       a book position: "G <promotions> <5duci position> moves ..."
 //! m <play|know> <weight> <lan> ; <5dpgn>   a candidate action from the last P position
+//! N <name>                         the opening's name at the last P position
 //! ```
 //!
 //! `play` actions are what the engine plays from the position (weighted random choice);
@@ -38,6 +39,8 @@ pub struct BookMove {
 #[derive(Default, Debug)]
 pub struct Book {
     positions: HashMap<u64, Vec<BookMove>>,
+    /// Opening names (`N` lines): "Family: Variation: Line", by the position they are reached at.
+    names: HashMap<u64, String>,
 }
 
 impl Book {
@@ -56,6 +59,11 @@ impl Book {
                 let h = s.hash();
                 book.positions.entry(h).or_default();
                 cur = Some((h, s));
+            } else if let Some(name) = line.strip_prefix("N ") {
+                let (h, _) = cur.as_ref().ok_or_else(|| err("name before any position".into()))?;
+                if book.names.insert(*h, name.trim().to_string()).is_some() {
+                    return Err(err("two names for one position".into()));
+                }
             } else if let Some(m) = line.strip_prefix("m ") {
                 let (h, s) = cur.as_ref().ok_or_else(|| err("move before any position".into()))?;
                 let (head, pgn) = m.split_once(';').unwrap_or((m, ""));
@@ -91,6 +99,17 @@ impl Book {
     /// Number of positions and of candidate actions.
     pub fn size(&self) -> (usize, usize) {
         (self.positions.len(), self.positions.values().map(|v| v.len()).sum())
+    }
+
+    /// The opening's name at `s` ("Family: Variation: Line"), if the position carries one. A
+    /// game's opening is the last name found along it.
+    pub fn opening_name(&self, s: &State) -> Option<&str> {
+        self.names.get(&s.hash()).map(|n| n.as_str())
+    }
+
+    /// Number of named positions.
+    pub fn name_count(&self) -> usize {
+        self.names.len()
     }
 
     /// All book actions (play and know) of `s`, if it is a book position.
@@ -147,6 +166,9 @@ struct SrcMove {
     weight: u32,
 }
 
+/// A source action's `{name ...}` tag.
+type SrcName = Option<String>;
+
 /// Build the book file from the annotated 5dpgn source (`data/book_theory_src.txt`): one game
 /// per non-comment line, actions tagged `{play N}` or `{know}` (untagged actions take the tag
 /// given to the same action elsewhere). Positions are written in order of first appearance,
@@ -162,6 +184,7 @@ pub fn generate(src: &str) -> Result<String, String> {
         g: String,
         note: Vec<String>,
         moves: Vec<(String, String, SrcMove, usize)>,
+        name: Option<String>,
     }
     let mut order: Vec<u64> = Vec::new();
     let mut pos: HashMap<u64, Pos> = HashMap::new();
@@ -185,9 +208,17 @@ pub fn generate(src: &str) -> Result<String, String> {
         while let Some(child) = node.children.first() {
             let act = child.action.as_ref().ok_or_else(|| err("action missing".into()))?;
             let mut tag = SrcMove { play: None, weight: 0 };
+            let mut name: SrcName = None;
             for c in &child.comments {
                 let mut w = c.split_whitespace();
                 match w.next() {
+                    Some("name") => {
+                        let n = c.trim().strip_prefix("name").unwrap_or("").trim().to_string();
+                        if n.is_empty() {
+                            return Err(err(format!("empty {{name}} after {}", child.text)));
+                        }
+                        name = Some(n);
+                    }
                     Some("play") => {
                         tag.play = Some(true);
                         tag.weight = w.next().and_then(|x| x.parse().ok()).ok_or_else(|| err(format!("bad weight in {{{}}} after {}", c, child.text)))?;
@@ -201,7 +232,7 @@ pub fn generate(src: &str) -> Result<String, String> {
             let h = s.hash();
             let p = pos.entry(h).or_insert_with(|| {
                 order.push(h);
-                Pos { g: g.clone(), note: std::mem::take(&mut pending_note), moves: Vec::new() }
+                Pos { g: g.clone(), note: std::mem::take(&mut pending_note), moves: Vec::new(), name: None }
             });
             match p.moves.iter_mut().find(|m| m.0 == lan) {
                 Some(m) => {
@@ -220,6 +251,18 @@ pub fn generate(src: &str) -> Result<String, String> {
                 g += &format!(" {}", m);
             }
             g += " submit";
+            if let Some(n) = name {
+                // The name belongs to the position after the action.
+                let after = next.hash();
+                let p = pos.entry(after).or_insert_with(|| {
+                    order.push(after);
+                    Pos { g: g.clone(), note: Vec::new(), moves: Vec::new(), name: None }
+                });
+                match &p.name {
+                    Some(old) if *old != n => return Err(err(format!("two names for one position: {:?} and {:?}", old, n))),
+                    _ => p.name = Some(n),
+                }
+            }
             s = next;
             node = child;
         }
@@ -238,6 +281,9 @@ pub fn generate(src: &str) -> Result<String, String> {
             }
         }
         out += &format!("P {}\n", p.g);
+        if let Some(n) = &p.name {
+            out += &format!("N {}\n", n);
+        }
         for (lan, pgn, tag, line) in &p.moves {
             let Some(play) = tag.play else {
                 return Err(format!("source line {}: action {} is tagged nowhere", line, pgn));

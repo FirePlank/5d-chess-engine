@@ -94,13 +94,13 @@ fn know_moves_are_never_chosen() {
 
 #[test]
 fn weighted_choice_uses_every_play_move() {
-    // T0 after 1. Nf3 Nf6: d4 (10), c4 (5), e3 (2) are played, Nd4 (know) is not.
+    // T0 after 1. Nf3 Nf6: d4 (10), c4 (5), Na3 (3), e3 (2) are played, Nd4 (know) is not.
     let s = position("Standard - Turn Zero", "(0T1)g1f3 submit (0T1)g8f6 submit");
     let mut seen = std::collections::HashMap::new();
     for seed in 0..2000 {
         *seen.entry(Book::theory().choose(&s, seed).unwrap().lan.clone()).or_insert(0) += 1;
     }
-    assert_eq!(seen.len(), 3, "{:?}", seen);
+    assert_eq!(seen.len(), 4, "{:?}", seen);
     assert!(seen["(0T2)d2d4"] > seen["(0T2)c2c4"] && seen["(0T2)c2c4"] > seen["(0T2)e2e3"], "{:?}", seen);
 }
 
@@ -199,4 +199,15 @@ fn bg5_bg4_e3_black_avoids_ne4_and_bxf3() {
         }
         assert!(b.probe(&s).unwrap().iter().any(|m| !m.play && m.lan == "(0T6)g4f3"));
     }
+}
+
+#[test]
+fn openings_are_named_where_they_are_reached() {
+    let b = Book::theory();
+    assert!(b.name_count() > 80, "{} names", b.name_count());
+    let name = |v: &str, m: &str| b.opening_name(&position(v, m)).map(str::to_string);
+    assert_eq!(name("Standard - Turn Zero", "(0T1)g1f3 submit (0T1)g8f6 submit (0T2)d2d4 submit (0T2)c7c5 submit").as_deref(), Some("Sarp's Counterattack"));
+    assert_eq!(name("Standard - Turn Zero", "(0T1)g1f3 submit (0T1)g8f6 submit (0T2)b1a3 submit").as_deref(), Some("Digolian Attack"));
+    assert_eq!(name("Standard - Turn Zero", "(0T1)g1f3 submit (0T1)g8f6 submit (0T2)h2h3 submit"), None);
+    assert!(b.probe(&position("Standard - Defended Pawn", "")).unwrap().iter().any(|m| m.play && m.lan == "(0T1)c2c4"));
 }
