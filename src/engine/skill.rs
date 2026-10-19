@@ -1,8 +1,8 @@
-//! Strength handicaps sample exact MultiPV scores with geometrically decreasing noise.
+//! Strength handicaps sample exact MultiPV scores with decreasing noise.
 //! The ladder targets even rating steps; actual Elo needs matches at a fixed time control.
 
 pub(super) fn pick(scores: &[i32], level: u8, mut seed: u64) -> Option<usize> {
-    let temperature = [0.80, 0.18, 0.115, 0.073, 0.046, 0.029, 0.018][usize::from(level.clamp(1, 7) - 1)];
+    let temperature = [0.80, 0.108, 0.069, 0.0438, 0.0276, 0.014, 0.003][usize::from(level.clamp(1, 7) - 1)];
     let mut best = None;
     let mut value = f64::NEG_INFINITY;
     for (k, &score) in scores.iter().enumerate() {
@@ -26,7 +26,8 @@ pub(super) fn pick(scores: &[i32], level: u8, mut seed: u64) -> Option<usize> {
 mod tests {
     #[test]
     fn stronger_levels_lose_less_on_average() {
-        let scores = [6000, 3000, 0, -3000, -6000, -12000];
+        // Close alternatives keep the strong levels from saturating at the best move.
+        let scores = [6000, 5900, 5600, 5000, 3000, 0, -6000];
         let mut previous = i64::MIN;
         for level in 1..=7 {
             let sum: i64 = (0..10000).map(|seed| i64::from(scores[super::pick(&scores, level, seed).unwrap()])).sum();
