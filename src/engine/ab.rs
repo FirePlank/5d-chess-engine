@@ -408,9 +408,6 @@ pub struct AlphaBeta {
     /// proven; a checkmate on the board. A proven mate is a forced mate within the reported
     /// distance. Only meaningful for mate scores; it never steers the search.
     proven: bool,
-    /// The root is won or lost by enough (or by mate) that pruning which hides long mating
-    /// lines is switched off (Stockfish's seekMate).
-    seek_mate: bool,
     /// Singular-extension search: the TT action it excludes and the key of its node.
     excluded: Option<MoveSeq>,
     excl_key: u64,
@@ -748,7 +745,6 @@ impl AlphaBeta {
             aborted: false,
             stop_ptr: std::ptr::null(),
             proven: false,
-            seek_mate: false,
             excluded: None,
             excl_key: 0,
             bufs: Vec::new(),
@@ -1886,7 +1882,7 @@ impl AlphaBeta {
         }
         // Internal iterative reduction: with no remembered action the node is searched a ply
         // shallower, which also leaves one for the next iteration to find.
-        let depth = if tt_action.is_none() && depth >= IIR_DEPTH && !self.seek_mate && !known_check.unwrap_or_else(|| self.in_check(s)) { depth - 1 } else { depth };
+        let depth = if tt_action.is_none() && depth >= IIR_DEPTH && !known_check.unwrap_or_else(|| self.in_check(s)) { depth - 1 } else { depth };
 
         if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| self.in_check(s)) {
             if depth <= RFP_DEPTH {
@@ -1895,7 +1891,7 @@ impl AlphaBeta {
                     return e;
                 }
             }
-            if depth >= NMP_MIN_DEPTH && !self.seek_mate && Self::has_null_material(s) && self.static_eval(s) >= beta {
+            if depth >= NMP_MIN_DEPTH && Self::has_null_material(s) && self.static_eval(s) >= beta {
                 let r = NMP_R + depth / NMP_DIV;
                 let mark = s.make_null();
                 let v = -self.negamax(s, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
@@ -3002,7 +2998,6 @@ impl AlphaBeta {
         // search (`MultiPV` 1) never touches them.
         let multi = self.multipv > 1;
         let mut lines: Vec<PvLine> = resume.map_or_else(Vec::new, |r| r.lines.clone());
-        self.seek_mate = false;
         // Clock stability: decaying count of best-action changes and running average score.
         let mut changes = 0.0f64;
         let mut avg_score: Option<i32> = None;
@@ -3016,8 +3011,6 @@ impl AlphaBeta {
         while base_depth <= max_depth {
             let depth = if ahead { (base_depth + 1).min(max_depth) } else { base_depth };
             let prev_best = best.clone();
-            // seekMate bar: 3000 + 100000 / depth^2 (Stockfish's form, in our units).
-            self.seek_mate = depth > 1 && best_score.abs() > MATE - 1000;
             // Aspiration window around the last completed depth's score (see ASP_WINDOW).
             let prev_score = best_score;
             let aspire = depth >= ASP_MIN_DEPTH && completed_depth > 0 && prev_score.abs() < MATE - 1000;
