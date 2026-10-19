@@ -1802,10 +1802,6 @@ impl AlphaBeta {
                         }
                         if v < sb {
                             tt_ext = 1;
-                        } else if sb >= beta {
-                            // Multi-cut: even without the TT action the node beats beta.
-                            self.proven = false;
-                            return sb;
                         }
                     }
                 }
