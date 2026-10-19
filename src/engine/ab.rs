@@ -67,15 +67,7 @@ const TRAVEL_MATE_PLY: usize = 2;
 const TRAVEL_MATE_STEPS: u32 = 64;
 /// Legal completions (moves on the other boards the side to move must play) tried with each
 /// checking travel of `travel_mate`.
-const TRAVEL_MATE_COMPLETIONS: usize = 8;
-/// The same at the root, which has the time for more.
-const ROOT_TRAVEL_MATE_COMPLETIONS: usize = 512;
-/// Time of the root's scan of every legal action for a checkmate in one: without a time plan,
-/// and as a share of the optimum with one.
-const ROOT_MATE_SCAN_MS: u64 = 100;
-const ROOT_MATE_SCAN_DIV: u64 = 40;
-/// Time for the part of that scan that looks for a discovered check.
-const ROOT_DISCOVERED_SCAN_MS: u64 = 5;
+const TRAVEL_MATE_COMPLETIONS: usize = 4;
 /// Hypercuboids the cursor may take on a capturing travel (`travel_captures`) before it gives
 /// it up (when most of its combinations with the other boards' moves are illegal, finding one
 /// can take thousands).
@@ -1069,7 +1061,7 @@ impl AlphaBeta {
     /// travel moving the present back (a new active timeline in the past). A check with no
     /// evasion within `TRAVEL_MATE_STEPS` hypercuboids is a mate. The checking travels tried
     /// (each alone, as an action) are added to `checks` when given.
-    fn travel_mate(&mut self, s: &mut State, info: &mut HcInfo, ss: &SearchSpace, scratch: &mut OrderScratch, mut checks: Option<&mut Vec<MoveSeq>>, completions: usize) -> Option<MoveSeq> {
+    fn travel_mate(&mut self, s: &mut State, info: &mut HcInfo, ss: &SearchSpace, scratch: &mut OrderScratch, mut checks: Option<&mut Vec<MoveSeq>>) -> Option<MoveSeq> {
         let dim = info.dimension();
         let fba = info.first_branch_axis();
         let present = s.get_present();
@@ -1132,14 +1124,8 @@ impl AlphaBeta {
             }
             h[fa].assign_singleton(dep);
             h[n].assign_singleton(i);
-            // Best first (checks, then captures): the helper moves of a mate are usually
-            // captures or blocks, which the natural order reaches last.
-            let mut probe = BestFirstCursor::default();
-            self.start_actions(s, info, &mut probe, scratch, SearchSpace::from_vec(vec![h]), false);
-            for k in 0..completions {
-                if interrupted() {
-                    return None;
-                }
+            let mut probe = HcCursor::new(SearchSpace::from_vec(vec![h]), HcOrdering::Natural);
+            for k in 0..TRAVEL_MATE_COMPLETIONS {
                 let Some(act) = probe.next(info, s) else { break };
                 if k == 0 {
                     if let Some(c) = checks.as_deref_mut() {
@@ -1345,89 +1331,6 @@ impl AlphaBeta {
             }
         }
         None
-    }
-
-    /// A checkmate in one among the legal actions of `s`, within the time. A mating action
-    /// leaves the opponent in check, so one of its moves gives check: only the actions with a
-    /// checking move are tested first (they are found from the precomputed checking entries,
-    /// so a position with none costs next to nothing), then, for a discovered check, the rest
-    /// for a short time. Returns the first mating action found.
-    fn root_mate_scan(&mut self, s: &State, info: &mut HcInfo, ss: &SearchSpace, end: Instant, stop: &AtomicBool) -> Option<MoveSeq> {
-        let dim = info.dimension();
-        let fba = info.first_branch_axis();
-        info.materialize_branch(s);
-        let info: &HcInfo = info;
-        let mut scratch = OrderScratch::default();
-        // The entries giving check (branch axes share theirs: the first one stands for all).
-        let mut checking: Vec<(usize, Index)> = Vec::new();
-        {
-            let mut det = CheckDetector::new(info, s, &mut scratch);
-            let u = info.get_universe();
-            for n in 0..dim.min(fba + 1) {
-                for i in u[n].iter() {
-                    if det.gives_check(n, i) {
-                        checking.push((n, i));
-                    }
-                }
-            }
-            det.finish(&mut scratch);
-        }
-        let _probe = interrupt_on(stop, Some(end));
-        let mut work = s.clone();
-        work.enable_undo();
-        if !checking.is_empty() {
-            let mut space = SearchSpace::default();
-            for &(n, i) in &checking {
-                for hc in &ss.hcs {
-                    if n < fba {
-                        if hc[n].contains(i) {
-                            let mut h = hc.clone();
-                            h[n].assign_singleton(i);
-                            space.hcs.push(h);
-                        }
-                    } else {
-                        for b in fba..dim {
-                            if hc[b].contains(i) {
-                                let mut h = hc.clone();
-                                h[b].assign_singleton(i);
-                                space.hcs.push(h);
-                            }
-                        }
-                    }
-                }
-            }
-            if let Some(a) = self.scan_for_mate(s, info, &mut scratch, space, &mut work) {
-                return Some(a);
-            }
-            if interrupted() {
-                return None;
-            }
-        }
-        // A discovered check: no move of the action gives check itself.
-        let _short = interrupt_on(stop, Some(end.min(Instant::now() + Duration::from_millis(ROOT_DISCOVERED_SCAN_MS))));
-        self.scan_for_mate(s, info, &mut scratch, SearchSpace::from_vec(ss.hcs.clone()), &mut work)
-    }
-
-    /// The first action of `space` (checking ones first) after which `work`, a copy of `s`, is
-    /// checkmate.
-    fn scan_for_mate(&mut self, s: &State, info: &HcInfo, scratch: &mut OrderScratch, space: SearchSpace, work: &mut State) -> Option<MoveSeq> {
-        let mut cursor = BestFirstCursor::default();
-        self.start_actions(s, info, &mut cursor, scratch, space, false);
-        loop {
-            let act = cursor.next(info, s);
-            if interrupted() {
-                return None;
-            }
-            let act = act?;
-            let mark = Self::make(work, &act);
-            // Most checks have an evasion within a step or two: only an action without one
-            // found is looked at exactly.
-            let mate = self.in_check(work) && !self.has_evasion(work) && work.get_mate_type() == MateType::Checkmate;
-            work.unmake(mark);
-            if mate && !interrupted() {
-                return Some(act);
-            }
-        }
     }
 
     /// Root actions with a move on a board the side to move need not play (the ones
@@ -1977,7 +1880,7 @@ impl AlphaBeta {
         if ply <= TRAVEL_MATE_PLY {
             let mate = {
                 let NodeBufs { info, order, .. } = &mut *nb;
-                self.travel_mate(s, info, &ss, order, if ply == 1 { Some(&mut tchecks) } else { None }, TRAVEL_MATE_COMPLETIONS)
+                self.travel_mate(s, info, &ss, order, if ply == 1 { Some(&mut tchecks) } else { None })
             };
             if let Some(act) = mate {
                 self.bufs.push(nb);
@@ -2736,18 +2639,7 @@ impl AlphaBeta {
         let future_mate = future_mate.or_else(|| {
             let mut s = root.clone();
             s.enable_undo();
-            let budget = plan.as_ref().map_or(ROOT_FUTURE_MATE_MS, |p| (p.optimum / 32).max(1));
-            let end = Instant::now() + Duration::from_millis(budget);
-            let _probe = interrupt_on(stop, Some(deadline.map_or(end, |d| d.min(end))));
-            self.travel_mate(&mut s, &mut hc, &ss, &mut OrderScratch::default(), Some(&mut travel_checks), ROOT_TRAVEL_MATE_COMPLETIONS)
-        });
-        // Every legal action tested for checkmate, checking ones first, as far as the time goes
-        // (a mate in one needs specific helper moves on the other boards that no probe above
-        // is sure to pick).
-        let future_mate = future_mate.or_else(|| {
-            let budget = plan.as_ref().map_or(ROOT_MATE_SCAN_MS, |p| (p.optimum / ROOT_MATE_SCAN_DIV).max(1));
-            let end = Instant::now() + Duration::from_millis(budget);
-            self.root_mate_scan(root, &mut hc, &ss, deadline.map_or(end, |d| d.min(end)), stop)
+            self.travel_mate(&mut s, &mut hc, &ss, &mut OrderScratch::default(), Some(&mut travel_checks))
         });
         let mut agen = BestFirstCursor::default();
         let mut first = Self::without_future(root, &hc, &ss);
@@ -3488,21 +3380,6 @@ mod tests {
     #[test]
     fn mate_in_one_by_travel_from_the_future_with_other_boards() {
         let s = crate::core::perft::parse_g_line("G 1 size 5x5 even fen [nbk*ur*/p*p*p*p*p*/5/5/5:-0:1:w] [5/5/5/P*P*P*P*P*/R*UK*BN:+0:1:w] moves (0T1)b1(-1T1)c2 submit (-1T1)a5(0T1)a3 submit (0T2)e1(-1T2)e3 submit (-1T2)d5(0T1)e5 (0T2)a3(0T1)a5 submit").unwrap();
-        let mut e = AlphaBeta::new();
-        let stop = AtomicBool::new(false);
-        let mut last = String::new();
-        let a = e.find_best_move(&s, &Limits { depth: Some(2), ..Default::default() }, &stop, &mut |m| last = m).unwrap();
-        let seq: MoveSeq = a.moves().iter().map(|m| m.fm).collect();
-        assert_eq!(AlphaBeta::child(&s, &seq).get_mate_type(), MateType::Checkmate, "played {:?}", seq);
-        assert!(last.contains("score mate 1 "), "{}", last);
-    }
-
-    /// Mate in one by (0T8)Qb2>>x(0T5)b5 with two helper knight moves on the other boards, one
-    /// of them a capture (Knights vs. Bishops, reported by a user): the root scans every legal
-    /// action for a checkmate.
-    #[test]
-    fn mate_in_one_needing_helper_captures() {
-        let s = crate::core::perft::parse_g_line("G 1 size 6x6 odd fen [r*bqk*br*/p*p*p*p*p*p*/6/6/P*P*P*P*P*P*/R*NQK*NR*:0:1:w] moves (0T1)f2f4 submit (0T1)e5e4 submit (0T2)b2b3 submit (0T2)a5a3 submit (0T3)b1a3 submit (0T3)c5c3 submit (0T4)b3c4 submit (0T4)b6d4 submit (0T5)a3b5 submit (0T5)c6b5 submit (0T6)c4b5 submit (0T6)a6a5 submit (0T7)c1b2 submit (0T7)a5(0T3)a5 submit (-1T4)a3c4 submit (-1T4)d6(0T4)c5 submit").unwrap();
         let mut e = AlphaBeta::new();
         let stop = AtomicBool::new(false);
         let mut last = String::new();
