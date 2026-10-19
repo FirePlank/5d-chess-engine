@@ -774,6 +774,7 @@ impl AlphaBeta {
         }
         let sd = hce::sides_with(s, &mut *self.terms);
         let mut f = hce::features_from(&sd, s, hce::needs_checks(&self.hce));
+        let spatial = if self.skill_level < 8 { Some(super::skill::spatial_score(&f, &self.hce, s.get_present().1)) } else { None };
         let sac = hce::split_sac(&mut f);
         let chess = if hce::CHESS_IN_NET { [0; hce::NF] } else { hce::split_chess(&mut f) };
         let base = hce::score(&f, &self.hce, s.get_present().1);
@@ -783,6 +784,7 @@ impl AlphaBeta {
         };
         let v = v + hce::score(&sac, &self.hce, s.get_present().1);
         let v = v + hce::score_chess(&chess, &self.hce, s.get_present().1);
+        let v = spatial.map_or(v, |local| super::skill::blend(local, v, self.skill_level));
         // Terms add up over every board, so with many timelines the sum can reach the mate
         // range (where it would be taken for a mate score).
         let v = v.clamp(-EVAL_MAX, EVAL_MAX);
@@ -1934,13 +1936,14 @@ impl AlphaBeta {
         }
         for (k, act) in remembered.into_iter().enumerate() {
             let Some(mark) = Self::make_checked(s, &act) else { continue };
+            let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act);
             // The TT action keeps the node's PV status; killers after it are null-window.
             let v = if k == 0 && tt_action.is_some() && self.excluded.as_ref() != tt_action.as_ref() {
-                let v = -self.negamax(s, depth - 1 + tt_ext, ply + 1, -beta, -alpha, pv);
+                let v = -self.negamax(s, child_depth - 1 + tt_ext, ply + 1, -beta, -alpha, pv);
                 s.unmake(mark);
                 v
             } else {
-                self.search_child(s, mark, searched == 0, depth, ply, alpha, beta, pv)
+                self.search_child(s, mark, searched == 0, child_depth, ply, alpha, beta, pv)
             };
             if self.aborted {
                 return 0;
@@ -1997,7 +2000,8 @@ impl AlphaBeta {
                 continue;
             }
             let mark = Self::make(s, &act);
-            let v = self.search_child(s, mark, searched == 0, depth, ply, alpha, beta, pv);
+            let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act);
+            let v = self.search_child(s, mark, searched == 0, child_depth, ply, alpha, beta, pv);
             if self.aborted {
                 self.bufs.push(nb);
                 return 0;
@@ -2117,18 +2121,19 @@ impl AlphaBeta {
                         }
                     }
                     let mut v;
+                    let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act);
                     self.known_check = child_check;
                     if searched == 0 {
-                        v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, pv);
+                        v = -self.negamax(s, child_depth - 1, ply + 1, -beta, -alpha, pv);
                     } else {
-                        v = -self.negamax(s, depth - 1 - r, ply + 1, -alpha - 1, -alpha, false);
+                        v = -self.negamax(s, child_depth - 1 - r, ply + 1, -alpha - 1, -alpha, false);
                         if !self.aborted && v > alpha && r > 0 {
                             self.known_check = child_check;
-                            v = -self.negamax(s, depth - 1, ply + 1, -alpha - 1, -alpha, false);
+                            v = -self.negamax(s, child_depth - 1, ply + 1, -alpha - 1, -alpha, false);
                         }
                         if !self.aborted && v > alpha && v < beta && pv {
                             self.known_check = child_check;
-                            v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, true);
+                            v = -self.negamax(s, child_depth - 1, ply + 1, -beta, -alpha, true);
                         }
                     }
                     s.unmake(mark);
@@ -2207,7 +2212,8 @@ impl AlphaBeta {
                         break 'widen None;
                     }
                     let mark = Self::make(s, &act);
-                    let v = self.search_child(s, mark, false, depth, ply, alpha, beta, pv);
+                    let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act);
+                    let v = self.search_child(s, mark, false, child_depth, ply, alpha, beta, pv);
                     if self.aborted {
                         break 'widen Some(0);
                     }
@@ -2640,23 +2646,37 @@ impl AlphaBeta {
         if self.skill_level == 8 {
             return self.find_best_move_full(root, limits, stop, info);
         }
-        let level = usize::from(self.skill_level - 1);
-        let depths = [1, 2, 3, 4, 6, 8, 12];
-        let nodes = [1_000, 3_000, 9_000, 27_000, 81_000, 243_000, 729_000];
+        let cfg = super::skill::config(self.skill_level);
         let mut limited = limits.clone();
-        limited.depth = Some(limited.depth.unwrap_or(depths[level]).min(depths[level]));
-        limited.nodes = Some(limited.nodes.unwrap_or(nodes[level]).min(nodes[level]));
+        limited.depth = Some(limited.depth.unwrap_or(cfg.depth).min(cfg.depth));
+        limited.nodes = Some(limited.nodes.unwrap_or(cfg.nodes).min(cfg.nodes));
         limited.resume = false;
         let saved = (self.multipv, self.threads, self.own_book);
-        // The top limited level trades candidate breadth for deeper tactical search.
-        self.multipv = if self.skill_level == 7 { 8 } else { 32 };
+        // Spend the budget on understanding replies, rather than accurately scoring 32 moves.
+        self.multipv = cfg.candidates;
         self.threads = 1;
         self.resume = None;
         let fallback = self.find_best_move_full(root, &limited, stop, info);
         let lines = self.resume.take().map(|r| r.lines).unwrap_or_default();
         (self.multipv, self.threads, self.own_book) = saved;
         let scores: Vec<i32> = lines.iter().map(|l| l.0).collect();
-        let choice = super::skill::pick(&scores, self.skill_level, super::book::random_seed());
+        let mut work = root.clone();
+        work.enable_undo();
+        let risks: Vec<i32> = lines.iter().map(|line| {
+            let Some(action) = line.1.first() else { return i32::MAX; };
+            let won = action.iter().map(|m| {
+                let (mover, victim) = mover_victim(root, m);
+                let promotion = crate::core::action::ExtMove::resolve(*m, root).promote_to;
+                super::skill::material_value(victim) + if promotion != NO_PIECE {
+                    super::skill::material_value(promotion) - super::skill::material_value(mover)
+                } else { 0 }
+            }).sum();
+            let mark = Self::make(&mut work, action);
+            let risk = super::skill::material_risk(&work, root.get_present().1, won);
+            work.unmake(mark);
+            risk
+        }).collect();
+        let choice = super::skill::pick(&scores, &risks, self.skill_level, super::book::random_seed());
         if let Some(k) = choice {
             if let Some(action) = lines[k].1.first() {
                 self.last_score = lines[k].0;
@@ -3233,27 +3253,28 @@ impl AlphaBeta {
         for (k, (_, act)) in roots.iter().enumerate() {
             let bar = if top.len() >= want { top[want - 1] } else { -INF };
             let mark = Self::make(work, act);
+            let child_depth = depth - super::skill::travel_reduction(self.skill_level, act);
             let mut exact = true;
             let v = if k == 0 {
-                let mut v = -self.negamax(work, depth - 1, 1, -hi, -lo, true);
+                let mut v = -self.negamax(work, child_depth - 1, 1, -hi, -lo, true);
                 if !self.aborted && (v <= lo || v >= hi) && (lo > -INF || hi < INF) {
-                    v = -self.negamax(work, depth - 1, 1, -INF, INF, true);
+                    v = -self.negamax(work, child_depth - 1, 1, -INF, INF, true);
                 }
                 v
             } else if bar == -INF {
-                -self.negamax(work, depth - 1, 1, -INF, INF, true)
+                -self.negamax(work, child_depth - 1, 1, -INF, INF, true)
             } else {
                 let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(self.in_check(work)) } else { None };
                 let r = if child_check == Some(false) { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
                 self.known_check = child_check;
-                let mut v = -self.negamax(work, depth - 1 - r, 1, -bar - 1, -bar, false);
+                let mut v = -self.negamax(work, child_depth - 1 - r, 1, -bar - 1, -bar, false);
                 if !self.aborted && v > bar && r > 0 {
                     self.known_check = child_check;
-                    v = -self.negamax(work, depth - 1, 1, -bar - 1, -bar, false);
+                    v = -self.negamax(work, child_depth - 1, 1, -bar - 1, -bar, false);
                 }
                 if !self.aborted && v > bar {
                     self.known_check = child_check;
-                    v = -self.negamax(work, depth - 1, 1, -INF, -bar, true);
+                    v = -self.negamax(work, child_depth - 1, 1, -INF, -bar, true);
                 }
                 exact = v > bar;
                 if exact { v } else { v.min(bar - 1) }
