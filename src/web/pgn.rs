@@ -1288,6 +1288,13 @@ pub fn action_to_pgn_opts(s: &State, act: &Action, witness: Option<&Action>, opt
             MateType::None | MateType::Stalemate => {}
         }
     }
+    // A win by exiled kings (the opponent's royals are all on inactive timelines, and it has no
+    // legal action) ends the game like a mate: the last move carries `#`.
+    if opts.mate && !symbols.iter().any(|&c| c == "#") && t.exiled_kings_loser().is_some() && t.get_mate_type() == MateType::Stalemate {
+        if let Some(last) = symbols.last_mut() {
+            *last = "#";
+        }
+    }
     let texts: Vec<String> = parts.iter().zip(symbols).map(|((core, _, suffix), sym)| format!("{}{}{}", core, sym, suffix)).collect();
     texts.join(" ")
 }
