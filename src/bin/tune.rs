@@ -37,9 +37,6 @@ fn linear(f: &Packed, w: &Weights) -> f32 {
     for i in hce::fi::CH..hce::fi::FADE {
         ch += w[i] * f[i] as f32;
     }
-    for i in hce::fi::END..NF {
-        acc += w[i] * f[i] as f32;
-    }
     acc + ch * w[hce::fi::FADE + (f[hce::fi::ACTIVE_LINES].clamp(1, 8) - 1) as usize]
 }
 
@@ -393,9 +390,6 @@ fn main() {
                             }
                             for i in hce::fi::CH..hce::fi::FADE {
                                 g[i] += d * s.f[i] as f64 * fa;
-                            }
-                            for i in hce::fi::END..NF {
-                                g[i] += d * s.f[i] as f64;
                             }
                         }
                         g
