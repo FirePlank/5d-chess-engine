@@ -140,8 +140,6 @@ pub struct Timeline {
     pub boards: Vec<Board>,
     /// `board_key` of each board (kept so undoing a move needs no rehash).
     keys: Vec<u64>,
-    /// XOR of `keys`.
-    acc: u64,
 }
 impl Timeline {
     #[inline(always)]
@@ -240,7 +238,7 @@ impl Multiverse {
         for (u, slot) in slots.into_iter().enumerate() {
             let first = slot.iter().position(|b| b.is_some());
             match first {
-                None => lines.push(Timeline { start: i32::MAX, boards: Vec::new(), keys: Vec::new(), acc: 0 }),
+                None => lines.push(Timeline { start: i32::MAX, boards: Vec::new(), keys: Vec::new() }),
                 Some(s) => {
                     let mut bs = Vec::with_capacity(slot.len() - s);
                     for (k, b) in slot[s..].iter().enumerate() {
@@ -255,7 +253,7 @@ impl Multiverse {
                             }
                         }
                     }
-                    lines.push(Timeline { start: s as i32, boards: bs, keys: Vec::new(), acc: 0 });
+                    lines.push(Timeline { start: s as i32, boards: bs, keys: Vec::new() });
                 }
             }
         }
@@ -281,7 +279,6 @@ impl Multiverse {
             for (k, b) in tl.boards.iter().enumerate() {
                 let key = board_key(u_to_l(u as i32), tl.start + k as i32, b);
                 tl.keys.push(key);
-                tl.acc ^= key;
                 h ^= key;
             }
         }
@@ -372,26 +369,11 @@ impl Multiverse {
         let key = board_key(l, tl.start + tl.boards.len() as i32, &b);
         self.hash ^= key;
         tl.keys.push(key);
-        tl.acc ^= key;
         tl.boards.push(b);
     }
     #[inline(always)]
     pub fn hash(&self) -> u64 {
         self.hash
-    }
-    /// `hash` with the boards before the last one of every inactive timeline left out: those
-    /// timelines can no longer be played on, so how they got to their last board does not
-    /// change what the position is worth (their boards can still be travelled to).
-    #[inline]
-    pub fn live_hash(&self) -> u64 {
-        let mut h = self.hash;
-        for (u, tl) in self.lines.iter().enumerate() {
-            let l = u_to_l(u as i32);
-            if (l < self.active_min || l > self.active_max) && !tl.keys.is_empty() {
-                h ^= tl.acc ^ tl.keys[tl.keys.len() - 1];
-            }
-        }
-        h
     }
     /// `board_key` of the board (l, t, c), which must exist.
     #[inline(always)]
@@ -404,7 +386,7 @@ impl Multiverse {
         let u = l_to_u(l) as usize;
         let v = tc_to_v(t, c);
         if u >= self.lines.len() {
-            self.lines.resize(u + 1, Timeline { start: i32::MAX, boards: Vec::new(), keys: Vec::new(), acc: 0 });
+            self.lines.resize(u + 1, Timeline { start: i32::MAX, boards: Vec::new(), keys: Vec::new() });
         }
         self.l_min = self.l_min.min(l);
         self.l_max = self.l_max.max(l);
@@ -414,7 +396,6 @@ impl Multiverse {
         let key = board_key(l, v, &b);
         self.hash ^= key;
         tl.keys.push(key);
-        tl.acc ^= key;
         tl.boards.push(b);
     }
 
@@ -448,7 +429,6 @@ impl Multiverse {
         // The emptied timeline keeps its storage for the next branch.
         tl.boards.clear();
         tl.keys.clear();
-        tl.acc = 0;
         tl.start = i32::MAX;
         (self.l_min, self.l_max, self.active_min, self.active_max) = saved_ranges;
     }
@@ -456,9 +436,7 @@ impl Multiverse {
         let u = l_to_u(l) as usize;
         let tl = &mut self.lines[u];
         if tl.boards.pop().is_some() {
-            let k = tl.keys.pop().unwrap();
-            tl.acc ^= k;
-            self.hash ^= k;
+            self.hash ^= tl.keys.pop().unwrap();
         }
     }
     #[inline(always)]
