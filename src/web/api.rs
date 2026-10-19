@@ -244,11 +244,29 @@ impl Api {
             "book" => {
                 // The opening book's actions for a node of the game (or a 5DUCI `position`):
                 // [{lan, pgn, play, weight}], `play` ones first by weight, then the known ones.
-                let s = match j.get("position").str() {
-                    Some(p) => Self::uci_state(p)?,
+                let book = crate::engine::book::Book::theory();
+                let (s, opening) = match j.get("position").str() {
+                    Some(p) => {
+                        let s = Self::uci_state(p)?;
+                        let opening = book.opening_name(&s).map(|name| obj![("name", name)]).unwrap_or(Json::Null);
+                        (s, opening)
+                    }
                     None => {
                         let id = self.node_arg(j);
-                        self.game()?.node(id)?.state.clone()
+                        let game = self.game()?;
+                        let s = game.node(id)?.state.clone();
+                        let mut opening = Json::Null;
+                        // The current branch's last recognized opening survives leaving theory.
+                        let mut at = Some(id);
+                        while let Some(node_id) = at {
+                            let node = game.node(node_id)?;
+                            if let Some(name) = book.opening_name(&node.state) {
+                                opening = obj![("name", name), ("node", node_id), ("ply", node.ply)];
+                                break;
+                            }
+                            at = node.parent;
+                        }
+                        (s, opening)
                     }
                 };
                 let mut moves: Vec<&crate::engine::book::BookMove> =
@@ -256,7 +274,7 @@ impl Api {
                 moves.sort_by_key(|m| (!m.play, std::cmp::Reverse(m.weight)));
                 let list: Vec<Json> =
                     moves.iter().map(|m| obj![("lan", m.lan.as_str()), ("pgn", m.pgn.as_str()), ("play", m.play), ("weight", m.weight as i64)]).collect();
-                Ok(ok(obj![("moves", Json::Arr(list))]))
+                Ok(ok(obj![("moves", Json::Arr(list)), ("opening", opening)]))
             }
             "set_hash" => {
                 let mb = j.get("mb").int().unwrap_or(32).max(1) as usize;
