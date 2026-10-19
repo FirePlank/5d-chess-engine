@@ -65,6 +65,9 @@ const TRAVEL_MATE_PLY: usize = 2;
 /// Hypercuboids the search for an evasion of such a check may look at (an evasion is usually
 /// found in a few; past this the check counts as no mate).
 const TRAVEL_MATE_STEPS: u32 = 64;
+/// Legal completions (moves on the other boards the side to move must play) tried with each
+/// checking travel of `travel_mate`.
+const TRAVEL_MATE_COMPLETIONS: usize = 4;
 /// Hypercuboids the cursor may take on a capturing travel (`travel_captures`) before it gives
 /// it up (when most of its combinations with the other boards' moves are illegal, finding one
 /// can take thousands).
@@ -1074,7 +1077,7 @@ impl AlphaBeta {
         let mandatory: Vec<usize> = (0..fba).filter(|n| !optional.contains(n)).collect();
         let nl = s.new_line();
         let (na, nb) = active_range_for(s.multiverse().layout(), lo.min(nl), hi.max(nl));
-        let moves_back = |m: &FullMove| nl >= na && nl <= nb && (m.to.t(), present.1) < present;
+        let moves_back = |m: &FullMove| nl >= na && nl <= nb && (m.to.t(), present.1) <= present;
         // (departure axis, departure coordinate, arrival axis, arrival coordinate)
         let mut travels: Vec<(usize, Index, usize, Index)> = Vec::new();
         let u = info.get_universe();
@@ -1103,28 +1106,38 @@ impl AlphaBeta {
         travels.retain(|&(_, _, n, i)| det.gives_check(n, i));
         det.finish(scratch);
         for &(fa, dep, n, i) in &travels {
-            // The travel alone, if the node's actions have it.
+            // The travel with a few legal moves on the other boards: those the side to move
+            // must play, and the boards a branching travel activates (the check does not
+            // depend on them).
             let Some(hc) = ss.hcs.iter().find(|hc| {
-                hc[fa].contains(dep) && hc[n].contains(i) && (0..dim).all(|a| a == fa || a == n || hc[a].contains(0))
+                hc[fa].contains(dep) && hc[n].contains(i) && (0..dim).all(|a| a == fa || a == n || mandatory.contains(&a) || hc[a].contains(0))
             }) else {
                 continue;
             };
             let mut h: Hc = hc.clone();
             for a in 0..dim {
-                h[a].assign_singleton(0);
+                // (A branching travel can activate a line whose board must then be played
+                // too, so the other playable boards keep their moves; extra branches do not.)
+                if a != fa && a != n && a >= fba {
+                    h[a].assign_singleton(0);
+                }
             }
             h[fa].assign_singleton(dep);
             h[n].assign_singleton(i);
             let mut probe = HcCursor::new(SearchSpace::from_vec(vec![h]), HcOrdering::Natural);
-            let Some(act) = probe.next(info, s) else { continue };
-            if let Some(c) = checks.as_deref_mut() {
-                c.push(act.clone());
-            }
-            let mark = Self::make(s, &act);
-            let mate = self.in_check(s) && !self.has_evasion(s);
-            s.unmake(mark);
-            if mate {
-                return Some(act);
+            for k in 0..TRAVEL_MATE_COMPLETIONS {
+                let Some(act) = probe.next(info, s) else { break };
+                if k == 0 {
+                    if let Some(c) = checks.as_deref_mut() {
+                        c.push(act.clone());
+                    }
+                }
+                let mark = Self::make(s, &act);
+                let mate = self.in_check(s) && !self.has_evasion(s);
+                s.unmake(mark);
+                if mate {
+                    return Some(act);
+                }
             }
         }
         None
@@ -3366,6 +3379,34 @@ mod tests {
         let seq: MoveSeq = a.moves().iter().map(|m| m.fm).collect();
         assert_eq!(AlphaBeta::child(&s, &seq).get_mate_type(), MateType::Checkmate, "played {:?}", seq);
         assert_eq!(e.last_score(), MATE - 1);
+        assert!(last.contains("score mate 1 "), "{}", last);
+    }
+
+    /// Mate in one by a travel from a board ahead of the present onto a board at the present
+    /// ((0T6)Qb2>>(0T3)e5, Knights vs. Bishops): it branches a timeline and activates another
+    /// line, whose board must be played with it (reported by a user).
+    #[test]
+    fn mate_in_one_by_travel_onto_the_present() {
+        let s = crate::core::perft::parse_g_line("G 1 size 6x6 odd fen [r*bqk*br*/p*p*p*p*p*p*/6/6/P*P*P*P*P*P*/R*NQK*NR*:0:1:w] moves (0T1)f2f4 submit (0T1)e5e4 submit (0T2)b2b3 submit (0T2)d5d3 submit (0T3)c1b2 submit (0T3)c5c3 submit (0T4)b3c4 submit (0T4)d3e2 submit (0T5)d1c1 submit (0T5)c6(0T1)c2 submit (-1T2)e1c2 submit (-1T2)e5(0T2)e5 submit").unwrap();
+        let mut e = AlphaBeta::new();
+        let stop = AtomicBool::new(false);
+        let mut last = String::new();
+        let a = e.find_best_move(&s, &Limits { depth: Some(2), ..Default::default() }, &stop, &mut |m| last = m).unwrap();
+        let seq: MoveSeq = a.moves().iter().map(|m| m.fm).collect();
+        assert_eq!(AlphaBeta::child(&s, &seq).get_mate_type(), MateType::Checkmate, "played {:?}", seq);
+        assert!(last.contains("score mate 1 "), "{}", last);
+    }
+
+    /// Mate in one by (-1T3)Uc2>>c3 from a board ahead of the present (Timeline Strategos).
+    #[test]
+    fn mate_in_one_by_travel_from_the_future_with_other_boards() {
+        let s = crate::core::perft::parse_g_line("G 1 size 5x5 even fen [nbk*ur*/p*p*p*p*p*/5/5/5:-0:1:w] [5/5/5/P*P*P*P*P*/R*UK*BN:+0:1:w] moves (0T1)b1(-1T1)c2 submit (-1T1)a5(0T1)a3 submit (0T2)e1(-1T2)e3 submit (-1T2)d5(0T1)e5 (0T2)a3(0T1)a5 submit").unwrap();
+        let mut e = AlphaBeta::new();
+        let stop = AtomicBool::new(false);
+        let mut last = String::new();
+        let a = e.find_best_move(&s, &Limits { depth: Some(2), ..Default::default() }, &stop, &mut |m| last = m).unwrap();
+        let seq: MoveSeq = a.moves().iter().map(|m| m.fm).collect();
+        assert_eq!(AlphaBeta::child(&s, &seq).get_mate_type(), MateType::Checkmate, "played {:?}", seq);
         assert!(last.contains("score mate 1 "), "{}", last);
     }
 
