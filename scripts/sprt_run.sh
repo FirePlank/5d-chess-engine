@@ -10,6 +10,8 @@
 #        BASE (self | cpp:<engine>, e.g. cpp:zero-capture-check-pw), MIN_GAMES, RUN_ID,
 #        OLD_SHA (build the old engine from this commit instead of <base-sha>, e.g. to
 #        measure main against an earlier version; use with patch "-"),
+#        MAX_MIN (wall-clock cap in minutes, default 20: the run is cancelled then and the
+#        result is read from the games played so far),
 #        BOOK (openings from this G file of the repo, e.g. data/books/timelines4.g, each
 #        played with both colors; default: generated openings).
 set -euo pipefail
@@ -62,8 +64,14 @@ cancel_and_wait() {
   until [ "$(run_status)" = completed ]; do sleep 5; done
 }
 tick=0
+T0=$(date +%s)
 while :; do
   [ "$(run_status)" = completed ] && break
+  # Wall-clock cap (MAX_MIN, default 20): cancel and use the games played so far.
+  if [ $(( $(date +%s) - T0 )) -ge $(( ${MAX_MIN:-20} * 60 )) ]; then
+    echo "time cap of ${MAX_MIN:-20} min reached: run cancelled, result from the games so far"
+    cancel_and_wait; break
+  fi
   if (( tick % 6 == 0 )); then
     LINES=$(gh api "repos/$REPO/commits/$SHA/status?per_page=100" \
       -q '[.statuses[] | select(.context | startswith("sprt/shard-"))] | group_by(.context)
