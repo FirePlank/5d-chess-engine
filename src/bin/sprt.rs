@@ -7,7 +7,7 @@
 //!      [--movetime 100 | --tc 10+0.1[/dD][/tT] | --nodes N | --depth D]
 //!      [--concurrency 8] [--max-games 20000] [--min-games 0] [--elo0 0] [--elo1 5]
 //!      [--alpha 0.05] [--beta 0.05] [--model normalized|logistic] [--max-actions 160]
-//!      [--games-out games.jsonl] [--seed 1] [--compact]
+//!      [--games-out games.jsonl] [--seed 1] [--compact] [--max-seconds 0]
 //!      [--new-option Name=Value]... [--base-option Name=Value]...
 //!
 //! `--tc base+inc` is a clock in seconds; `/dD` adds a delay of D s per action and `/tT` a
@@ -853,6 +853,8 @@ fn main() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(20000);
     let min_games: usize = arg(&args, "--min-games").and_then(|v| v.parse().ok()).unwrap_or(0);
+    // Wall-clock limit (0: none): no pair is started after it, so a run ends by itself.
+    let max_seconds: u64 = arg(&args, "--max-seconds").and_then(|v| v.parse().ok()).unwrap_or(0);
     let compact = args.iter().any(|a| a == "--compact");
     let elo0: f64 = arg(&args, "--elo0").and_then(|v| v.parse().ok()).unwrap_or(0.0);
     let elo1: f64 = arg(&args, "--elo1").and_then(|v| v.parse().ok()).unwrap_or(5.0);
@@ -944,11 +946,15 @@ fn main() {
             log.clone(),
             jsonl.clone(),
         );
+        let start = start;
         handles.push(std::thread::spawn(move || {
             let mut procs: [Option<Proc>; 2] = [None, None];
             let mut book_engine = AlphaBeta::new();
             book_engine.set_option("Hash", &OptionValue::Int(8));
             while !done.load(Ordering::SeqCst) {
+                if max_seconds > 0 && start.elapsed().as_secs() >= max_seconds {
+                    break;
+                }
                 let k = next_pair.fetch_add(1, Ordering::SeqCst);
                 if 2 * k >= max_games {
                     break;
