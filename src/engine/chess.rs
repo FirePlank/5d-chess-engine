@@ -27,7 +27,7 @@ pub mod g {
 /// The groups (`g::`, one bit each) the evaluation works out; the weights of the others are 0 and
 /// their terms are skipped (the attack maps of the threat, king and mobility groups are the
 /// costly part). Fitting (`ktools chessfeat`) always counts every term.
-pub const GROUPS: u32 = 0b1111111;
+pub const GROUPS: u32 = 0b1110111;
 const fn on(group: usize) -> bool {
     GROUPS >> group & 1 != 0
 }
