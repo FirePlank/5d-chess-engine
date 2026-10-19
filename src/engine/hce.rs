@@ -6,17 +6,7 @@ use crate::core::board::Board;
 use crate::core::check_position::CheckPosition;
 use crate::core::state::State;
 
-use super::chess::{self, BoardChess};
-
-pub const NF: usize = 115;
-
-/// The standard-chess terms are only worked out with at most this many active timelines (their
-/// fade is zero beyond).
-pub const CHESS_MAX_LINES: i32 = 1;
-
-/// Whether the eval net sees the chess terms in its base score (a net trained for them) or the
-/// search adds them after the net's correction (`split_chess`).
-pub const CHESS_IN_NET: bool = true;
+pub const NF: usize = 95;
 
 /// Feature indices.
 pub mod fi {
@@ -108,17 +98,6 @@ pub mod fi {
     /// Own royals that left a timeline: active boards without an own royal and the enemy pieces
     /// on them (white's minus black's).
     pub const KL: usize = 93;
-    /// Standard-chess terms of the active boards (`chess`): material, piece-square tables, pawn
-    /// structure, pieces, threats, king safety, mobility; white's minus black's, in centipawns of
-    /// Peras' scale, faded with the number of active timelines (`FADE`).
-    pub const CH: usize = 95;
-    /// Piece counts (pawn, knight, bishop, rook, queen) faded with the same factor: weights
-    /// that take the standard material values over from `MAT_A` on few timelines.
-    pub const CH_MF: usize = 102;
-    /// Fade factors by number of active timelines 1..8 (8: and more); weights only (the
-    /// features are 0).
-    pub const FADE: usize = 107;
-    pub const END: usize = 115;
 }
 
 pub const FEATURE_NAMES: [&str; NF] = [
@@ -137,9 +116,6 @@ pub const FEATURE_NAMES: [&str; NF] = [
     "tl_lost", "to_move", "zone_mand_stm", "zone_mand_opp",
     "def_hot", "def_board", "travel_hot",
     "kingless", "kl_swarm",
-    "ch_mat", "ch_psqt", "ch_pawn", "ch_piece", "ch_threat", "ch_king", "ch_mob",
-    "chm_pawn", "chm_knight", "chm_bishop", "chm_rook", "chm_queen",
-    "fade1", "fade2", "fade3", "fade4", "fade5", "fade6", "fade7", "fade8",
 ];
 
 pub type Features = [i32; NF];
@@ -271,73 +247,6 @@ pub fn tuned_weights() -> Weights {
         ("travel_hot", -129.1),
         ("kingless", -171.3),
         ("kl_swarm", -313.5),
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
-        // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
-        // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
-        ("ch_mat", 7.8),
-        ("ch_psqt", 15.8),
-        ("ch_pawn", 6.4),
-        ("ch_piece", 10.6),
-        ("ch_threat", 8.0),
-        ("ch_king", 43.9),
-        ("ch_mob", 10.5),
-        ("chm_pawn", -533.5),
-        ("chm_knight", -1055.4),
-        ("chm_bishop", -1316.5),
-        ("chm_rook", -1291.0),
-        ("chm_queen", -2051.9),
-        ("fade1", 1.000),
     ])
 }
 
@@ -520,10 +429,6 @@ pub struct Sides {
     pub mandatory: i32,
     /// Extra per-side terms (`ex`), not part of the eval net's inputs.
     pub extra: [[i32; ex::COUNT]; 2],
-    /// Standard-chess group values (`chess::g`) of the active boards, per colour.
-    pub chess: [[i32; chess::NG]; 2],
-    /// Whether the chess terms were worked out (at most `CHESS_MAX_LINES` active timelines).
-    pub chess_on: bool,
 }
 
 /// Extra per-side term indices of `Sides`.
@@ -772,13 +677,8 @@ pub struct BoardTerms {
 }
 
 impl BoardTerms {
-    const ZERO: BoardTerms = BoardTerms {
-        side: [[0; si::COUNT]; 2],
-        extra: [[0; ex::COUNT]; 2],
-        heavy: 0,
-        att: [0; 2],
-        att_nr: [0; 2],
-    };
+    const ZERO: BoardTerms =
+        BoardTerms { side: [[0; si::COUNT]; 2], extra: [[0; ex::COUNT]; 2], heavy: 0, att: [0; 2], att_nr: [0; 2] };
 }
 
 pub fn board_terms(b: &Board, w: i32, h: i32) -> BoardTerms {
@@ -873,24 +773,13 @@ pub fn sides(s: &State) -> Sides {
 }
 
 pub fn sides_with(s: &State, src: &mut impl TermSource) -> Sides {
-    let mut sd = Sides {
-        side: [[0; si::COUNT]; 2],
-        heavy: 0,
-        active: 0,
-        inactive: 0,
-        mandatory: 0,
-        extra: [[0; ex::COUNT]; 2],
-        chess: [[0; chess::NG]; 2],
-        chess_on: false,
-    };
+    let mut sd = Sides { side: [[0; si::COUNT]; 2], heavy: 0, active: 0, inactive: 0, mandatory: 0, extra: [[0; ex::COUNT]; 2] };
     let (l_min, l_max) = s.get_lines_range();
     let (amin, amax) = s.get_active_range();
     let (w, h) = s.get_board_size();
     let present = s.get_present();
     let (il_min, il_max) = s.get_initial_lines_range();
     let mut atts = [[0u64; 4]; ATT_LINES];
-    let chess_on = amax - amin < CHESS_MAX_LINES;
-    sd.chess_on = chess_on;
     for l in l_min..=l_max {
         let (t, c) = s.get_timeline_end(l);
         let b = s.board(l, t, c);
@@ -906,16 +795,6 @@ pub fn sides_with(s: &State, src: &mut impl TermSource) -> Sides {
                 }
                 for i in 0..ex::COUNT {
                     sd.extra[c][i] += bt.extra[c][i];
-                }
-            }
-            if chess_on {
-                let bc: BoardChess = chess::board_chess(b, w, h);
-                for d in 0..2 {
-                    for k in 0..chess::NG {
-                        sd.chess[d][k] += bc.v[d][k];
-                    }
-                    // Threats count more for the colour that moves on the board.
-                    sd.chess[d][chess::g::THREAT] += bc.thr[d][(c as usize != d) as usize];
                 }
             }
             sd.heavy += bt.heavy;
@@ -1556,14 +1435,6 @@ pub fn features_from(sd: &Sides, s: &State, checks: bool) -> Features {
         f[fi::CENT + g] = d(si::CENT + g);
         f[fi::MOB_N + g] = d(si::MOB + g);
     }
-    for k in 0..chess::NG {
-        f[fi::CH + k] = sd.chess[0][k] - sd.chess[1][k];
-    }
-    if sd.chess_on {
-        for (j, k) in [0usize, 2, 3, 4, 5].into_iter().enumerate() {
-            f[fi::CH_MF + j] = f[fi::MAT_A + k];
-        }
-    }
     f[fi::PAWN_ADV] = d(si::PAWN_ADV);
     f[fi::PAWN_NEAR] = d(si::PAWN_NEAR);
     f[fi::KING_CENT] = d(si::KING_CENT);
@@ -1649,18 +1520,6 @@ pub fn split_sac(f: &mut Features) -> Features {
     s
 }
 
-/// Move the standard-chess terms (`fi::CH` ..) out of `f` into the returned vector (with the
-/// number of active timelines, for `score_chess`): the search adds their score after the eval
-/// net's correction, which never saw them.
-pub fn split_chess(f: &mut Features) -> Features {
-    let mut s = [0i32; NF];
-    for i in fi::CH..fi::END {
-        s[i] = std::mem::take(&mut f[i]);
-    }
-    s[fi::ACTIVE_LINES] = f[fi::ACTIVE_LINES];
-    s
-}
-
 /// Weights from (feature name, value) pairs; unnamed features get zero.
 pub fn weights_by_name(pairs: &[(&str, f32)]) -> Weights {
     let mut w = [0f32; NF];
@@ -1674,10 +1533,7 @@ pub fn weights_by_name(pairs: &[(&str, f32)]) -> Weights {
 
 /// Evaluation in centipawns from the side to move's perspective.
 pub fn evaluate(s: &State, w: &Weights) -> i32 {
-    let mut f = features_with(s, needs_checks(w));
-    if !CHESS_IN_NET {
-        let _ = split_chess(&mut f);
-    }
+    let f = features_with(s, needs_checks(w));
     score(&f, w, s.get_present().1)
 }
 
@@ -1687,39 +1543,24 @@ pub fn needs_checks(w: &Weights) -> bool {
     w[fi::CHECKS_5D] != 0.0 || w[fi::SP_CHECKS] != 0.0
 }
 
-/// Weighted sum of the features, white's view: the chess terms are faded with the number of
-/// active timelines.
-#[inline]
-pub fn linear(f: &Features, w: &Weights) -> f32 {
-    let mut acc = 0f32;
-    for i in 0..fi::CH {
-        acc += w[i] * f[i] as f32;
-    }
-    acc + chess_linear(f, w)
-}
-
-/// The faded chess part of `linear`.
-#[inline]
-pub fn chess_linear(f: &Features, w: &Weights) -> f32 {
-    let mut ch = 0f32;
-    for i in fi::CH..fi::FADE {
-        ch += w[i] * f[i] as f32;
-    }
-    ch * w[fi::FADE + (f[fi::ACTIVE_LINES].clamp(1, 8) - 1) as usize]
-}
-
 /// Weighted sum of features, from the side to move's view.
 #[inline]
 pub fn score(f: &Features, w: &Weights, black_to_move: bool) -> i32 {
-    let white = linear(f, w).round() as i32;
+    let mut acc = 0f32;
+    for i in 0..NF {
+        acc += w[i] * f[i] as f32;
+    }
+    let white = acc.round() as i32;
     if black_to_move { -white } else { white }
 }
 
-/// `score` of a vector from `split_chess`: only its chess terms.
-#[inline]
-pub fn score_chess(f: &Features, w: &Weights, black_to_move: bool) -> i32 {
-    let white = chess_linear(f, w).round() as i32;
-    if black_to_move { -white } else { white }
+/// White-perspective linear score of a feature vector (used by the tuner).
+pub fn linear(f: &Features, w: &Weights) -> f32 {
+    let mut acc = 0f32;
+    for i in 0..NF {
+        acc += w[i] * f[i] as f32;
+    }
+    acc
 }
 
 #[cfg(test)]
@@ -2044,7 +1885,7 @@ mod royal_tests {
     }
 
     fn zero() -> Sides {
-        Sides { side: [[0; si::COUNT]; 2], heavy: 0, active: 0, inactive: 0, mandatory: 0, extra: [[0; ex::COUNT]; 2], chess: [[0; chess::NG]; 2], chess_on: false }
+        Sides { side: [[0; si::COUNT]; 2], heavy: 0, active: 0, inactive: 0, mandatory: 0, extra: [[0; ex::COUNT]; 2] }
     }
 
     #[test]

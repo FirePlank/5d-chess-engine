@@ -764,14 +764,12 @@ impl AlphaBeta {
         let sd = hce::sides_with(s, &mut *self.terms);
         let mut f = hce::features_from(&sd, s, hce::needs_checks(&self.hce));
         let sac = hce::split_sac(&mut f);
-        let chess = if hce::CHESS_IN_NET { [0; hce::NF] } else { hce::split_chess(&mut f) };
         let base = hce::score(&f, &self.hce, s.get_present().1);
         let v = match super::evalnet::embedded() {
             Some(net) => base + net.residual(&super::evalnet::inputs_from(&sd, s, base)),
             None => base,
         };
         let v = v + hce::score(&sac, &self.hce, s.get_present().1);
-        let v = v + hce::score_chess(&chess, &self.hce, s.get_present().1);
         // Terms add up over every board, so with many timelines the sum can reach the mate
         // range (where it would be taken for a mate score).
         let v = v.clamp(-EVAL_MAX, EVAL_MAX);
