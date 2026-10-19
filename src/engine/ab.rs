@@ -43,7 +43,7 @@ const BATCH: usize = 12;
 const QDEPTH: i32 = 3;
 const QCAP: usize = 4;
 /// Internal iterative reduction: nodes of this depth or more without a TT action lose a ply.
-const IIR_DEPTH: i32 = 4;
+const IIR_DEPTH: i32 = 3;
 /// Singular extension: depth from which the TT action is tested, and the margin per depth.
 const SING_DEPTH: i32 = 4;
 const SING_MARGIN: i32 = 100;
