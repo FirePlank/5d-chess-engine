@@ -12,7 +12,7 @@ pub const NF: usize = 115;
 
 /// The standard-chess terms are only worked out with at most this many active timelines (their
 /// fade is zero beyond).
-pub const CHESS_MAX_LINES: i32 = 1;
+pub const CHESS_MAX_LINES: i32 = 2;
 
 /// Whether the eval net sees the chess terms in its base score (a net trained for them) or the
 /// search adds them after the net's correction (`split_chess`).
@@ -287,6 +287,7 @@ pub fn tuned_weights() -> Weights {
         ("chm_rook", -1561.8),
         ("chm_queen", -1312.2),
         ("fade1", 1.000),
+        ("fade2", 0.300),
     ])
 }
 
