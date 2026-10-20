@@ -112,3 +112,4 @@ Generated from the `{name ...}` tags in `data/book_theory_src.txt`; `Book::openi
 | Standard - Defended Pawn | `1. c4 / Nf6 2. Nf3 / Ne6 3. d4` | Defended Pawn: Ryan's Opening: 3. d4 |
 | Standard - Defended Pawn | `1. c4 / Nf6 2. Nf3 / Ne6 3. b3 / g6 4. Bb2 / Bg7 5. h4` | Defended Pawn: Ryan's Opening: 5. h4 (the plan against g6) |
 | Standard - Defended Pawn | `1. b4` | Defended Pawn: 1. b4 |
+| Standard - Turn Zero | `1. e3 / Nf6 2. Bb5 / e6 3. c3 / Nd5 4. Qb3 / Nxe3+` | e3 Structure: Bb5 Cheese Refuted (Nd5, Nxe3+) |

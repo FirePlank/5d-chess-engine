@@ -1400,3 +1400,34 @@
 [Board "Standard - Defended Pawn"] [Mode "5D"] 1. c4 / Nf6 2. Nf3 / Ne6 3. d4 {name Defended Pawn: Ryan's Opening: 3. d4}
 [Board "Standard - Defended Pawn"] [Mode "5D"] 1. c4 / Nf6 2. Nf3 / Ne6 3. b3 / g6 4. Bb2 / Bg7 5. h4 {name Defended Pawn: Ryan's Opening: 5. h4 (the plan against g6)}
 [Board "Standard - Defended Pawn"] [Mode "5D"] 1. b4 {name Defended Pawn: 1. b4}
+
+# ============================================================================ Contributed lines (2026-10)
+# Lines sent by T0 players. Most transpose to known theory through another move order (the book
+# is keyed by the boards in play, so they share positions); these add the lines past it. A first
+# move the book did not play before (1. d4, 1...e6) is only known; the rest is played.
+# --- 1. d4 Nf6 2. Bf4 (London move order): d5 3. c3 c6 reaches the Classical f7 Defense; 2...c5 3. b4.
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. d4 {know} / Nf6 {play 10} 2. Bf4 {play 5} / d5 {play 10} 3. c3 {play 5} / c6 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. d4 / Nf6 2. Bf4 / c5 {play 3} 3. b4 {play 3}
+# --- Symmetrical English 1. Nf3 Nf6 2. c4 c5: 3. b3, 3. e3, 3. g3 with the replies g6, Nc6, e6, b6.
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c5 3. b3 {play 3}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c5 3. e3 {play 3}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c5 3. g3 {play 3} / g6 {play 3}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c5 3. g3 / Nc6 {play 3}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c5 3. g3 / e6 {play 3}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c5 3. g3 / b6 {play 3}
+# --- Classical f7 Defense 3. Bd2 c6 4. c4: Qb6, Bf5, Bg4.
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / d5 3. Bd2 / c6 4. c4 {play 3} / Qb6 {play 3}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / d5 3. Bd2 / c6 4. c4 / Bf5 {play 3}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. d4 / d5 3. Bd2 / c6 4. c4 / Bg4 {play 3}
+# --- 1. Nf3 Nf6 2. c3 d5 3. d4 c6 (the Classical structure by another move order): 4. Bf4, 4. Qb3, 4. Qc2.
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c3 {know} / d5 {play 10} 3. d4 {play 10} / c6 {play 10} 4. Bf4 {play 3}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c3 / d5 3. d4 / c6 4. Qb3 {play 3}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c3 / d5 3. d4 / c6 4. Qc2 {play 3}
+# --- Jack the Ripper 3. e3 Qb6: 4. Qc2, 4. Qa4.
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c6 3. e3 / Qb6 4. Qc2 {play 3}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. c4 / c6 3. e3 / Qb6 4. Qa4 {play 3}
+# --- 1. e3 e6 2. Qf3 Qf6 3. Qxf6 Nxf6 4. f4 Ng4?! 5. h3 Nf2 6. Kxf2 (the knight sac does not work).
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / e6 {know} 2. Qf3 {know} / Qf6 {know} 3. Qxf6 {know} / Nxf6 {know} 4. f4 {know} / Ng4 {know} 5. h3 {know} / Nf2 {know} 6. Kxf2 {know}
+# --- 1. e3 Nf6 2. Bb5 e6 3. c3 Nd5 4. Qb3 Nxe3+: "protects Black from the f7 sac if White tries to
+# cheese" (the knight takes e3 with check, so Qb3 and its route to f7 is answered at once).
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Bb5 {know} / e6 {play 10} 3. c3 {know} / Nd5 {play 10} 4. Qb3 {know} / Nxe3+ {play 10} {name e3 Structure: Bb5 Cheese Refuted (Nd5, Nxe3+)}
