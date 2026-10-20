@@ -94,7 +94,7 @@ const TRAVEL_MATE_PLY: usize = 2;
 /// Interior nodes up to this ply (0: none) also scan a few of the actions containing a checking
 /// entry for a checkmate in one (`interior_mate_scan`): `INTERIOR_SCAN_ACTIONS` actions, each
 /// enumeration `INTERIOR_SCAN_STEPS` hypercuboids.
-const INTERIOR_SCAN_PLY: usize = 0;
+const INTERIOR_SCAN_PLY: usize = 1;
 const INTERIOR_SCAN_ACTIONS: usize = 8;
 const INTERIOR_SCAN_STEPS: u32 = 64;
 /// Hypercuboids the search for an evasion of such a check may look at (an evasion is usually
