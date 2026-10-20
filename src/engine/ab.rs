@@ -62,10 +62,6 @@ const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
 const ROOT_LMR_MIN_INDEX: usize = 6;
-/// The most time (ms) the sac table's probes before the search may take whatever the time plan:
-/// a share of the optimum, which for an unbounded analysis (a day's `movetime`) is hours,
-/// while depth 1 should come at once.
-const ROOT_PROBE_CAP_MS: u64 = 250;
 /// Hypercuboids per checking travel in the root's mate-in-one probes. Root pre-search work is
 /// bounded by counts, not time, so it is the same on any machine and for any `movetime`.
 const ROOT_PROBE_STEPS: u32 = 2048;
@@ -133,9 +129,9 @@ fn lmr(depth: i32, index: usize) -> i32 {
 }
 /// Ordering bonus of a checking semimove (above every capture).
 const CHECK_BONUS: i32 = 30_000;
-/// Share of the optimum time the f7 sac table's probes may take (a search without a clock
-/// only reads the tables).
-const SAC_PREP_DIV: u64 = 100;
+/// Local nodes the f7 sac table's probes may use before every search, whatever the clock (the
+/// same work for the same position, in analysis and in games).
+const SAC_PREP_NODES: u64 = 50_000;
 /// Reverse futility pruning: at non-PV nodes up to this depth, return the static eval when
 /// it beats beta by RFP_MARGIN per ply.
 const RFP_DEPTH: i32 = 2;
@@ -3320,10 +3316,7 @@ impl AlphaBeta {
         let deadline = plan.as_ref().map(|p| start + Duration::from_millis(p.maximum.saturating_sub(5).max(1)));
         // The f7 sac table: local outcomes of the travels (and created timelines) this
         // position may need, kept for the rest of the game.
-        match plan.as_ref() {
-            Some(p) => super::sac::prepare(root, u64::MAX, Some(start + Duration::from_millis((p.optimum / SAC_PREP_DIV).min(ROOT_PROBE_CAP_MS))), Some(stop), super::sac::PROBE_NODES, false),
-            None => super::sac::prepare(root, 0, None, Some(stop), super::sac::PROBE_NODES, false),
-        };
+        super::sac::prepare(root, SAC_PREP_NODES, None, Some(stop), super::sac::PROBE_NODES, false);
         self.begin_search(stop, limits.nodes, deadline);
         // Enumerating actions stops at the deadline or when told to stop (see `interrupted`).
         let _interrupt = interrupt_on(stop, deadline);
