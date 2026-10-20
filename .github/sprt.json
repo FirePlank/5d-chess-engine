@@ -1,0 +1,14 @@
+{
+  "name": "mate_unify",
+  "old": "2e40f8c",
+  "games": 8775,
+  "shards": 39,
+  "tc": "tc 10+0.1",
+  "elo0": -5,
+  "elo1": 0,
+  "new_args": "",
+  "old_args": "",
+  "base": "self",
+  "book": "data/books/mixed.g",
+  "max_seconds": 840
+}
