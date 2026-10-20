@@ -1876,6 +1876,41 @@ impl ProblemMemo {
     }
 }
 
+/// Regions of actions their user has shown to be of no interest (a scan for a checkmate in
+/// one: regions proven to hold no mate, see `exclude`). A cursor skips them like problems:
+/// a hypercuboid inside one is dropped, and one holding the point taken loses the region.
+/// Regions learned before a hypercuboid was split stay in its pieces' way only while kept
+/// here (the oldest is replaced), so a region forgotten early costs time, never an action.
+#[derive(Default)]
+struct RegionMemo {
+    slices: Vec<Slice>,
+    next: usize,
+}
+
+/// Regions a cursor keeps (`RegionMemo`).
+const REGION_MEMO: usize = 64;
+
+impl RegionMemo {
+    fn clear(&mut self) {
+        self.slices.clear();
+        self.next = 0;
+    }
+    fn add(&mut self, s: Slice) {
+        if self.slices.len() < REGION_MEMO {
+            self.slices.push(s);
+        } else {
+            self.slices[self.next] = s;
+            self.next = (self.next + 1) % REGION_MEMO;
+        }
+    }
+    fn covers(&self, hc: &Hc) -> bool {
+        self.slices.iter().any(|s| s.fixed.iter().all(|(n, c)| hc[*n].is_subset_of(c)))
+    }
+    fn holding(&self, p: &Point) -> Option<&Slice> {
+        self.slices.iter().find(|s| s.contains(p))
+    }
+}
+
 /// Resumable legal-action enumeration. The caller supplies the context and the state it
 /// was built from on every call (the state may be modified between calls if restored).
 pub struct HcCursor {
@@ -1890,6 +1925,10 @@ pub struct HcCursor {
     checks: CheckBuf,
     /// Problems found in the current context (cleared by `forget`).
     memo: ProblemMemo,
+    /// Regions skipped (`exclude`; cleared by `forget`).
+    excluded: RegionMemo,
+    /// The point of the last action found.
+    last: Point,
 }
 
 impl Default for HcCursor {
@@ -1900,7 +1939,17 @@ impl Default for HcCursor {
 
 impl HcCursor {
     pub fn new(ss: SearchSpace, order: HcOrdering) -> Self {
-        HcCursor { ss, order, branch_pending: false, budget: u32::MAX, sc: PointScratch::default(), checks: CheckBuf::default(), memo: ProblemMemo::default() }
+        HcCursor {
+            ss,
+            order,
+            branch_pending: false,
+            budget: u32::MAX,
+            sc: PointScratch::default(),
+            checks: CheckBuf::default(),
+            memo: ProblemMemo::default(),
+            excluded: RegionMemo::default(),
+            last: Point::new(),
+        }
     }
 
     pub fn next(&mut self, info: &HcInfo, s: &State) -> Option<MoveSeq> {
@@ -1910,6 +1959,18 @@ impl HcCursor {
     /// Forget the problems found so far: call when `ss` is set for another context (state).
     pub fn forget(&mut self) {
         self.memo.clear();
+        self.excluded.clear();
+    }
+
+    /// Skip every point of `region` from now on (points the caller has no use for, e.g. actions
+    /// proven to be no mate).
+    pub fn exclude(&mut self, region: Slice) {
+        self.excluded.add(region);
+    }
+
+    /// The point (coordinates) of the last action found.
+    pub fn last_point(&self) -> &Point {
+        &self.last
     }
 
     /// `next`, filling the branch axes' order with `fill_branch` when `branch_pending` and a
@@ -1941,13 +2002,18 @@ impl HcCursor {
                 self.branch_pending = false;
             }
             let memo = info.first_branch_axis() >= PROBLEM_MEMO_MIN_AXES;
-            if memo && self.memo.covers(&hc) {
+            if memo && self.memo.covers(&hc) || self.excluded.covers(&hc) {
                 continue;
             }
             if !info.take_point(&mut hc, &self.order, &mut self.sc) {
                 continue;
             }
             let pt = &self.sc.point;
+            if let Some(region) = self.excluded.holding(pt) {
+                self.ss.push_back(hc);
+                self.ss.remove_slice_backwards(region, true, 10, 1);
+                continue;
+            }
             if let Some(problem) = memo.then(|| self.memo.holding(pt)).flatten() {
                 let _p = crate::misc::prof::scope(5);
                 self.ss.push_back(hc);
@@ -1958,6 +2024,7 @@ impl HcCursor {
                 None => {
                     let act = info.to_action(pt);
                     hc.remove_point_with(pt, |h| self.ss.push_back(h));
+                    self.last.clone_from(pt);
                     return Ok(Some(act));
                 }
                 Some(problem) => {
@@ -2008,6 +2075,10 @@ pub struct BestFirstCursor {
     budget: Option<u32>,
     /// Problems found since the last `restart` of another context (see `ProblemMemo`).
     memo: ProblemMemo,
+    /// Regions skipped (`exclude`; cleared by `forget`).
+    excluded: RegionMemo,
+    /// The point of the last action found.
+    last: Point,
 }
 
 /// The first class of a context with one playable board: the coordinates of its axis 0 still
@@ -2130,6 +2201,8 @@ impl Default for BestFirstCursor {
             limit_taken: 0,
             budget: None,
             memo: ProblemMemo::default(),
+            excluded: RegionMemo::default(),
+            last: Point::new(),
         }
     }
 }
@@ -2151,6 +2224,17 @@ impl BestFirstCursor {
     /// context. A `restart` on the same context keeps them.
     pub fn forget(&mut self) {
         self.memo.clear();
+        self.excluded.clear();
+    }
+
+    /// Skip every point of `region` from now on (see `HcCursor::exclude`).
+    pub fn exclude(&mut self, region: Slice) {
+        self.excluded.add(region);
+    }
+
+    /// The point (coordinates) of the last action found.
+    pub fn last_point(&self) -> &Point {
+        &self.last
     }
 
     /// Enumerate `ss` (of the context `info`) from the start under the current ordering.
@@ -2255,8 +2339,12 @@ impl BestFirstCursor {
                     continue;
                 }
                 walk.point[0] = i;
+                if self.excluded.holding(&walk.point).is_some() {
+                    continue;
+                }
                 if info.lone_point_legal(s, &walk.point, &mut self.checks) {
                     self.last_class = 0;
+                    self.last.clone_from(&walk.point);
                     return Ok(Some(info.to_action(&walk.point)));
                 }
             }
@@ -2286,7 +2374,7 @@ impl BestFirstCursor {
                 }
             }
             let memo = info.first_branch_axis() >= PROBLEM_MEMO_MIN_AXES;
-            if memo && self.memo.covers(&hc) {
+            if memo && self.memo.covers(&hc) || self.excluded.covers(&hc) {
                 continue;
             }
             self.heap.need_branch(&hc, true, fill);
@@ -2295,6 +2383,10 @@ impl BestFirstCursor {
             }
             let pt = &self.sc.point;
             let heap = &mut self.heap;
+            if let Some(region) = self.excluded.holding(pt) {
+                hc.remove_slice_with(region, |h| heap.push(h, class, fill));
+                continue;
+            }
             if let Some(problem) = memo.then(|| self.memo.holding(pt)).flatten() {
                 let _p = crate::misc::prof::scope(5);
                 hc.remove_slice_with(problem, |h| heap.push(h, class, fill));
@@ -2305,6 +2397,7 @@ impl BestFirstCursor {
                     let act = info.to_action(pt);
                     hc.remove_point_with(pt, |h| heap.push(h, class, fill));
                     self.last_class = class;
+                    self.last.clone_from(pt);
                     return Ok(Some(act));
                 }
                 Some(problem) => {
