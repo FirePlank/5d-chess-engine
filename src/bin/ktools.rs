@@ -1102,7 +1102,9 @@ fn main() {
             // 5dpgn source.
             let path = args.get(2).map(|s| s.as_str()).unwrap_or("data/book_theory_src.txt");
             let src = std::fs::read_to_string(path).expect("book source");
-            match kairos::engine::book::generate(&src) {
+            // The tuning layer (data/book_tuning.txt) when it exists, or the file named by the third argument.
+            let tuning = std::fs::read_to_string(args.get(3).map(|s| s.as_str()).unwrap_or("data/book_tuning.txt")).unwrap_or_default();
+            match kairos::engine::book::generate_tuned(&src, &tuning) {
                 Ok(text) => {
                     write!(out, "{}", text).unwrap();
                     let b = kairos::engine::book::Book::parse(&text).expect("generated book parses");

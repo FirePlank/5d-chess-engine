@@ -231,6 +231,45 @@ type SrcName = Option<String>;
 /// each with its actions, preceded by the source comment block of the line that first reached
 /// it.
 pub fn generate(src: &str) -> Result<String, String> {
+    generate_tuned(src, "")
+}
+
+/// The tuning layer of the book (`data/book_tuning.txt`): per position (by `State::frontier_hash`, 16 hex digits)
+/// and action LAN, the tag and weight the engine measured instead of the source's: lines
+/// `<key> <play|know> <weight> <action LAN> ; <comment>` (`#` comments and blank lines are skipped).
+/// An entry that matches no action of the generated book is an error (the book moved on).
+pub fn parse_tuning(text: &str) -> Result<HashMap<(u64, String), (bool, u32)>, String> {
+    let mut out = HashMap::new();
+    for (n, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let err = |e: &str| format!("tuning line {}: {}", n + 1, e);
+        let (head, _) = line.split_once(';').unwrap_or((line, ""));
+        let mut it = head.split_whitespace();
+        let key = u64::from_str_radix(it.next().ok_or_else(|| err("no key"))?, 16).map_err(|_| err("bad key"))?;
+        let play = match it.next() {
+            Some("play") => true,
+            Some("know") => false,
+            _ => return Err(err("bad tag")),
+        };
+        let weight: u32 = it.next().and_then(|w| w.parse().ok()).ok_or_else(|| err("bad weight"))?;
+        let lan = it.collect::<Vec<_>>().join(" ");
+        if lan.is_empty() {
+            return Err(err("no action"));
+        }
+        if out.insert((key, lan), (play, weight)).is_some() {
+            return Err(err("duplicate entry"));
+        }
+    }
+    Ok(out)
+}
+
+/// `generate` with a tuning layer applied (see `parse_tuning`).
+pub fn generate_tuned(src: &str, tuning: &str) -> Result<String, String> {
+    let tuning = parse_tuning(tuning)?;
+    let mut used: std::collections::HashSet<(u64, String)> = std::collections::HashSet::new();
     use crate::core::variants::state_from_setup;
     use crate::web::pgn::{action_to_pgn_short, parse_5dpgn};
     use crate::web::record::setup_to_uci;
@@ -238,6 +277,8 @@ pub fn generate(src: &str) -> Result<String, String> {
 
     struct Pos {
         g: String,
+        /// `State::frontier_hash` of the position (the tuning's key).
+        frontier: u64,
         note: Vec<String>,
         moves: Vec<(String, String, SrcMove, usize)>,
         name: Option<String>,
@@ -288,7 +329,7 @@ pub fn generate(src: &str) -> Result<String, String> {
             let h = s.hash();
             let p = pos.entry(h).or_insert_with(|| {
                 order.push(h);
-                Pos { g: g.clone(), note: std::mem::take(&mut pending_note), moves: Vec::new(), name: None }
+                Pos { g: g.clone(), frontier: s.frontier_hash(), note: std::mem::take(&mut pending_note), moves: Vec::new(), name: None }
             });
             match p.moves.iter_mut().find(|m| m.0 == lan) {
                 Some(m) => {
@@ -312,7 +353,7 @@ pub fn generate(src: &str) -> Result<String, String> {
                 let after = next.hash();
                 let p = pos.entry(after).or_insert_with(|| {
                     order.push(after);
-                    Pos { g: g.clone(), note: Vec::new(), moves: Vec::new(), name: None }
+                    Pos { g: g.clone(), frontier: next.frontier_hash(), note: Vec::new(), moves: Vec::new(), name: None }
                 });
                 match &p.name {
                     Some(old) if *old != n => return Err(err(format!("two names for one position: {:?} and {:?}", old, n))),
@@ -341,11 +382,23 @@ pub fn generate(src: &str) -> Result<String, String> {
             out += &format!("N {}\n", n);
         }
         for (lan, pgn, tag, line) in &p.moves {
-            let Some(play) = tag.play else {
-                return Err(format!("source line {}: action {} is tagged nowhere", line, pgn));
+            let (play, weight) = match tuning.get(&(p.frontier, lan.clone())) {
+                Some(&(play, weight)) => {
+                    used.insert((p.frontier, lan.clone()));
+                    (play, weight)
+                }
+                None => {
+                    let Some(play) = tag.play else {
+                        return Err(format!("source line {}: action {} is tagged nowhere", line, pgn));
+                    };
+                    (play, tag.weight)
+                }
             };
-            out += &format!("m {} {} {} ; {}\n", if play { "play" } else { "know" }, if play { tag.weight } else { 0 }, lan, pgn);
+            out += &format!("m {} {} {} ; {}\n", if play { "play" } else { "know" }, if play { weight } else { 0 }, lan, pgn);
         }
+    }
+    if let Some(((k, lan), _)) = tuning.iter().find(|(k, _)| !used.contains(*k)) {
+        return Err(format!("tuning entry {:016x} {} matches no action of the book", k, lan));
     }
     Ok(out)
 }

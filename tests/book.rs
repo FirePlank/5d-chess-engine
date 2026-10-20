@@ -2,7 +2,7 @@
 
 use kairos::core::variants::{apply_uci_moves, position_from_uci};
 use kairos::engine::ab::AlphaBeta;
-use kairos::engine::book::{generate, Book};
+use kairos::engine::book::{generate_tuned, Book};
 use kairos::engine::{Limits, OptionValue};
 use kairos::web::api::{resolve_position, Api};
 use kairos::web::tree::{parse_lan_moves, play_action};
@@ -10,6 +10,7 @@ use std::sync::atomic::AtomicBool;
 
 const SRC: &str = include_str!("../data/book_theory_src.txt");
 const BOOK: &str = include_str!("../data/book_theory.txt");
+const TUNING: &str = include_str!("../data/book_tuning.txt");
 
 fn lf(s: &str) -> String {
     s.replace("\r\n", "\n")
@@ -24,7 +25,7 @@ fn position(variant: &str, moves: &str) -> kairos::core::state::State {
 
 #[test]
 fn book_file_is_generated_from_its_source() {
-    assert_eq!(lf(&generate(&lf(SRC)).expect("source builds")), lf(BOOK), "run `ktools bookgen > data/book_theory.txt`");
+    assert_eq!(lf(&generate_tuned(&lf(SRC), &lf(TUNING)).expect("source and tuning build")), lf(BOOK), "run `ktools bookgen > data/book_theory.txt`");
 }
 
 #[test]
@@ -176,8 +177,10 @@ fn london_ng5_study_in_both_variants() {
             variant,
             &london("(0T8)d6f4 submit (0T9)e3f4 submit (0T9)d8e7 submit (0T10)b1d2 submit (0T10)b8d7 submit (0T11)d3e2 submit (0T11)e6e5 submit (0T12)g5e6 submit (0T12)e7e6 submit"),
         );
-        let m = b.choose(&s, 0).expect("travel idea 1");
-        assert_eq!(m.lan, "(0T13)e2(0T9)e6", "{}", variant);
+        // (The engine measured the study's travel 334 cp below its best move there: it stays in the
+        // book as known theory, no longer played; see data/book_tuning.txt.)
+        let moves = b.probe(&s).expect("travel idea 1");
+        assert!(moves.iter().any(|m| m.lan == "(0T13)e2(0T9)e6" && !m.play), "{}", variant);
     }
 }
 
