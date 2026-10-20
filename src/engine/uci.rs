@@ -80,7 +80,6 @@ pub fn run(engine: AlphaBeta) {
                 out(&format!("option name Threads type spin default 1 min 1 max {}", super::ab::MAX_THREADS));
                 out(&format!("option name MultiPV type spin default 1 min 1 max {}", super::ab::MAX_MULTIPV));
                 out("option name OwnBook type check default false");
-                out("option name MateVerify type string default auto");
                 out("option name Skill Level type spin default 8 min 1 max 8");
                 out("5duciok");
             }
