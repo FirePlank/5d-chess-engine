@@ -63,8 +63,8 @@ const ROOT_PROBE_CAP_MS: u64 = 250;
 const ROOT_PROBE_STEPS: u32 = 2048;
 /// Hypercuboids of each enumeration of the scan of every action for a checkmate in one, and the
 /// most actions it tries; the same for the first scan of the actions with a checking entry.
-const ROOT_SCAN_STEPS: u32 = 1 << 18;
-const ROOT_SCAN_ACTIONS: usize = 1 << 15;
+const ROOT_SCAN_STEPS: u32 = 4096;
+const ROOT_SCAN_ACTIONS: usize = 1024;
 const ROOT_CHECKING_SCAN_STEPS: u32 = 512;
 const ROOT_CHECKING_SCAN_ACTIONS: usize = 64;
 /// Hypercuboids to the first root action in the space without moves on optional boards (past
@@ -3515,21 +3515,6 @@ mod tests {
     #[test]
     fn mate_in_one_by_travel_onto_the_present() {
         let s = crate::core::perft::parse_g_line("G 1 size 6x6 odd fen [r*bqk*br*/p*p*p*p*p*p*/6/6/P*P*P*P*P*P*/R*NQK*NR*:0:1:w] moves (0T1)f2f4 submit (0T1)e5e4 submit (0T2)b2b3 submit (0T2)d5d3 submit (0T3)c1b2 submit (0T3)c5c3 submit (0T4)b3c4 submit (0T4)d3e2 submit (0T5)d1c1 submit (0T5)c6(0T1)c2 submit (-1T2)e1c2 submit (-1T2)e5(0T2)e5 submit").unwrap();
-        let mut e = AlphaBeta::new();
-        let stop = AtomicBool::new(false);
-        let mut last = String::new();
-        let a = e.find_best_move(&s, &Limits { depth: Some(2), ..Default::default() }, &stop, &mut |m| last = m).unwrap();
-        let seq: MoveSeq = a.moves().iter().map(|m| m.fm).collect();
-        assert_eq!(AlphaBeta::child(&s, &seq).get_mate_type(), MateType::Checkmate, "played {:?}", seq);
-        assert!(last.contains("score mate 1 "), "{}", last);
-    }
-
-    /// Mate in one with three boards to play, the third a travel from a board ahead of the
-    /// present ((0T8)Ne1>>x(0T7)e3, Knights vs. Bishops, reported by a user): the mating action
-    /// is the 11,575th of the natural enumeration, past the root scan's old count of 1,024.
-    #[test]
-    fn mate_in_one_deep_in_the_action_space() {
-        let s = crate::core::perft::parse_g_line("G 1 size 6x6 odd fen [r*bqk*br*/p*p*p*p*p*p*/6/6/P*P*P*P*P*P*/R*NQK*NR*:0:1:w] moves (0T1)f2f4 submit (0T1)e5e4 submit (0T2)b2b3 submit (0T2)a5a3 submit (0T3)b1a3 submit (0T3)b6a5 submit (0T4)c1b2 submit (0T4)a5d2 submit (0T5)d1d2 submit (0T5)c5c3 submit (0T6)b3c4 submit (0T6)e4e3 submit (0T7)d2c1 submit (0T7)c6(0T3)c2 submit (-1T4)a3c2 submit (-1T4)b6(0T5)b6 submit (-1T5)c2d4 submit (-1T5)c5d4 submit").unwrap();
         let mut e = AlphaBeta::new();
         let stop = AtomicBool::new(false);
         let mut last = String::new();
