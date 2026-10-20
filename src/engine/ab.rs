@@ -129,8 +129,6 @@ fn lmr(depth: i32, index: usize) -> i32 {
 }
 /// Ordering bonus of a checking semimove (above every capture).
 const CHECK_BONUS: i32 = 30_000;
-/// Extra depth of a root action that is an f7-style sacrifice travel (`sac::signature_travels`).
-const SAC_ROOT_EXT: i32 = 2;
 /// Local nodes the f7 sac table's probes may use before every search, whatever the clock (the
 /// same work for the same position, in analysis and in games).
 const SAC_PREP_NODES: u64 = 50_000;
@@ -3577,7 +3575,6 @@ impl AlphaBeta {
         let main = self.thread_id == 0;
         // The f7 sac table's winning travels at this root, for the evaluation.
         self.terms.sac_root = super::sac::root_travels(root);
-        let sig = super::sac::signature_travels(root);
         let mut work = root.clone();
         work.enable_undo();
         let mut best: MoveSeq = resume.map_or_else(|| roots[0].1.clone(), |r| r.best.clone());
@@ -3641,23 +3638,21 @@ impl AlphaBeta {
                     let mut top = -INF;
                     for (k, (_, act)) in roots.iter().enumerate() {
                         let mark = Self::make(&mut work, act);
-                        // A sacrifice of the f7 kind is searched deeper (its point is far away).
-                        let ext = if act.iter().any(|m| sig.contains(m)) { SAC_ROOT_EXT } else { 0 };
                         let v = if k == 0 {
-                            -self.negamax(&mut work, depth - 1 + ext, 1, -beta, -alpha, true)
+                            -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true)
                         } else {
                             // Late root actions are reduced, never pruned.
                             let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(self.in_check(&work)) } else { None };
                             let r = if child_check == Some(false) { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
                             self.known_check = child_check;
-                            let mut v = -self.negamax(&mut work, depth - 1 + ext - r, 1, -alpha - 1, -alpha, false);
+                            let mut v = -self.negamax(&mut work, depth - 1 - r, 1, -alpha - 1, -alpha, false);
                             if !self.aborted && v > alpha && r > 0 {
                                 self.known_check = child_check;
-                                v = -self.negamax(&mut work, depth - 1 + ext, 1, -alpha - 1, -alpha, false);
+                                v = -self.negamax(&mut work, depth - 1, 1, -alpha - 1, -alpha, false);
                             }
                             if !self.aborted && v > alpha {
                                 self.known_check = child_check;
-                                v = -self.negamax(&mut work, depth - 1 + ext, 1, -beta, -alpha, true);
+                                v = -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true);
                             }
                             v
                         };
