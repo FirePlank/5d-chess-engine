@@ -306,9 +306,6 @@ struct TtTable {
 unsafe impl Sync for TtTable {}
 unsafe impl Send for TtTable {}
 
-/// Slots per bucket of the transposition table (a power of two).
-const TT_BUCKET: usize = 4;
-
 impl TtTable {
     fn new(mb: usize) -> Self {
         Self::with_len(((mb << 20) / 64).next_power_of_two())
@@ -333,78 +330,40 @@ impl TtTable {
         self.slots.len()
     }
 
-    /// Run `f` on the entry for `key` under its slot's lock: None when its bucket (four
-    /// neighbouring slots) holds no such position or the lock of the one that does is taken.
+    /// Run `f` on the entry for `key` under its slot's lock: None when the slot holds
+    /// another position or another thread holds the lock.
     #[inline]
     fn probe<R>(&self, key: u64, f: impl FnOnce(&TtEntry) -> R) -> Option<R> {
-        let base = (key as usize) & (self.slots.len() - 1) & !(TT_BUCKET - 1);
-        for slot in &self.slots[base..base + TT_BUCKET] {
-            if slot.lock.swap(true, Ordering::Acquire) {
-                continue;
-            }
-            // SAFETY: the lock gives this thread exclusive access to the entry.
-            let e = unsafe { &*slot.entry.get() };
-            if e.bound != Bound::Empty && e.key == key {
-                let r = f(e);
-                slot.lock.store(false, Ordering::Release);
-                return Some(r);
-            }
-            slot.lock.store(false, Ordering::Release);
+        let slot = &self.slots[(key as usize) & (self.slots.len() - 1)];
+        if slot.lock.swap(true, Ordering::Acquire) {
+            return None;
         }
-        None
+        // SAFETY: the lock gives this thread exclusive access to the entry.
+        let e = unsafe { &*slot.entry.get() };
+        let r = if e.bound != Bound::Empty && e.key == key { Some(f(e)) } else { None };
+        slot.lock.store(false, Ordering::Release);
+        r
     }
 
-    /// Store into the bucket's slot of the same position, else an empty one, else the one with
-    /// the smallest depth.
     fn store(&self, key: u64, depth: i32, bound: Bound, score: i32, proven: bool, action: &MoveSeq) {
-        let base = (key as usize) & (self.slots.len() - 1) & !(TT_BUCKET - 1);
-        let mut victim = (usize::MAX, i16::MAX);
-        for (i, slot) in self.slots[base..base + TT_BUCKET].iter().enumerate() {
-            if slot.lock.swap(true, Ordering::Acquire) {
-                continue;
-            }
-            // SAFETY: the lock gives this thread exclusive access to the entry.
-            let e = unsafe { &mut *slot.entry.get() };
-            if e.bound != Bound::Empty && e.key == key {
-                if depth as i16 >= e.depth - 1 || bound == Bound::Exact {
-                    Self::write(&self.spilled, e, key, depth, bound, score, proven, action);
-                }
-                slot.lock.store(false, Ordering::Release);
-                return;
-            }
-            let d = if e.bound == Bound::Empty { i16::MIN } else { e.depth };
-            if d < victim.1 {
-                victim = (i, d);
-            }
-            slot.lock.store(false, Ordering::Release);
-        }
-        if victim.0 == usize::MAX {
-            return;
-        }
-        let slot = &self.slots[base + victim.0];
+        let slot = &self.slots[(key as usize) & (self.slots.len() - 1)];
         if slot.lock.swap(true, Ordering::Acquire) {
             return;
         }
         // SAFETY: the lock gives this thread exclusive access to the entry.
         let e = unsafe { &mut *slot.entry.get() };
-        // (Another thread may have filled it since: the shallower of the two goes.)
-        if e.bound == Bound::Empty || e.key == key || depth as i16 >= e.depth - 1 || bound == Bound::Exact {
-            Self::write(&self.spilled, e, key, depth, bound, score, proven, action);
+        if e.bound == Bound::Empty || e.key != key || depth as i16 >= e.depth - 1 || bound == Bound::Exact {
+            e.key = key;
+            e.depth = depth as i16;
+            e.bound = bound;
+            e.proven = proven;
+            e.score = score;
+            e.action.assign(action);
+            if e.action.spilled() && !self.spilled.load(Ordering::Relaxed) {
+                self.spilled.store(true, Ordering::Relaxed);
+            }
         }
         slot.lock.store(false, Ordering::Release);
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn write(spilled: &AtomicBool, e: &mut TtEntry, key: u64, depth: i32, bound: Bound, score: i32, proven: bool, action: &MoveSeq) {
-        e.key = key;
-        e.depth = depth as i16;
-        e.bound = bound;
-        e.proven = proven;
-        e.score = score;
-        e.action.assign(action);
-        if e.action.spilled() && !spilled.load(Ordering::Relaxed) {
-            spilled.store(true, Ordering::Relaxed);
-        }
     }
 }
 
