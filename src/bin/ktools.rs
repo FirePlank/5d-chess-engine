@@ -651,6 +651,7 @@ fn main() {
             std::fs::write(&args[2], &bytes).expect("write table");
             writeln!(out, "{} positions, {:?}, {} bytes, {:.1}s", n, st, bytes.len(), t.elapsed().as_secs_f64()).unwrap();
         }
+        "bookeval" => bookeval(&args[2..], &mut out),
         "abbench" => abbench(
             args.get(2).map(|s| s.as_str()).unwrap_or("data/bench_ab.g"),
             args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20),
@@ -2744,4 +2745,200 @@ fn matecheck(args: &[String], out: &mut impl Write) {
         }
     });
     writeln!(out, "cases {} | mate claimed {} | consistent {} | flagged cases by kind {:?} | proven claims undelivered {} | {} nodes/search, {:.0}s", total, claimed, clean, counts, proven_false, nodes, t0.elapsed().as_secs_f64()).unwrap();
+}
+
+/// `bookeval [nodes] [threads] [out.tsv] [max_secs] [depth_cap] [book_file]`: search every
+/// position of the opening book (the positions with book actions and every position an action
+/// reaches, each once however it was reached) with a fixed node budget per position (deterministic,
+/// one thread and a fresh table each; `max_secs` and `depth_cap` only bound the odd position)
+/// and write one line per position to `out.tsv`: key, present turn and side to move, depth
+/// reached, score kind and value (from the side to move's view), the best action, nodes,
+/// seconds, the PV. Also writes `<out>.edges.tsv` (every book action: parent and child key, tag,
+/// weight, PGN, a line leading to the parent) and `<out>.positions.tsv` (key, turn, side,
+/// opening name, a line leading there). Resumes: positions already in `out.tsv` are skipped.
+fn bookeval(args: &[String], out: &mut impl Write) {
+    use kairos::engine::ab::AlphaBeta;
+    use kairos::engine::{Limits, OptionValue};
+    use kairos::web::tree::{parse_lan_moves, play_action};
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    let nodes: u64 = args.first().and_then(|s| s.parse().ok()).unwrap_or(2_000_000);
+    let threads: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(8);
+    let path = args.get(2).cloned().unwrap_or_else(|| "docs/theory/book_evals.tsv".to_string());
+    let max_secs: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(600);
+    let depth_cap: u32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(30);
+    let book_file = args.get(5).cloned().unwrap_or_else(|| "data/book_theory.txt".to_string());
+    let text = std::fs::read_to_string(&book_file).expect("book file");
+    // Positions by frontier key (the book's own key), the first state seen; edges between them.
+    let mut states: HashMap<u64, State> = HashMap::new();
+    let mut order: Vec<u64> = Vec::new();
+    struct Edge {
+        parent: u64,
+        child: u64,
+        tag: String,
+        weight: String,
+        lan: String,
+        pgn: String,
+    }
+    let mut edges: Vec<Edge> = Vec::new();
+    let mut names: HashMap<u64, String> = HashMap::new();
+    let mut cur: Option<(u64, State)> = None;
+    let add = |s: &State, states: &mut HashMap<u64, State>, order: &mut Vec<u64>| -> u64 {
+        let k = s.frontier_hash();
+        if !states.contains_key(&k) {
+            states.insert(k, s.clone());
+            order.push(k);
+        }
+        k
+    };
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(g) = line.strip_prefix("P ") {
+            let s = parse_g_line(g).expect("book position");
+            let k = add(&s, &mut states, &mut order);
+            cur = Some((k, s));
+        } else if let Some(n) = line.strip_prefix("N ") {
+            let (k, _) = cur.as_ref().expect("name after position");
+            names.entry(*k).or_insert_with(|| n.trim().to_string());
+        } else if let Some(m) = line.strip_prefix("m ") {
+            let (k, s) = cur.as_ref().expect("move after position");
+            let (head, pgn) = m.split_once(';').unwrap_or((m, ""));
+            let mut it = head.split_whitespace();
+            let tag = it.next().unwrap_or("").to_string();
+            let weight = it.next().unwrap_or("0").to_string();
+            let lan = it.collect::<Vec<_>>().join(" ");
+            let moves = parse_lan_moves(&lan).expect("lan");
+            let child = play_action(s, &moves).expect("legal book action");
+            let ck = add(&child, &mut states, &mut order);
+            if !edges.iter().any(|e| e.parent == *k && e.lan == lan) {
+                edges.push(Edge { parent: *k, child: ck, tag, weight, lan, pgn: pgn.trim().to_string() });
+            }
+        }
+    }
+    // A line (PGN actions) from a root to every position, by breadth-first search.
+    let mut children: HashMap<u64, Vec<usize>> = HashMap::new();
+    for (i, e) in edges.iter().enumerate() {
+        children.entry(e.parent).or_default().push(i);
+    }
+    let is_child: std::collections::HashSet<u64> = edges.iter().map(|e| e.child).collect();
+    let mut line_to: HashMap<u64, String> = HashMap::new();
+    let mut queue = std::collections::VecDeque::new();
+    for &k in &order {
+        if !is_child.contains(&k) {
+            line_to.insert(k, String::new());
+            queue.push_back(k);
+        }
+    }
+    while let Some(k) = queue.pop_front() {
+        let here = line_to[&k].clone();
+        for &i in children.get(&k).map(|v| v.as_slice()).unwrap_or(&[]) {
+            let e = &edges[i];
+            if !line_to.contains_key(&e.child) {
+                line_to.insert(e.child, if here.is_empty() { e.pgn.clone() } else { format!("{} {}", here, e.pgn) });
+                queue.push_back(e.child);
+            }
+        }
+    }
+    let turn_of = |k: u64| -> (i32, bool) {
+        let (t, c) = states[&k].get_present();
+        (t as i32, c)
+    };
+    {
+        let mut f = std::fs::File::create(format!("{}.edges.tsv", path)).expect("edges file");
+        writeln!(f, "parent\tchild\ttag\tweight\tlan\tpgn\tparent_line").unwrap();
+        for e in &edges {
+            writeln!(f, "{:016x}\t{:016x}\t{}\t{}\t{}\t{}\t{}", e.parent, e.child, e.tag, e.weight, e.lan, e.pgn, line_to.get(&e.parent).cloned().unwrap_or_default()).unwrap();
+        }
+        let mut f = std::fs::File::create(format!("{}.positions.tsv", path)).expect("positions file");
+        writeln!(f, "key\tturn\tside\tname\tline").unwrap();
+        for &k in &order {
+            let (t, c) = turn_of(k);
+            writeln!(f, "{:016x}\t{}\t{}\t{}\t{}", k, t, if c { "b" } else { "w" }, names.get(&k).cloned().unwrap_or_default(), line_to.get(&k).cloned().unwrap_or_default()).unwrap();
+        }
+    }
+    let done: std::collections::HashSet<String> = std::fs::read_to_string(&path)
+        .map(|t| t.lines().filter_map(|l| l.split('\t').next().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+    let mut todo: Vec<u64> = order.iter().copied().filter(|k| !done.contains(&format!("{:016x}", k))).collect();
+    todo.sort_by_key(|&k| turn_of(k));
+    if let Ok(n) = std::env::var("BOOKEVAL_LIMIT") {
+        todo.truncate(n.parse().unwrap_or(usize::MAX));
+    }
+    writeln!(out, "{} positions, {} actions, {} to search ({} nodes each, {} threads)", order.len(), edges.len(), todo.len(), nodes, threads).unwrap();
+    out.flush().ok();
+    let file = {
+        let new = !std::path::Path::new(&path).exists();
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).expect("out file");
+        if new {
+            writeln!(f, "key\tturn\tside\tdepth\tkind\tscore\tbest\tnodes\tsecs\tpv").unwrap();
+        }
+        Arc::new(Mutex::new(f))
+    };
+    let total = todo.len();
+    let todo = Arc::new(todo);
+    let states = Arc::new(states);
+    let next = Arc::new(AtomicUsize::new(0));
+    let t0 = Instant::now();
+    let mut handles = Vec::new();
+    for _ in 0..threads {
+        let (todo, states, next, file) = (todo.clone(), states.clone(), next.clone(), file.clone());
+        handles.push(
+            std::thread::Builder::new()
+                .stack_size(256 << 20)
+                .spawn(move || {
+                    let stop = AtomicBool::new(false);
+                    let mut e = AlphaBeta::new();
+                    e.set_option("Hash", &OptionValue::Int(64));
+                    e.set_option("Threads", &OptionValue::Int(1));
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        if i >= todo.len() {
+                            break;
+                        }
+                        let k = todo[i];
+                        let s = &states[&k];
+                        e.new_game();
+                        let mut last = String::new();
+                        let t = Instant::now();
+                        let limits = Limits { depth: Some(depth_cap), nodes: Some(nodes), movetime: Some(max_secs * 1000), ..Default::default() };
+                        let best = e.find_best_move(s, &limits, &stop, &mut |m| {
+                            if m.contains("score ") && m.starts_with("depth ") {
+                                last = m;
+                            }
+                        });
+                        let toks: Vec<&str> = last.split_whitespace().collect();
+                        let after = |key: &str, n: usize| -> String { toks.iter().position(|w| *w == key).and_then(|p| toks.get(p + n)).map(|s| s.to_string()).unwrap_or_default() };
+                        let kind = after("score", 1);
+                        let score = after("score", 2);
+                        let pv: Vec<&str> = toks.iter().skip_while(|w| **w != "pv").skip(1).take(6).copied().collect();
+                        let (tt, c) = s.get_present();
+                        let line = format!(
+                            "{:016x}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.1}\t{}",
+                            k,
+                            tt,
+                            if c { "b" } else { "w" },
+                            after("depth", 1),
+                            kind,
+                            score,
+                            best.map(|a| kairos::web::tree::action_lan(s, &a)).unwrap_or_default(),
+                            after("nodes", 1),
+                            t.elapsed().as_secs_f64(),
+                            pv.join(" ")
+                        );
+                        let mut f = file.lock().unwrap();
+                        writeln!(f, "{}", line).unwrap();
+                        f.flush().ok();
+                        if (i + 1) % 50 == 0 {
+                            eprintln!("{}/{} {:.0}s", i + 1, total, t0.elapsed().as_secs_f64());
+                        }
+                    }
+                })
+                .expect("spawn"),
+        );
+    }
+    for h in handles {
+        h.join().expect("worker");
+    }
+    writeln!(out, "done in {:.0}s", t0.elapsed().as_secs_f64()).unwrap();
 }
