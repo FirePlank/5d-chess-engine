@@ -1013,6 +1013,11 @@ pub const PROBE_NODES: u64 = 5_000;
 /// Travel targets on boards past this turn are left alone (the theory lives in the opening).
 const MAX_TARGET_TURN: i32 = 8;
 
+/// Positions whose `Unknown` outcome was resolved again with a larger budget (by key).
+static RETRIED: [AtomicU64; 1 << TRAVEL_BITS] = [const { AtomicU64::new(0) }; 1 << TRAVEL_BITS];
+/// The budget of that second try, in probes.
+const RETRY_MULT: u64 = 8;
+
 fn note_travel(tk: Option<u64>, o: Outcome) {
     if let (Some(k), Outcome::Win { .. }) = (tk, o) {
         TRAVELS[(k >> 40) as usize & ((1 << TRAVEL_BITS) - 1)].store(k, Ordering::Relaxed);
@@ -1099,14 +1104,23 @@ pub fn prepare(s: &State, budget: u64, deadline: Option<Instant>, stop: Option<&
             keys[i] = board_key(l, v0 + i as i32, b);
         }
         let rk = result_key(window_key(&keys[..boards.len()]), attacker);
+        // A cheap probe that ended unknown gets one larger try, once.
+        let mut retry = false;
         if let Some(o) = get(&RESULTS, RES_BITS, rk) {
-            note_travel(tk, o);
-            continue;
+            retry = o == Outcome::Unknown && RETRIED[(rk >> 40) as usize & ((1 << TRAVEL_BITS) - 1)].load(Ordering::Relaxed) != rk;
+            if !retry {
+                note_travel(tk, o);
+                continue;
+            }
         }
+        let probe_nodes = if retry { probe_nodes * RETRY_MULT } else { probe_nodes };
         // Out of budget, the known outcomes of the jobs left are still noted.
         if spent || st.nodes + probe_nodes > budget || deadline.is_some_and(|d| Instant::now() >= d) || stop.is_some_and(|s| s.load(Ordering::Relaxed)) {
             spent = true;
             continue;
+        }
+        if retry {
+            RETRIED[(rk >> 40) as usize & ((1 << TRAVEL_BITS) - 1)].store(rk, Ordering::Relaxed);
         }
         let (o, n, timed_out) = resolve(&boards, l, v0, attacker, h, MAX_MOVES, probe_nodes, deadline, stop);
         if verbose {
