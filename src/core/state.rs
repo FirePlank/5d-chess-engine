@@ -107,6 +107,13 @@ impl State {
     pub fn live_hash(&self) -> u64 {
         self.m.live_hash() ^ (self.player as u64).wrapping_mul(0x9e3779b97f4a7c15) ^ (self.present as u64).wrapping_mul(0xd6e8feb86659fd93)
     }
+    /// Hash of the position in play: every timeline's last board, side to move and stored
+    /// present, but none of the earlier boards. Positions reached by different move orders
+    /// share it (the opening book's key: theory is move-order independent).
+    #[inline]
+    pub fn frontier_hash(&self) -> u64 {
+        self.m.frontier_hash() ^ (self.player as u64).wrapping_mul(0x9e3779b97f4a7c15) ^ (self.present as u64).wrapping_mul(0xd6e8feb86659fd93) ^ 0x5be1_7c3a_92d4_e061
+    }
     #[inline(always)]
     pub fn apparent_present(&self) -> Turn {
         self.m.get_present()

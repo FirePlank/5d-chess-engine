@@ -64,7 +64,7 @@ fn positions_are_found_however_they_were_reached() {
 
 #[test]
 fn know_moves_are_never_chosen() {
-    // 1. Nf3 Nf6 2. d4 d5 3. Bd2 c6 4. Nc3: Nc3 is a blunder (know), Qa5# the punishment (play).
+    // 1. Nf3 Nf6 2. d4 d5 3. Bd2 c6 4. Nc3: Nc3 is a blunder (know), Qa5# the punishment (play); e3 and c4 are played.
     let s = position(
         "Standard - Turn Zero",
         "(0T1)g1f3 submit (0T1)g8f6 submit (0T2)d2d4 submit (0T2)d7d5 submit (0T3)c1d2 submit (0T3)c7c6 submit",
@@ -73,7 +73,7 @@ fn know_moves_are_never_chosen() {
     assert!(b.probe(&s).unwrap().iter().any(|m| !m.play && m.lan == "(0T4)b1c3"));
     for seed in 0..200 {
         let m = b.choose(&s, seed).unwrap();
-        assert!(m.play && m.lan == "(0T4)e2e3", "{}", m.lan);
+        assert!(m.play && (m.lan == "(0T4)e2e3" || m.lan == "(0T4)c2c4"), "{}", m.lan);
     }
     // White's first move in T0: Nf3 (10), e3 (5) or e4 (2); the other first moves are known,
     // not played.
@@ -238,4 +238,40 @@ fn api_opening_follows_the_selected_branch_and_survives_leaving_the_book() {
     assert!(call(r#"{"cmd":"book","node":0}"#).get("opening").is_null());
     call(r#"{"cmd":"new","position":"Standard"}"#);
     assert!(call(r#"{"cmd":"book","node":0}"#).get("opening").is_null());
+}
+
+#[test]
+fn transposed_move_orders_find_the_same_book_position() {
+    // 1. Nf3 Nf6 2. d4 d5 3. c3 c6 and 1. Nf3 Nf6 2. c3 d5 3. d4 c6 are one position (the
+    // Classical f7 Defense structure), and 1. d4 Nf6 2. Bf4 is in the book too.
+    let a = position("Standard - Turn Zero", "(0T1)g1f3 submit (0T1)g8f6 submit (0T2)d2d4 submit (0T2)d7d5 submit (0T3)c2c3 submit (0T3)c7c6 submit");
+    let b = position("Standard - Turn Zero", "(0T1)g1f3 submit (0T1)g8f6 submit (0T2)c2c3 submit (0T2)d7d5 submit (0T3)d2d4 submit (0T3)c7c6 submit");
+    let c = position("Standard - Turn Zero", "(0T1)d2d4 submit (0T1)g8f6 submit (0T2)c1f4 submit");
+    let book = Book::theory();
+    assert_eq!(book.opening_name(&a), book.opening_name(&b));
+    assert!(book.opening_name(&a).is_some());
+    let (pa, pb) = (book.probe(&a).unwrap(), book.probe(&b).unwrap());
+    assert_eq!(pa.len(), pb.len());
+    assert!(book.probe(&c).is_some());
+    // The Standard variant's start is not Turn Zero's.
+    let std_start = book.probe(&position("Standard", ""));
+    let t0_start = book.probe(&position("Standard - Turn Zero", "")).unwrap();
+    assert!(std_start.is_none_or(|m| m.len() != t0_start.len() || m.iter().zip(t0_start).any(|(x, y)| x.lan != y.lan || x.play != y.play)));
+}
+
+#[test]
+fn moves_that_transpose_into_the_book_are_listed_and_played() {
+    // 1. d4 Nf6 2. Nf3 reaches 1. Nf3 Nf6 2. d4 by another move order, a position with played
+    // moves: the transposition is listed and played too (at a low weight).
+    let s = position("Standard - Turn Zero", "(0T1)d2d4 submit (0T1)g8f6 submit");
+    let b = Book::theory();
+    let t = b.transpositions(&s);
+    assert!(t.iter().any(|m| m.lan == "(0T2)g1f3" && m.play && m.weight == kairos::engine::book::TRANSPOSE_WEIGHT), "{:?}", t.iter().map(|m| &m.lan).collect::<Vec<_>>());
+    // Its own book moves are not repeated.
+    assert!(!t.iter().any(|m| m.lan == "(0T2)c1f4"));
+    let mut seen = std::collections::HashSet::new();
+    for seed in 0..500 {
+        seen.insert(b.choose(&s, seed).unwrap().lan);
+    }
+    assert!(seen.contains("(0T2)g1f3") && seen.contains("(0T2)c1f4"), "{:?}", seen);
 }

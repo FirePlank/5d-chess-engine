@@ -1,0 +1,308 @@
+                 Finding the Fifth Dimension:
+                  a Guide to 5D Chess Strategy
+
+Hello!
+This guide is meant to introduce the strategy of competitive 5D Chess with Multiverse Time Travel. It starts from the basic
+ideas of how to use time travel to your advantage, and goes all the way to analysis of complicated many-timeline positions.
+You can use the guide to learn what concepts to focus on, but there is no substitute for playing games and trying out these
+strategies yourself.
+Before starting this guide, you'll need to understand the basic rules of the game. Learn how the pieces move, both on the
+board and through time. Learn the rules about how new timelines are created. If you see a piece giving check to a king in
+the past, do you understand why that has happened? Once you are comfortable with those concepts, you should be ready
+for this guide. If you don't understand those things yet, you can watch some explanatory videos [1] or ask people in the 5D
+Chess discord server.
+Let's dive into the multiverse!
+
+                         FIFTH
+The most important skill in 5D chess
+
+This game involves time travel! This fact, unsurprisingly, makes it totally different from normal chess. So we should think
+carefully about how to use time travel to our advantage.
+There are two facts to consider:
+
+    1. Time travel is very strong! There are many situations where, if you can travel a piece close to your opponent's king,
+         then you will be able to force a checkmate.
+
+                                                                                A forced mating sequence after a travel
+
+    2. The rules of 5D chess limit how many timelines you can make. In 5D chess, you are only allowed to make up to one
+         more timeline than your opponent has made; any more timelines will be inactive.
+
+The conflict between these two facts brings us to the most important concept of 5D chess strategy: Timeline Advantage. A
+time travel can be a good move, but every time you make a new timeline, you are giving your opponent the opportunity to
+create a new timeline. If a player has made less timelines than the opponent, we say that player has "Timeline Advantage".
+For an analogy: imagine if, in a soccer game, every time you tried to make a shot on the opponent's goal, you gave them a
+free penalty kick. Then, you should be very careful about when you try to score, to make sure you get a point!
+It's the same in 5D chess: you should only make a travel if you are very confident that it will win you the game, or at least
+give a very strong advantage. There is some debate about the exact value of a timeline, but most players agree that timeline
+advantage is worth more than a queen.
+
+                                                 Black made a useless travel to capture a bishop. Now white has timeline advantage
+
+Most 5D chess games between strong players are won or lost because one player made a time travel that they thought was
+good, but it actually wasn't strong enough to win. So they gave timeline advantage to the opponent, and a few moves later
+the opponent makes an even stronger travel to win the game.
+It can happen the other way around too: you see that your opponent has a time travel, but it doesn't look very good, so you
+don't bother to defend it. But then they make the travel, and it turns out there was a move you didn't see, and now you lose.
+The most important skill in 5D chess is the ability to see if a travel is good or bad.
+How to make a strong travel
+
+So, now that we know that we should only make strong travels... what does a strong travel look like?
+Kings are a lot easier to checkmate in 5D chess. This is because all you need to do to mate is give a single check on a past
+king (without your piece being taken). When a past king is in check, and there is nothing that can be done about it on that
+timeline, we call it softmate. The only way to escape softmate is to travel back in time from another timeline and hope to
+eventually take the piece that is causing the softmate.
+Thus, king safety is even more important in 5D chess than normal chess.
+The best travels are ones that expose the opponent's king. If a king is brought into the open, it is a lot easier to get a past
+check on it.
+
+                                                Black's travel forces the king to step up to e2, where it can be softmated by the knight
+
+In the example above, black sacrifices a queen to bring white's king closer to the center of the board, resulting in a
+softmate.
+Often, a good travel involves sacrificing a piece to force the opponents king to step into the open, then your other pieces can
+give "stall checks" to wait until enough turns have passed that you can give a past check.
+                              White travels to f7 to expose the king, then gives a series of checks to stall until the queen can softmate from b3
+
+But remember, the travel needs to work. You can't just throw pieces at the king and hope for a softmate. If the travel
+doesn't end with you winning the game, then all you did was give timeline advantage to your opponent. There is no such
+thing as a travel that "almost works". If you can't think of how to win after the travel, you probably shouldn't go for it.
+
+Seeing the difference between a winning travel and a useless travel is critical, and is best practiced by playing lots of games
+and analyzing lots of positions.
+Weaknesses
+
+We can't just look at every possible travel move to see if it will win; there are too many to count. But we know that even a
+small weakness can lead to a game-winning travel. So we should look for weak points in the opponent's position, and
+then figure out if we can attack them.
+Here is a short list of weaknesses to look for:
+
+    1. An open line to the king
+If there is an open path to the king, then we can attack it with a queen or bishop. From the starting position, there are 3
+ways to get to the king. Check to see if any of those are open.
+
+                                                                        The three paths to the king in the starting position
+    2. An undefended pawn next to the king
+If there is an undefended pawn next to the king (usually the f-pawn), then we might be able to travel onto that pawn to
+start a softmating sequence. The king alone is not enough to defend, because if the pawn is taken the king will be exposed
+after recapturing.
+
+                                                                          White has an undefended pawn next to the king
+
+    3. A knight close to the enemy king
+If we have a knight close to the enemy king, then there are many ways to attack. The goal is to get the knight within one or
+two spaces of the king without it being taken.
+There are many more weaknesses, but they are more subtle and require advanced tactics to exploit. I will talk about some
+of them later, but you can look at Mage's tactics guide [2] for more information on these.
+Opening Theory
+
+Note: this guide focuses on the variant "Standard ­ Turn Zero", because that is the most commonly played competitive variant,
+for reasons discussed later in this section.
+Now we can begin to think about what the best opening moves are. Look at the starting position of the board:
+
+                                                                 Standard - Turn Zero, the most common competitive variant
+
+Already, there is a weakness in the starting position. Can you see it?
+The weakness in the starting position is that there is an undefended pawn next to the king (Weakness #2).
+
+                                                                              Undefended pawns in the starting position
+
+This weakness can be exploited. In fact, if either player can travel a queen to take that pawn on the first turn, then there
+will be a forced checkmate!
+
+                                                                White has forced softmate after sacrificing a queen onto T1 f7
+
+The above image shows how white can checkmate after traveling a queen onto f7 on T1. There are many possibilities for
+how black can try to escape this, but they all lead to mate unless black specifically prepared for this by setting up pieces on
+the original timeline. Here are a few examples of black trying and failing to survive:
+                       Some failed attempts at surviving the f7 sacrifice. There is no way for black to survive without help from another timeline
+
+You can read more about this in the Steam guide on the f7 sacrifice [3]. Or, even better, try playing the moves yourself and
+figuring out how both sides can try to attack & defend.
+
+The point is, it's very bad to leave the f-pawn undefended. Because the f7 sacrifice is so powerful, almost all of opening
+theory is about defending against it, or attacking your opponent with it, or finding other tricky ways to survive it. This is the
+reason why the "Standard" variant is considered to be unbalanced, because only white can make this powerful travel to the
+first turn of the game. There are several variants which try to fix this imbalance:
+
+     Standard ­ Turn Zero has an additional black board before the first white board, so black can also travel to the first
+         turn.
+
+     Standard ­ Defended Pawn rearranges the starting position so that all the pawns near the king are defended
+         (removing the weakness).
+
+     Standard ­ Princess replaces the queen with a Princess, which limits its attacking power.
+
+Of these three variants, Turn Zero is the most commonly played in a competitive setting, and thus is the focus of this guide.
+However, I encourage you to try other variants to broaden your understanding of the game.
+The most common opening strategy in Turn Zero is to defend the f-pawn with the following moves:
+
+                                      The Classical f7 Defense. Both players can play this, because both players need to defend the f-pawn
+
+The first move with the knight blocks one path to f2. Then the d4 pawn move blocks the second path to f7. Finally, the c3
+pawn move blocks the path to the king. It's okay to open a path to the king, as long as you remember to defend it soon after.
+This opening, the "Classical f7 Defense", is the most common opening, played by beginners and world champions alike. If
+you only want to play one opening, you should probably pick this one. But there are many other viable possibilities, and I
+encourage you to look into openings to find which ones appeal to your style of play.
+Investigating opening moves by playing them on a board against yourself is a great way to get better at the game and
+practice your position-analyzing skills. Just remember, whatever opening you play should either defend against the f7
+sacrifice, or have a plan for how to counterattack if you get f7-sac'd.
+
+More information on this opening and many others can be found in the T0 Openings Guide [4].
+Playing on One Timeline
+
+Because of the concept of timeline advantage, many games take place on just one timeline for most of the game. But don't
+be fooled! This is still a very different game from normal 2D chess.
+
+Here are a few miscellaneous notes on how to play well on one timeline:
+
+Every move should have a purpose:
+     Defend a weakness in your position
+              o If there is a path to your king, block it
+              o If there is an undefended pawn, defend it
+              o If there is an enemy piece near your king, take it with another piece
+     Attack a weakness in your opponent's position
+              o Threaten to travel onto a weak pawn
+              o If there are no weaknesses in your opponents position, try to create one
+     Develop a piece to a better position
+
+If you make a move without a purpose, it's as if you are giving your opponent a free extra turn. In this game, one turn is
+often the difference between winning and losing. You should also look at your opponent's moves and think about their
+purpose. Are they trying to set up a travel?
+
+Of course, this is also good advice for normal chess. But it's extra important in 5D, because winning travels can come
+seemingly out of nowhere. You want to defend these things before they become a problem. This isn't to say that you should
+never allow weaknesses. If you try to go the whole game without ever creating any weaknesses in your position, you will
+probably play too passively and fall behind on piece development. It's okay to make a weakness, as long as you are aware
+of it and don't allow your opponent to exploit it.
+Piece Values:
+
+Normal chess wisdom assigns a "point value" to each piece: pawn = 1, knight = bishop = 3, rook = 5, queen = 9. The piece
+values are different in 5D, although no exact values have been agreed upon.
+
+     Bishops are very strong in open positions where they can make long travels onto weaknesses near the enemy king.
+     Knights can be strong defenders, particularly when placed on f3 or f6. They can also be strong offensively, if they
+
+         can find a way to get close to the opposing king.
+     Rooks are difficult to use in the early game, but in the late game they can become extremely valuable for their ability
+
+         to travel an unlimited distance into the past.
+     Queens are by far the strongest piece, even more so than in normal chess. Almost no material gain is worth the
+
+         sacrifice of a queen, unless that sacrifice directly wins the game.
+Important Tactics
+
+Aside from normal 2D chess tactics such as a fork or a pin, there are some special 5D tactics that are important to
+understand if you are competing against strong players.
+The first of these is Phasing. This is an attacking tactic that is hard to see for beginners, but is very important not to ignore.
+The idea of phasing is that a bishop can "pass through" a pawn when it travels through time, if the pawn was moved on the
+correct turn.
+
+                                   Black's bishop appears to "pass-through" the f-pawn as it moves back in time. This travel will land on f2
+
+This tactic allows you to attack with a bishop even if there appear to be pawns blocking it. It is useful for attacking the f-
+pawn, or for checking the opponent's king if they left the e-file open.
+To understand phasing, try playing it on a board against yourself to see how the timing works out. Then, when you see your
+opponent pushing a pawn in front of a bishop, you'll know when to watch out for a travel.
+Another important tactic is the Anti-Castle Travel. If you castle your king into a position where there is an undefended
+pawn, then you just gave yourself a weakness (Weakness #2)! This can be attacked like so:
+
+                                             White castles into an undefended position, so black travels to attack the king in in parallel
+
+This tactic is so strong that it is usually considered bad to castle in 5D chess. But castling can still be a good move! Just make
+sure that you castle into a place that is already defended.
+Travels and Counter-Travels
+
+Sometimes you can go a whole game without any time travel, just sparring back and forth on one timeline. But sometimes...
+travels happen. Usually, if the players are good, this will end up with somebody getting softmated. But, as every beginner
+finds out, the game does not end there! If you are softmated on one timeline, you can still make a time travel to the past
+from another timeline:
+
+                            Softmate
+
+                                                                White must
+                                                                travel from
+           here White ignored their weakness on f2 and allowed a softmate to happen. Now they must travel back to before the softmate
+
+We call this type of travel a counter-travel. Now, if you are the one who has been softmated, you have two options:
+    1. Win the game before the Present catches up to the board where you are softmated
+    2. Maneuver a piece so that it can take the piece that is softmating you (we call this a recapture)
+Obviously option 1 is better, but sometimes option 2 is the best you can do. Here is an example of a recapture, continuing
+from the image above:
+
+                             White travels back to before the softmate, and is now able to recapture with the knight from the bottom timeline
+
+After the recapture happens, both players have spent one travel, so neither player has timeline advantage. Of course, the
+position might still be winning for one player. Usually it ends up being better for the player who is attacking, because the
+defender has to waste tempo to make the recapture.
+If you see that your opponent is about to make a strong travel, and there's nothing you can do to stop it, you should try to
+set up a counter-travel. For example, if you move a rook or queen on a turn before they travel, you will be able to send your
+rook/queen very far into the past, and thus have a lot of turns to checkmate or set up a recapture. We call this tactic a
+Jurassic Rook (or queen).
+Ideally, you should consider the possibility of a counter-travel before you even make the travel in the first place.
+Playing on Many Timelines
+
+In the aftermath of the examples above, we are left with 3+ timelines and hundreds of possible combinations of moves.
+How can we possibly analyze a position like this? If you know what to look for, these positions should be no more difficult
+than a single timeline game.
+Again, the key is to focus on weaknesses. Look at the position, including the history of the game, and ask yourself: Are there
+any paths to my king? Do I have any undefended pawns near the king? Likewise, what weaknesses does my opponent
+have?
+The only difference is that now there are more dimensions to work with, and a lot more history to consider. Take look at
+this game:
+
+                                  White got softmated on the top timeline, but managed to make a jurassic queen. How can white win here?
+Let's look for open paths to the black king (Weakness #1). Suppose we are aiming for the king on the top timeline (circled in
+red).
+
+If we look at all the squares adjacent to it (including ones on other timelines), we can see that there is a gap: d7 on the
+middle timeline (marked in green) is unblocked. If we follow that triagonal down to the bottom timeline, we see that c6 is
+also unblocked. Thus, there is an open path to the king!
+If we could make another timeline with a queen on b5, then this should cause a check to the king on the top timeline. Can
+we get a queen to b5? Yes! We can travel the queen from the bottom timeline two turns back and two squares up, landing
+on b5:
+
+                                                       The queen passes through the gaps on c6 and d7 to softmate the black king
+
+At first it may seem impossible to find this kind of tactic, because there are so many possibilities. But with a bit of practice,
+you will know exactly which squares you need to check, and which openings you need to defend.
+Also, wait a minute... why isn't the game over? Oh no, black has even more counter-travels! But that's a story for another
+time.
+You are now good at 5D Chess with Multiverse Time Travel
+
+Now you know enough to become a strong player! If you have read and understood this guide, then you are probably
+already above the average player. The best way to develop your skills from here is to play lots of games against other
+people at or above your level.
+Note: it is less helpful to practice against players (or bots) who don't understand the fundamentals of strategy, because you
+will be able to destroy them with this level of knowledge. You should teach them how to get good, then practice against
+them. But don't be rude: it's not fun to learn by getting f7-sacrificed 10 times in a row.
+
+Also, here is a list of the important concepts from the guide for review:
+     Don't travel without good reason, because it gives away timeline advantage.
+     Look for weaknesses in the opponent's position.
+     There is a weakness in the starting position.
+     Every move should have a purpose.
+     If you get softmated, try to set up a counter-travel for a win or a recapture.
+
+I look forward to playing with you out in the multiverse!
+
+Thank you for reading!
+If you have any suggestions for this guide, please message me on Discord.
+
+5 Dimensionally yours,
+Tones
+Other Resources
+
+    1. Rules video by Triple S Gaming
+              a. https://www.youtube.com/watch?v=OL73o48db7s
+
+    2. Tactics Guide by Mage
+              a. https://docs.google.com/document/d/1Ep3BVi_ddzNcI-V03Bq0sgYOKgE9JFtLUIpMt-7vL_E/edit?usp=sharing
+
+    3. Defending the f7 sacrifice
+              a. https://steamcommunity.com/sharedfiles/filedetails/?id=2218187793
+              b. Note that this guide is a bit outdated because it was created before the Turn Zero variant was adopted
+
+    4. T0 Openings Guide by Theory Gang
+              a. https://docs.google.com/document/d/1twnRLEJuDhWhSWPfe89TJCQ9G1FaElqE1AFo-i0isA0/edit?usp=sharing
+

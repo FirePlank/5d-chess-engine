@@ -379,6 +379,16 @@ impl Multiverse {
     pub fn hash(&self) -> u64 {
         self.hash
     }
+    /// XOR of the `board_key` of every timeline's last board and of where each timeline starts
+    /// (so variants that begin with different numbers of boards stay apart): the boards in
+    /// play, whatever move order (earlier boards) led to them.
+    #[inline]
+    pub fn frontier_hash(&self) -> u64 {
+        self.lines
+            .iter()
+            .filter_map(|tl| tl.keys.last().map(|k| k ^ mix64(tl.start as u32 as u64 ^ 0xa5a5_1234_dead_beef)))
+            .fold(0, |h, k| h ^ k)
+    }
     /// `hash` with the boards before the last one of every inactive timeline left out: those
     /// timelines can no longer be played on, so how they got to their last board does not
     /// change what the position is worth (their boards can still be travelled to).
