@@ -64,12 +64,8 @@ fn fen_row_width(row: &str) -> Option<i32> {
     Some(w)
 }
 
-/// A start position written in a shorthand the 5DUCI `position` command does not take, as a
-/// 5DUCI position argument:
-/// - a built-in variant name (`Standard - Two Timelines`);
-/// - a bare board FEN, optionally followed by `w`/`b` (`k7/p*n6/K7/8/8/8/6P*B/8`): one board
-///   on timeline 0 at turn 1 for the side to move, sized from the FEN;
-/// - board tags without a size prefix (`[fen:0:1:w] [fen:-1:1:w]`), as an 8x8 odd layout.
+/// Convert a shorthand start position to a 5DUCI position argument. Accepts a variant name,
+/// a bare board FEN (optionally followed by `w`/`b`), or board tags without a size prefix.
 pub fn as_position(text: &str) -> Option<String> {
     let t = text.trim();
     if let Some(v) = variant_position(t) {

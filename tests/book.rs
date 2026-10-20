@@ -254,7 +254,8 @@ fn transposed_move_orders_find_the_same_book_position() {
     assert_eq!(book.opening_name(&a), book.opening_name(&b));
     assert!(book.opening_name(&a).is_some());
     let (pa, pb) = (book.probe(&a).unwrap(), book.probe(&b).unwrap());
-    assert_eq!(pa.len(), pb.len());
+    // (Each known history has its own moves.)
+    assert!(!pa.is_empty() && !pb.is_empty());
     assert!(book.probe(&c).is_some());
     // The Standard variant's start is not Turn Zero's.
     let std_start = book.probe(&position("Standard", ""));
@@ -277,4 +278,17 @@ fn moves_that_transpose_into_the_book_are_listed_and_played() {
         seen.insert(b.choose(&s, seed).unwrap().lan);
     }
     assert!(seen.contains("(0T2)g1f3") && seen.contains("(0T2)c1f4"), "{:?}", seen);
+}
+
+#[test]
+fn an_exact_line_gives_a_transposed_history_known_moves_only() {
+    // Both orders reach the same board, but in `other` the f3 knight blocks a bishop travel on
+    // turn 1. The line is marked {exact}, so 4. Qxg4 is played only in the guide's order.
+    let guide = position("Standard - Turn Zero", "(0T1)e2e3 submit (0T1)g8f6 submit (0T2)g1f3 submit (0T2)f6g4 submit (0T3)f3g5 submit (0T3)f7f5 submit");
+    let other = position("Standard - Turn Zero", "(0T1)g1f3 submit (0T1)g8f6 submit (0T2)e2e3 submit (0T2)f6g4 submit (0T3)f3g5 submit (0T3)f7f5 submit");
+    let b = Book::theory();
+    assert!(b.probe(&guide).unwrap().iter().any(|m| m.play && m.lan == "(0T4)d1g4"));
+    let moves = b.probe(&other).expect("the book still knows the board");
+    assert!(moves.iter().all(|m| !m.play) && moves.iter().any(|m| m.lan == "(0T4)d1g4"));
+    assert!(b.choose(&other, 1).is_none());
 }

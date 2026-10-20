@@ -1,10 +1,9 @@
 //! Texel tuning of the feature evaluation on harness game files (JSONL).
-//!
-//! tune [--epochs N] [--lr X] [--threads T] [--out weights.txt] [--freeze name,name,...]
-//!      games1.jsonl games2.jsonl ...
-//!
-//! `--freeze` keeps the named features at their prior weight (to compare feature sets on the
-//! same data and holdout).
+//! tune [--epochs N] [--lr X] [--threads T] [--out weights.txt] [--freeze a,b] games.jsonl...
+//! `--freeze` keeps the named features at their prior weight.
+
+// Parallel per-feature arrays: indexing by feature reads clearer than zipped iterators.
+#![allow(clippy::needless_range_loop)]
 
 use kairos::core::state::State;
 use kairos::core::variants::{apply_uci_moves, position_from_uci};
@@ -59,7 +58,7 @@ fn field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
         }
         Some(&r[..end])
     } else {
-        let end = rest.find(|c| c == ',' || c == '}').unwrap_or(rest.len());
+        let end = rest.find([',', '}']).unwrap_or(rest.len());
         Some(rest[..end].trim())
     }
 }
@@ -123,7 +122,7 @@ fn game_samples(line: &str, out: &mut Vec<Sample>) -> Option<()> {
     let new_color = if new_first { first } else { !first };
     let white_result = if score == 0.5 {
         0.5
-    } else if (score == 1.0) == !new_color {
+    } else if (score == 1.0) != new_color {
         1.0
     } else {
         0.0
@@ -212,7 +211,8 @@ fn main() {
     }
     eprintln!("{} games from {} files", lines.len(), files.len());
     let lines = Arc::new(lines);
-    let collected: Arc<Mutex<Vec<(usize, Vec<Sample>)>>> = Arc::new(Mutex::new(Vec::new()));
+    type Collected = Arc<Mutex<Vec<(usize, Vec<Sample>)>>>;
+    let collected: Collected = Arc::new(Mutex::new(Vec::new()));
     let t0 = std::time::Instant::now();
     let mut hs = Vec::new();
     for tid in 0..threads {
@@ -254,11 +254,10 @@ fn main() {
         let sc: f32 = arg(&args, "--init-scale", 1.0);
         for line in std::fs::read_to_string(&init).expect("init weights").lines() {
             let mut it = line.split_whitespace();
-            if let (Some(n), Some(v)) = (it.next(), it.next().and_then(|v| v.parse::<f32>().ok())) {
-                if let Some(i) = hce::FEATURE_NAMES.iter().position(|x| *x == n) {
+            if let (Some(n), Some(v)) = (it.next(), it.next().and_then(|v| v.parse::<f32>().ok()))
+                && let Some(i) = hce::FEATURE_NAMES.iter().position(|x| *x == n) {
                     w[i] = v * sc;
                 }
-            }
         }
     }
     if args.iter().any(|a| a == "--featdiag") {
@@ -378,7 +377,6 @@ fn main() {
             let hs: Vec<_> = chunks
                 .iter()
                 .map(|ch| {
-                    let wf = wf;
                     sc.spawn(move || {
                         let mut g = [0f64; NF];
                         for s in ch.iter() {

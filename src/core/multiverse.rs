@@ -1,7 +1,6 @@
 //! The multiverse: all timelines of boards plus 5D move generation.
-//!
-//! Coordinates: L (timeline, signed) and T (turn). Internally a timeline is stored at index
-//! `u = l_to_u(l)` and a board at half-turn index `v = 2t + c`.
+//! Coordinates are L (signed timeline) and T (turn); storage uses `u = l_to_u(l)` and
+//! half-turn index `v = 2t + c`.
 
 use super::bitboard::*;
 use super::board::{Board, FenError};
@@ -643,7 +642,7 @@ impl Multiverse {
         let last = if c { 0 } else { self.size_y - 1 };
         for sq in marked_pos(b.lpawn() & own) {
             let ahead = if c { sq - 8 } else { sq + 8 };
-            if (sq >> 3) + if c { -1 } else { 1 } == last && ahead >= 0 && ahead < 64 && occ & pmask(ahead) == 0 {
+            if (sq >> 3) + if c { -1 } else { 1 } == last && (0..64).contains(&ahead) && occ & pmask(ahead) == 0 {
                 return true;
             }
         }
@@ -684,10 +683,9 @@ impl Multiverse {
                 let mut a = king_attack(pos) & !friendly;
                 let urook = b.umove() & b.rook() & friendly;
                 if !b.is_under_attack(pos, c) {
-                    // Castling: the first piece along the rank must be an unmoved rook at least two
-                    // squares away (anywhere on the rank in variants). The king moves two squares,
-                    // onto the rook's square when it is exactly two away, and may not pass through
-                    // a square attacked on this board.
+                    // Castling: the first piece along the rank is an unmoved rook at least two
+                    // squares away. The king moves two squares and may not pass through an
+                    // attacked square.
                     let (x, y) = (p.x(), p.y());
                     for dx in [1, -1] {
                         let rx = b.first_occupied_x(x, y, dx);
@@ -712,8 +710,8 @@ impl Multiverse {
                 let patt = white_pawn_attack(pos);
                 let mut a = (patt & hostile) | (shift_north(z) & empty);
                 let r = (shift_west(z) | shift_east(z)) & hostile & b.lpawn();
-                if r != 0 {
-                    if let Some(b1) = self.previous_board(p.l(), p.t(), c) {
+                if r != 0
+                    && let Some(b1) = self.previous_board(p.l(), p.t(), c) {
                         // En passant: the opponent's last move on this board was a double step
                         // from an unmoved pawn's square, passing the target, to beside this pawn.
                         let e1 = !b1.occupied();
@@ -721,7 +719,6 @@ impl Multiverse {
                         let v = r & e1 & shift_south(empty & e1) & shift_south(shift_south(origin));
                         a |= shift_north(v);
                     }
-                }
                 if piece == PAWN_UW || piece == BRAWN_UW {
                     a |= shift_north(shift_north(z) & empty) & empty;
                 }
@@ -731,14 +728,13 @@ impl Multiverse {
                 let patt = black_pawn_attack(pos);
                 let mut a = (patt & hostile) | (shift_south(z) & empty);
                 let r = (shift_west(z) | shift_east(z)) & hostile & b.lpawn();
-                if r != 0 {
-                    if let Some(b1) = self.previous_board(p.l(), p.t(), c) {
+                if r != 0
+                    && let Some(b1) = self.previous_board(p.l(), p.t(), c) {
                         let e1 = !b1.occupied();
                         let origin = empty & b1.umove() & b1.lpawn() & b1.hostile(c);
                         let v = r & e1 & shift_north(empty & e1) & shift_north(shift_north(origin));
                         a |= shift_south(v);
                     }
-                }
                 if piece == PAWN_UB || piece == BRAWN_UB {
                     a |= shift_south(shift_south(z) & empty) & empty;
                 }

@@ -119,7 +119,7 @@ impl Hc {
             let l = len(n);
             let ax = &mut self.w[n * k..(n + 1) * k];
             ax[..l / 64].fill(u64::MAX);
-            if l % 64 != 0 {
+            if !l.is_multiple_of(64) {
                 ax[l / 64] = (1u64 << (l % 64)) - 1;
             }
         }

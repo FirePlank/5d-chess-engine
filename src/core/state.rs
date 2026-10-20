@@ -545,7 +545,7 @@ impl State {
     }
 
     fn get_mate_type_impl(&self, legal_action_witness: bool) -> MateType {
-        let _p = crate::misc::prof::scope(10);
+        crate::misc::prof::scope(10);
         // An interrupted enumeration finds no action: under a search's stop guard that would
         // read as checkmate. The answer must be exact, so nothing interrupts it.
         let _uninterrupted = super::hypercuboid::interrupt_off();
@@ -591,11 +591,9 @@ impl State {
         }
     }
 
-    /// The side that loses a stalemate under the exiled-kings rule (the community tournament
-    /// rule since 2026): a side with no royal piece on the latest board of any active timeline
-    /// (all its royals exiled to inactive timelines) loses. `Some(black)` for the loser; `None`
-    /// when both sides or neither are exiled (a plain stalemate: a draw). Only a side that has
-    /// royal pieces somewhere is judged.
+    /// Stalemate loser under the exiled-kings rule: the side whose royals all sit on inactive
+    /// timelines' latest boards. `Some(black)` for the loser; `None` when both or neither are
+    /// exiled (a draw). A side with no royals anywhere is never judged exiled.
     pub fn exiled_kings_loser(&self) -> Option<bool> {
         let (amin, amax) = self.m.get_active_range();
         let (lo, hi) = self.m.get_lines_range();

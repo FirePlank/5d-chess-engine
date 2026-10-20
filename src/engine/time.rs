@@ -1,10 +1,6 @@
-//! Time management: how long to think about one action, from a fixed movetime or a clock
-//! (`go wtime/btime/winc/binc`, with an optional delay: `wdelay/bdelay`, `wtldelay/btldelay`).
-//!
-//! A delay clock (simple / US delay; the 5D tournament clock is 5 min + 3 s per active
-//! timeline) waits `delay + delay_per_timeline * active timelines` before the base time starts
-//! running; unused delay is lost. The delay is therefore free time: every action uses nearly
-//! all of it (`TimePlan::free`), and the base time is spent on top of it.
+//! Time management: how long to think about one action, from a movetime or a clock.
+//! On a delay clock, unused delay is lost, so each action uses nearly all of it
+//! (`TimePlan::free`) and spends base time on top.
 
 use super::Limits;
 
@@ -63,10 +59,8 @@ impl TimePlan {
         Some(TimePlan { optimum: optimum.clamp(5, maximum), maximum, clock: true, free: 0 })
     }
 
-    /// A delay clock: the delay (less a safety margin) is free, and the base time is shared
-    /// out on top of it as on a plain clock, a little more freely since every later action
-    /// has its delay too. The latency is covered by the safety margin, so it is not charged
-    /// to the base per action. The abort time never passes `delay + remaining - safety`.
+    /// Plan for a delay clock: the delay less a safety margin is free, and base time is
+    /// shared out on top of it. The abort time never passes `delay + remaining - safety`.
     fn with_delay(remaining: u64, inc: u64, delay: u64, scale: f64) -> TimePlan {
         let safety = MOVE_OVERHEAD.max(delay / DELAY_SAFETY_DIV);
         let free = delay.saturating_sub(safety);

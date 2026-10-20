@@ -1,10 +1,6 @@
-//! 5dpgn parsing and printing.
-//!
-//! A port of the C++ engine's `pgnparser` (lexer, recursive-descent parser and move matcher)
-//! and its 5dpgn printers. A written move is resolved against the position by rendering every
-//! candidate move in full notation and matching the written fields against it, so SAN-like
-//! moves (`Nf3`, `N>>d3`, `Rbxa2`, `(0T5)Qb3>>x(0T1)f7`), LAN (`(0T1)Ng1f3`) and castling all
-//! go through the same path.
+//! 5dpgn parsing and printing, ported from the C++ engine's `pgnparser`.
+//! A written move is resolved by matching its fields against every legal move in full
+//! notation, so SAN-like moves, LAN and castling share one path.
 
 use crate::core::action::{Action, ExtMove, FullMove};
 use crate::core::check_position::CheckPosition;
@@ -792,11 +788,10 @@ fn move_match(a: &MoveAst, b: &MoveAst) -> bool {
     if a.superphysical != b.superphysical {
         return false;
     }
-    if let (Some(x), Some(y)) = (&a.board, &b.board) {
-        if !board_match(x, y) {
+    if let (Some(x), Some(y)) = (&a.board, &b.board)
+        && !board_match(x, y) {
             return false;
         }
-    }
     if let Some(kingside) = a.castle {
         let to = if kingside { b'g' } else { b'c' };
         return b.piece == Some(KING_W)
@@ -1125,10 +1120,8 @@ impl Default for PgnOptions {
     }
 }
 
-/// `mv` (normalized, played from `s`) without check symbols: `board` as the source board
-/// prefix, then the piece, the source file/rank when asked (a pawn always shows its file when
-/// capturing or jumping), the jump, `x`, the target board when `to_tl`, the target square and
-/// the promotion.
+/// Render `mv` (played from `s`) without check symbols, prefixed by `board`. `file`/`rank`
+/// add source disambiguation and `to_tl` adds the target board.
 fn move_core(s: &State, mv: ExtMove, board: &str, file: bool, rank: bool, to_tl: bool) -> String {
     let (p, q) = (mv.fm.from, mv.fm.to);
     let player = s.player();
@@ -1237,10 +1230,9 @@ pub fn move_to_pgn_short(s: &State, mv: &ExtMove) -> String {
     single_move(s, mv, true)
 }
 
-/// An action played from `s` in 5dpgn, like the C++ printer with SHOW_CAPTURE, SHOW_PROMOTION
-/// and SHOW_MATE: the last checking move carries `#` (checkmate), `*` (softmate) or `+`.
-/// A checking action needs a mate search, which can be slow in huge positions; prefer
-/// `action_to_pgn_with_witness` when the next action is known.
+/// An action played from `s` in 5dpgn, with `#` (checkmate), `*` (softmate) or `+` on checks.
+/// Checks need a mate search, which can be slow; prefer `action_to_pgn_with_witness` when the
+/// next action is known.
 pub fn action_to_pgn(s: &State, act: &Action) -> String {
     action_to_pgn_opts(s, act, None, PgnOptions::default())
 }
@@ -1290,11 +1282,10 @@ pub fn action_to_pgn_opts(s: &State, act: &Action, witness: Option<&Action>, opt
     }
     // A win by exiled kings (the opponent's royals are all on inactive timelines, and it has no
     // legal action) ends the game like a mate: the last move carries `#`.
-    if opts.mate && !symbols.iter().any(|&c| c == "#") && t.exiled_kings_loser().is_some() && t.get_mate_type() == MateType::Stalemate {
-        if let Some(last) = symbols.last_mut() {
+    if opts.mate && !symbols.contains(&"#") && t.exiled_kings_loser().is_some() && t.get_mate_type() == MateType::Stalemate
+        && let Some(last) = symbols.last_mut() {
             *last = "#";
         }
-    }
     let texts: Vec<String> = parts.iter().zip(symbols).map(|((core, _, suffix), sym)| format!("{}{}{}", core, sym, suffix)).collect();
     texts.join(" ")
 }

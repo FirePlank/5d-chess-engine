@@ -16,11 +16,9 @@ fn out(line: &str) {
     let _ = lock.flush();
 }
 
-/// The limits of a `go` command (its arguments in `toks`) for the side to move (`black`):
-/// `movetime`, `depth`, `nodes`; a clock: `wtime/btime`, `winc/binc`, and a delay clock's
-/// `wdelay/bdelay` (fixed per action) and `wtldelay/btldelay` (per active timeline), all ms.
-/// The 5D tournament clock (5 min, 3 s delay per active timeline) is
-/// `go wtime 300000 btime 300000 wtldelay 3000 btldelay 3000`. Unknown tokens are skipped.
+/// Parse the limits of a `go` command for the side to move (`black`). Besides the usual
+/// tokens, `wdelay/bdelay` set a fixed delay and `wtldelay/btldelay` a per-timeline delay (ms).
+/// Unknown tokens are skipped.
 pub fn parse_go(toks: &[&str], black: bool) -> Limits {
     let mut limits = Limits::default();
     let mut k = 0;

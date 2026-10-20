@@ -10,12 +10,8 @@ mod skill;
 pub mod time;
 pub mod uci;
 
-/// Reported scores. Internally a pawn is about 142 and a queen 1250, and an evaluation `s`
-/// stands for an expected score of about 1 / (1 + exp(-WDL_K * s)): the logistic fitted to game
-/// results for search scores (refitted 2026-10-17 on the SPRT games of the current nets:
-/// 1/4348..1/4649, after the 1/2700 of the first net). `info ... score cp X` reports
-/// X = s * 100 / REPORT_SCALE, so that +100 is about a 75% expected score, +200 about 90% and
-/// +400 about 99%.
+/// Scale of reported scores: `score cp X` is `s * 100 / REPORT_SCALE` for internal score `s`,
+/// so +100 is about a 75% expected score, +200 about 90% and +400 about 99%.
 pub const REPORT_SCALE: i32 = 4800;
 /// Slope of the win-probability logistic of search scores, per internal unit.
 pub const WDL_K: f64 = 1.0 / 4350.0;

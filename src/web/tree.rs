@@ -107,11 +107,10 @@ pub fn parse_move_json(j: &Json) -> Option<ExtMove> {
 
 fn move_json(m: &ExtMove) -> Json {
     let mut o = obj![("from", v4(m.fm.from)), ("to", v4(m.fm.to))];
-    if m.promote_to != NO_PIECE {
-        if let Json::Obj(kv) = &mut o {
+    if m.promote_to != NO_PIECE
+        && let Json::Obj(kv) = &mut o {
             kv.push(("promote".into(), ((m.promote_to as char).to_string()).into()));
         }
-    }
     o
 }
 

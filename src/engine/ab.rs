@@ -1,10 +1,6 @@
 //! Alpha-beta engine: iterative-deepening PVS over complete actions.
-//!
-//! Legal actions are produced lazily by the hypercuboid search, best-first by the summed
-//! ordering scores of their semimoves, with checking semimoves (physical, and across time
-//! and timelines) ordered first. The TT action and the killers are tried before the action
-//! space is built; at non-PV nodes only a depth-dependent number of actions is searched.
-//! Quiescence searches captures and promotions only, one quiet filler move per board.
+//! Actions are generated lazily, best-first, by the hypercuboid search; checks come first.
+//! Quiescence searches captures and promotions, with one quiet filler move per board.
 
 use super::hce;
 use super::time::TimePlan;
@@ -70,17 +66,12 @@ const ROOT_LMR_MIN_INDEX: usize = 6;
 /// a share of the optimum, which for an unbounded analysis (a day's `movetime`) is hours,
 /// while depth 1 should come at once.
 const ROOT_PROBE_CAP_MS: u64 = 250;
-/// What the root does before its first iteration is bounded by counts (hypercuboids looked at,
-/// actions tried), never by time: the same work on any machine and for any `movetime` (an
-/// analysis may run forever, its depth 1 must not wait for a budget that scales with that).
-/// Hypercuboids per checking travel in the probes for a checkmate in one:
+/// Hypercuboids per checking travel in the root's mate-in-one probes. Root pre-search work is
+/// bounded by counts, not time, so it is the same on any machine and for any `movetime`.
 const ROOT_PROBE_STEPS: u32 = 2048;
-/// The scan of every legal action for a checkmate in one (`MateBudget`): the first
-/// `ROOT_SCAN_ACTIONS` actions are tried whatever the clock says (counts, so the same work on any
-/// machine); the actions past them only while the time share lasts, up to `ROOT_SCAN_MORE_ACTIONS`
-/// actions and `ROOT_SCAN_MORE_STEPS` hypercuboids per enumeration. In a game the share is
-/// 1/`ROOT_SCAN_MORE_DIV` of the optimum time, at most `ROOT_SCAN_MORE_CAP_MS`; an analysis
-/// (`MateVerify`, see `MateVerify::Auto`) has `ROOT_SCAN_ANALYSIS_MS`.
+/// Root mate-in-one scan budget: the first `ROOT_SCAN_ACTIONS` actions are always tried; the
+/// rest (up to `ROOT_SCAN_MORE_ACTIONS`) only within a time share: 1/`ROOT_SCAN_MORE_DIV` of the
+/// optimum time capped at `ROOT_SCAN_MORE_CAP_MS` in a game, `ROOT_SCAN_ANALYSIS_MS` in analysis.
 const ROOT_SCAN_ACTIONS: usize = 1024;
 const ROOT_SCAN_MORE_STEPS: u32 = 1 << 18;
 const ROOT_SCAN_MORE_ACTIONS: usize = 1 << 15;
@@ -114,12 +105,6 @@ const ROOT_WIDEN_CAP: usize = 256;
 /// Interior nodes up to this ply (the root is 0) look for a checkmate in one by a checking
 /// travel the node would search late or never (`travel_mate`).
 const TRAVEL_MATE_PLY: usize = 2;
-/// Interior nodes up to this ply (0: none) also scan a few of the actions containing a checking
-/// entry for a checkmate in one (`interior_mate_scan`): `INTERIOR_SCAN_ACTIONS` actions, each
-/// enumeration `INTERIOR_SCAN_STEPS` hypercuboids.
-const INTERIOR_SCAN_PLY: usize = 0;
-const INTERIOR_SCAN_ACTIONS: usize = 8;
-const INTERIOR_SCAN_STEPS: u32 = 64;
 /// Hypercuboids the search for an evasion of such a check may look at (an evasion is usually
 /// found in a few; past this the check counts as no mate).
 const TRAVEL_MATE_STEPS: u32 = 64;
@@ -132,13 +117,9 @@ const ROOT_TRAVEL_MATE_COMPLETIONS: usize = 512;
 /// it up (when most of its combinations with the other boards' moves are illegal, finding one
 /// can take thousands).
 const TRAVEL_CAPTURE_STEPS: u32 = 16;
-/// Aspiration windows (Apeiron's scheme): from depth ASP_MIN_DEPTH, after a completed depth
-/// with a non-mate score `prev`, the root is searched in [prev - w, prev + w], w starting at
-/// ASP_WINDOW; a fail low or high multiplies w by ASP_FAIL_MULT and moves that bound to
-/// prev -+ w (always around `prev`); once w passes ASP_MAX_WINDOW or after ASP_MAX_TRIES
-/// tries, one full-window search. ASP_WINDOW puts about 75-80% of depth-to-depth score
-/// changes inside the first window (bench positions, depth 4 on); the maximum is Apeiron's
-/// 1000/60 of it.
+/// Aspiration windows: from ASP_MIN_DEPTH the root searches [prev - w, prev + w], w starting at
+/// ASP_WINDOW and multiplied by ASP_FAIL_MULT on each fail; past ASP_MAX_WINDOW or
+/// ASP_MAX_TRIES tries, a full-window search.
 const ASP_MIN_DEPTH: i32 = 2;
 const ASP_WINDOW: i32 = 750;
 const ASP_FAIL_MULT: i32 = 2;
@@ -247,10 +228,8 @@ impl std::hash::Hasher for KeyHasher {
 
 type KeyBuild = std::hash::BuildHasherDefault<KeyHasher>;
 
-/// What the scans for a checkmate in one at a node share: the positions they reached (an
-/// action found again, by the other enumeration or a later scan, is skipped) and the checks
-/// whose escape search ran out (tried again with larger budgets before a scan may call its
-/// space exhausted).
+/// State shared by a node's mate-in-one scans: positions already reached (skipped when seen
+/// again) and checks whose escape search ran out (retried with larger budgets).
 #[derive(Default)]
 struct ScanMemo {
     seen: std::collections::HashSet<u64, KeyBuild>,
@@ -313,11 +292,8 @@ struct TtEntry {
 
 /// One table slot: an entry and its lock. All-zero bytes are an empty, unlocked slot.
 struct TtSlot {
-    /// Held while the entry is read or written. Actions have any length (long ones live on
-    /// the heap), so threads cannot share entries without one: a reader racing a writer
-    /// could copy a torn action or follow a freed pointer. The lock is only ever tried: a
-    /// thread finding it held treats its probe as a miss or skips its store, so no thread
-    /// ever waits on another, and a single search thread never finds it held.
+    /// Held while the entry is read or written, since actions may live on the heap. Only ever
+    /// tried: a thread finding it held treats the probe as a miss or skips the store.
     lock: AtomicBool,
     entry: UnsafeCell<TtEntry>,
 }
@@ -463,11 +439,9 @@ struct ThreadResult {
     lines: Vec<PvLine>,
 }
 
-/// The result to play, by Stockfish's thread voting (as in Apeiron): each action accrues
-/// `(score - min_score + 14) * completed_depth` from the threads choosing it. Proven wins
-/// win outright (the fastest mate among them; a mate score that is not proven is no more
-/// than a large score), a loss is never switched to, and a thread that finished no iteration
-/// does not vote.
+/// Picks the thread result to play by Stockfish-style voting, weighted by score and depth.
+/// The fastest proven mate wins outright; a loss is never switched to; threads that finished
+/// no iteration do not vote.
 fn select_best_thread(results: &[ThreadResult]) -> usize {
     let finished = |r: &ThreadResult| r.completed_depth > 0;
     let proven_win = |r: &ThreadResult| r.proven && r.score > MATE - 1000;
@@ -565,16 +539,14 @@ pub struct AlphaBeta {
     node_limit: Option<u64>,
     aborted: bool,
     stop_ptr: *const AtomicBool,
-    /// Whether the mate score the last `negamax`/`qsearch` call returned is proven: a mated
-    /// score when every legal action was searched (no pruning, cap or cutoff left one out)
-    /// and every reply's mating score is proven; a mating score when the reply giving it is
-    /// proven; a checkmate on the board. A proven mate is a forced mate within the reported
-    /// distance. Only meaningful for mate scores; it never steers the search.
+    /// Whether the mate score the last `negamax`/`qsearch` returned is a proven forced mate
+    /// (nothing pruned on the losing side). Only meaningful for mate scores; never steers search.
     proven: bool,
     /// Singular-extension search: the TT action it excludes and the key of its node.
     excluded: Option<MoveSeq>,
     excl_key: u64,
     /// Per-node buffers, reused down the recursion.
+    #[allow(clippy::vec_box)] // popped and pushed per node: moving a pointer, not the buffers
     bufs: Vec<Box<NodeBufs>>,
     /// Evaluation terms of recently seen boards.
     terms: Box<hce::TermCache>,
@@ -618,10 +590,8 @@ pub struct AlphaBeta {
     thread_id: usize,
     /// A helper publishes its node count here (null for the main thread).
     nodes_out: *const AtomicU64,
-    /// Triangular PV table: `pv_rows[ply][..pv_lens[ply]]` is the best line found so far from
-    /// the node being searched at `ply`. Each node clears its row on entry and only PV nodes
-    /// fill theirs (from the child's row when an action raises alpha), so a row is never a
-    /// stale line. Rows keep their actions' storage between nodes.
+    /// Triangular PV table: `pv_rows[ply][..pv_lens[ply]]` is the best line from the node at
+    /// `ply`. Each node clears its row on entry; only PV nodes fill it.
     pv_rows: Vec<Vec<MoveSeq>>,
     pv_lens: Vec<usize>,
 }
@@ -948,7 +918,7 @@ impl AlphaBeta {
 
     #[inline]
     fn static_eval(&mut self, s: &State) -> i32 {
-        let _p = crate::misc::prof::scope(9);
+        crate::misc::prof::scope(9);
         let key = s.hash();
         let i = self.known.slot(key);
         let e = self.known.slots[i];
@@ -980,7 +950,7 @@ impl AlphaBeta {
 
     /// Whether the side to move is in check (royal captures threatened if it passed).
     fn in_check(&mut self, s: &State) -> bool {
-        let _p = crate::misc::prof::scope(10);
+        crate::misc::prof::scope(10);
         let key = s.hash();
         let i = self.known.slot(key);
         let e = self.known.slots[i];
@@ -1084,7 +1054,7 @@ impl AlphaBeta {
         axes: std::ops::Range<usize>,
         branch: BranchOrder,
     ) {
-        let _p = crate::misc::prof::scope(6);
+        crate::misc::prof::scope(6);
         let u = info.get_universe();
         // Branch axes share entries: they are scored once and share the first one's lists.
         let fba = info.first_branch_axis();
@@ -1153,11 +1123,10 @@ impl AlphaBeta {
                         if !p.capture {
                             sc += self.history[p.history as usize].clamp(-5000, 5000);
                         }
-                        if let Some(d) = detector.as_mut() {
-                            if p.physical_check || d.reach_check(n, i) {
+                        if let Some(d) = detector.as_mut()
+                            && (p.physical_check || d.reach_check(n, i)) {
                                 sc += CHECK_BONUS;
                             }
-                        }
                         sc
                     }
                     _ => self.coord_score(s, info, n, i, &mut detector, recorded),
@@ -1198,11 +1167,10 @@ impl AlphaBeta {
         let mut out = SearchSpace::default();
         'hc: for hc in &ss.hcs {
             for l in lo..=hi {
-                if let Some(n) = optional(l) {
-                    if !hc[n].contains(0) {
+                if let Some(n) = optional(l)
+                    && !hc[n].contains(0) {
                         continue 'hc;
                     }
-                }
             }
             let mut h = hc.clone();
             for l in lo..=hi {
@@ -1246,14 +1214,10 @@ impl AlphaBeta {
         out
     }
 
-    /// A checkmate in one by a checking travel the node's actions come to late or never: a
-    /// travel that gives check on arrival and branches off a new timeline (actions creating
-    /// timelines come after every other one: with two boards to play, after hundreds) or
-    /// leaves or reaches a board the side to move need not play (`without_future` leaves those
-    /// out), played alone (the other boards unplayed). With another board to play that takes a
-    /// travel moving the present back (a new active timeline in the past). A check with no
-    /// evasion within `TRAVEL_MATE_STEPS` hypercuboids is a mate. The checking travels tried
-    /// (each alone, as an action) are added to `checks` when given.
+    /// Finds a mate in one by a checking travel the normal ordering reaches late or never
+    /// (branching, or touching optional boards). A check with no evasion within
+    /// `TRAVEL_MATE_STEPS` hypercuboids is a mate; travels tried are pushed to `checks`.
+    #[allow(clippy::too_many_arguments)]
     fn travel_mate(&mut self, s: &mut State, info: &mut HcInfo, ss: &SearchSpace, scratch: &mut OrderScratch, mut checks: Option<&mut Vec<MoveSeq>>, completions: usize, steps: Option<u32>) -> Option<MoveSeq> {
         let dim = info.dimension();
         let fba = info.first_branch_axis();
@@ -1299,10 +1263,8 @@ impl AlphaBeta {
         travels.retain(|&(_, _, n, i)| det.gives_check(n, i));
         det.finish(scratch);
         for &(fa, dep, n, i) in &travels {
-            // The travel with a few legal moves on the other boards: those the side to move
-            // must play, and the boards a branching travel activates (the check does not
-            // depend on them). Every hypercuboid holding the travel: the space is split into
-            // many, and its legal completions need not lie in the first.
+            // The travel plus a few legal moves on the other required boards. Search every
+            // hypercuboid holding it: legal completions need not lie in the first.
             let mut space = Vec::new();
             for hc in ss.hcs.iter().filter(|hc| {
                 hc[fa].contains(dep) && hc[n].contains(i) && (0..dim).all(|a| a == fa || a == n || mandatory.contains(&a) || hc[a].contains(0))
@@ -1332,11 +1294,10 @@ impl AlphaBeta {
                     return None;
                 }
                 let Some(act) = probe.next(info, s) else { break };
-                if k == 0 {
-                    if let Some(c) = checks.as_deref_mut() {
+                if k == 0
+                    && let Some(c) = checks.as_deref_mut() {
                         c.push(act.clone());
                     }
-                }
                 let mark = Self::make(s, &act);
                 let mate = self.is_mate(s);
                 s.unmake(mark);
@@ -1348,13 +1309,8 @@ impl AlphaBeta {
         None
     }
 
-    /// A checkmate in one by a lone travel: one piece travelling (onto a board's end, or
-    /// branching off a timeline) with every other board passing, legal when the travel
-    /// plays every board the side to move must play or moves the present back so that none of
-    /// them must be played. The actions creating a timeline come after every other one, and a
-    /// travel's check is often one the check detector does not flag (a line from another
-    /// timeline onto the new board), so each such action is tried exactly: a few hundred
-    /// legality tests, the checks among them each an escape search.
+    /// Finds a mate in one by a lone travel (every other board passing). Each candidate is
+    /// tried exactly, since the check detector misses checks from other timelines.
     fn lone_travel_mate(&mut self, s: &mut State, info: &HcInfo) -> Option<MoveSeq> {
         let dim = info.dimension();
         let fba = info.first_branch_axis();
@@ -1393,13 +1349,9 @@ impl AlphaBeta {
         None
     }
 
-    /// Capturing travels a node would search late or never: a travel onto a board's end that
-    /// leaves or reaches a board the side to move need not play (`without_future` leaves those
-    /// out; after a sac, the main timeline's pieces jumping back onto the attacked one), and
-    /// captures a queen, princess or rook, or a piece giving check. Each gets a hypercuboid of
-    /// its own, with the other optional boards unplayed and no timeline branching off,
-    /// appended to `first` (so they come first, the most valuable capture first: see
-    /// `BestFirstCursor`); returns their number.
+    /// Appends to `first` a hypercuboid per valuable capturing travel touching an optional board
+    /// (which `without_future` leaves out): captures of a queen, princess, rook or checker.
+    /// Returns how many were added.
     fn travel_captures(&mut self, s: &State, info: &HcInfo, ss: &SearchSpace, first: &mut SearchSpace) -> usize {
         let dim = info.dimension();
         let fba = info.first_branch_axis();
@@ -1484,10 +1436,9 @@ impl AlphaBeta {
         true
     }
 
-    /// Whether the side to move has a legal action (each evades the check), looking at `steps`
-    /// hypercuboids at most: one search, continued (not rebuilt) in chunks of
-    /// `MATE_CHUNK_STEPS` while `deadline` (if any) has not passed. Returns the hypercuboids
-    /// it looked at too. The action found is remembered for `replay_escape`.
+    /// Whether the side to move has a legal action within `steps` hypercuboids (searched in
+    /// `MATE_CHUNK_STEPS` chunks until `deadline`), and the hypercuboids used. The action found
+    /// is remembered for `replay_escape`.
     fn evasion(&mut self, s: &State, steps: u32, deadline: Option<Instant>) -> (Evasion, u32) {
         let mut nb = self.bufs.pop().unwrap_or_default();
         let r = {
@@ -1549,7 +1500,7 @@ impl AlphaBeta {
     /// an exact refutation of the check, without building the escape search. The replies to
     /// the checks of one scan are mostly the same few actions.
     fn replay_escape(&mut self, s: &mut State) -> bool {
-        let _p = crate::misc::prof::scope(11);
+        crate::misc::prof::scope(11);
         for i in 0..self.escapes.len() {
             if Self::is_legal(s, &self.escapes[i]) {
                 let e = self.escapes.remove(i);
@@ -1560,10 +1511,8 @@ impl AlphaBeta {
         false
     }
 
-    /// Whether the side to move is checkmated, within `steps` hypercuboids of its escape search
-    /// (past `deadline`, if any, the search stops): `No` (no escape) is a proven mate, `Yes` a
-    /// proven escape (or no check), `Unknown` a search that ran out. A check met before is
-    /// looked up (`mate_memo`), and the escapes found last are tried before a search is built.
+    /// Whether the side to move is checkmated: `No` escape is a proven mate, `Yes` an escape (or
+    /// no check), `Unknown` a search that ran out of `steps` or `deadline`. Uses `mate_memo`.
     fn mate_status(&mut self, s: &mut State, steps: u32, deadline: Option<Instant>) -> Evasion {
         if !self.in_check(s) {
             return Evasion::Yes;
@@ -1580,20 +1529,15 @@ impl AlphaBeta {
         e
     }
 
-    /// The side to move is checkmated: in check, with no escape within `TRAVEL_MATE_STEPS`
-    /// hypercuboids, or within `mate_recheck` (the root's probes) when that is more. A search
-    /// that ran out proves nothing (a mate has no escape, so proving it takes the whole space
-    /// of them): it is taken as an escape.
+    /// Whether the side to move is checkmated, searching `TRAVEL_MATE_STEPS` (or `mate_recheck`
+    /// if larger) hypercuboids for an escape. A search that runs out counts as an escape.
     fn is_mate(&mut self, s: &mut State) -> bool {
         self.mate_status(s, TRAVEL_MATE_STEPS.max(self.mate_recheck), None) == Evasion::No
     }
 
-    /// A checkmate in one among the root actions `without_future` leaves out: a piece that
-    /// travels back from a board the side to move need not play (ahead of the present, or
-    /// on an inactive timeline) and gives check on arrival, with moves on the boards that must
-    /// be played. Only the first `ROOT_FUTURE_MATE_PROBE` actions (best first) of each such
-    /// travel are tried, within `ROOT_PROBE_STEPS` hypercuboids, each a mate when its check has
-    /// no evasion within `TRAVEL_MATE_STEPS` hypercuboids (`has_evasion`): counts, not time.
+    /// Finds a mate in one by a checking travel back from an optional board (which
+    /// `without_future` leaves out), trying the first `ROOT_FUTURE_MATE_PROBE` actions of each
+    /// within `ROOT_PROBE_STEPS` hypercuboids.
     fn future_mate_in_one(&mut self, s: &mut State, info: &HcInfo, ss: &SearchSpace, scratch: &mut OrderScratch) -> Option<MoveSeq> {
         let present = s.get_present();
         let (amin, amax) = s.get_active_range();
@@ -1666,10 +1610,8 @@ impl AlphaBeta {
         None
     }
 
-    /// The actions of `ss` that contain a precomputed checking entry of `info` or a travel
-    /// (branch axes share their entries: the first one stands for all): where most mates in
-    /// one are. Every travel, checking or not: the detector misses checks a travel opens from
-    /// another timeline, and the actions creating a timeline come last in the full scan.
+    /// The sub-space of `ss` whose actions contain a checking entry or any travel, where most
+    /// mates in one are. All travels are included since the detector misses cross-timeline checks.
     fn checking_space(&mut self, s: &State, info: &HcInfo, ss: &SearchSpace, scratch: &mut OrderScratch) -> SearchSpace {
         let dim = info.dimension();
         let fba = info.first_branch_axis();
@@ -1709,22 +1651,6 @@ impl AlphaBeta {
         space
     }
 
-    /// A checkmate in one among a few of the actions of an interior node that contain a checking
-    /// entry (the same ordering the root's scan starts with, a much smaller budget).
-    fn interior_mate_scan(&mut self, s: &mut State, info: &mut HcInfo, ss: &SearchSpace, scratch: &mut OrderScratch) -> Option<MoveSeq> {
-        info.materialize_branch(s);
-        let info: &HcInfo = info;
-        let space = self.checking_space(s, info, ss, scratch);
-        if space.hcs.is_empty() {
-            return None;
-        }
-        let budget = MateBudget { free: INTERIOR_SCAN_ACTIONS, actions: INTERIOR_SCAN_ACTIONS, steps: INTERIOR_SCAN_STEPS, deadline: None };
-        match self.scan_for_mate(s, info, scratch, space, &budget, &mut ScanMemo::default()) {
-            ScanEnd::Found(m) => Some(m),
-            _ => None,
-        }
-    }
-
     /// A checkmate in one among the legal actions of `s`: first the actions containing a
     /// precomputed checking entry or a travel (most mates, found at once), then every action,
     /// as far as `budget` goes.
@@ -1749,13 +1675,9 @@ impl AlphaBeta {
         self.scan_for_mate(s, info, scratch, SearchSpace::from_vec(ss.hcs.clone()), budget, &mut memo)
     }
 
-    /// The first action of `space` after which `s` is checkmate, as far as `budget` goes. Two
-    /// enumerations take turns, the best-first one (checks, then captures) and the natural
-    /// order: with millions of actions either may reach a mate long before the other. An action
-    /// reaching a position `memo` has seen (the other enumeration's, or an earlier scan's) is
-    /// skipped and not counted. Either enumeration finishing its space without running out of
-    /// hypercuboids proves there is no mate among the actions whose escape search did not run
-    /// out; the others (`memo.pending`) are then searched again with ever larger budgets.
+    /// Finds the first mating action of `space` within `budget`, alternating a best-first and a
+    /// natural-order enumeration and skipping positions in `memo`. An exhausted space proves no
+    /// mate, once the unresolved checks in `memo.pending` are resolved.
     fn scan_for_mate(&mut self, s: &mut State, info: &HcInfo, scratch: &mut OrderScratch, space: SearchSpace, budget: &MateBudget, memo: &mut ScanMemo) -> ScanEnd {
         let mut natural = HcCursor::new(SearchSpace::from_vec(space.hcs.clone()), HcOrdering::Natural);
         natural.budget = budget.steps;
@@ -1827,24 +1749,9 @@ impl AlphaBeta {
         out(tried, memo)
     }
 
-    /// A region of root actions around the root action `act` (point `pt` of `info`'s space)
-    /// in which no action is a checkmate, when `act` is none: it gives no check (`escape`
-    /// None) or the escape `escape` is legal after it. Returned only when it holds more than
-    /// `act`; every axis but some playing a physical move is fixed to `act`'s coordinate.
-    ///
-    /// For each axis on which `act` plays a physical move, the physical moves that keep the
-    /// fact (no check / `escape` legal) when that axis alone is changed are found by playing
-    /// them. The region is the product of those sets over axes chosen so that no two can
-    /// interact: changing a physical move changes only its timeline's new board (and the
-    /// boards played on it next, or its phantom copy), and every check and every move's
-    /// legality is decided by one ray or one jump between two squares. A failure in the product
-    /// would be witnessed by a ray or jump touching changed squares of at least two axes (one
-    /// axis alone keeps the fact by construction): a jump touches one changed square, a ray from
-    /// a royal (or from the source of an escape move) lies in one time slice when it touches two
-    /// squares of the same half-turn (rays keep a board's color and step whole turns), so two
-    /// axes interact only when, seen from some royal or escape source in the slice of the new
-    /// boards or the next one, a changed square of each lies in the same direction. Those pairs
-    /// are kept apart (the axis with fewer moves left fixed).
+    /// A region around non-mating root action `act` (no check, or `escape` legal) with no mate.
+    /// It is the product of per-axis physical moves that keep that fact, over axes whose changed
+    /// squares cannot share a ray from a royal or escape source (so they cannot interact).
     fn no_mate_region(&mut self, s: &mut State, info: &HcInfo, pt: &Point, act: &MoveSeq, escape: Option<&MoveSeq>) -> Option<Slice> {
         let fba = info.first_branch_axis();
         if fba > 64 {
@@ -1914,13 +1821,9 @@ impl AlphaBeta {
         if cands.is_empty() {
             return None;
         }
-        // Two candidates interact when a changed square of each lies on one ray that also holds
-        // an origin (a royal of the side to move after `act` and `escape`, or a source of an
-        // escape move) beyond them. Rays step -1, 0 or 1 along x, y, l and t (whole turns,
-        // so a ray keeps its boards' color); candidates are on different lines, so two of their
-        // squares share a ray only when every nonzero offset is the line distance k. Each
-        // candidate's changed squares sit on its new board (half-turn v) and on the board
-        // played after it, or its phantom copy (v + 1).
+        // Two candidates interact when a changed square of each lies on one ray from an origin
+        // (a royal, or an escape move's source). Changed squares lie on half-turns v and v + 1;
+        // squares on different lines share a ray only when every nonzero offset equals k.
         let mark = s.mark();
         for &m in act {
             s.apply_move::<true>(m);
@@ -2060,10 +1963,8 @@ impl AlphaBeta {
         }
     }
 
-    /// The end of a scan whose space is exhausted: the checks whose escape search ran out
-    /// (`memo.pending`) searched again with twice the budget each round, while the scan's
-    /// deadline allows (without one, up to `budget.steps` hypercuboids each). A mate among them
-    /// is found; with none left unresolved there is no mate in the space.
+    /// Re-searches the unresolved checks in `memo.pending`, doubling the budget each round until
+    /// the deadline (or `budget.steps`). With none left unresolved, the space has no mate.
     fn resolve_pending(&mut self, s: &mut State, budget: &MateBudget, tried: usize, memo: &mut ScanMemo) -> ScanEnd {
         let mut steps = TRAVEL_MATE_STEPS.max(self.mate_recheck);
         let deadline = budget.deadline.filter(|_| tried >= budget.free);
@@ -2258,7 +2159,7 @@ impl AlphaBeta {
 
     /// Play an action generated as legal for `s`; undo with `s.unmake(mark)`.
     fn make(s: &mut State, act: &MoveSeq) -> Mark {
-        let _p = crate::misc::prof::scope(7);
+        crate::misc::prof::scope(7);
         let mark = s.mark();
         for &m in act {
             s.apply_move::<true>(m);
@@ -2269,7 +2170,7 @@ impl AlphaBeta {
 
     /// Play a remembered action (TT/killer) only if it is legal in `s`.
     fn make_checked(s: &mut State, act: &MoveSeq) -> Option<Mark> {
-        let _p = crate::misc::prof::scope(11);
+        crate::misc::prof::scope(11);
         let player = s.get_present().1;
         let mark = s.mark();
         let mut ok = true;
@@ -2310,10 +2211,8 @@ impl AlphaBeta {
         c
     }
 
-    /// Passing is only trusted when some active board holds at least two non-pawn pieces
-    /// (besides royals) of the side to move. Counted per board: every timeline holds its own
-    /// copy of a piece, so a lone knight on three timelines is still a lone knight. With less,
-    /// zugzwang and mating nets the reduced search can't see are common.
+    /// Null move is allowed only when some active board has two non-pawn, non-royal pieces of
+    /// the side to move (counted per board); otherwise zugzwang is too common.
     fn has_null_material(s: &State) -> bool {
         let stm = s.get_present().1;
         let (amin, amax) = s.get_active_range();
@@ -2404,8 +2303,8 @@ impl AlphaBeta {
         // Mate proof: the best reply's, and every reply's with all evasions searched.
         let (mut best_proven, mut all_proven) = (false, true);
         let mut qkiller = if ply <= MAX_PLY { self.qkillers[ply].clone() } else { None };
-        if let Some(k) = qkiller.take() {
-            if let Some(mark) = Self::make_checked(s, &k) {
+        if let Some(k) = qkiller.take()
+            && let Some(mark) = Self::make_checked(s, &k) {
                 let v = -self.qsearch(s, ply + 1, -beta, -alpha, qd - 1, None);
                 s.unmake(mark);
                 if self.aborted {
@@ -2428,7 +2327,6 @@ impl AlphaBeta {
                     }
                 }
             }
-        }
         // Search the evasions.
         let mut nb = self.bufs.pop().unwrap_or_default();
         {
@@ -2510,6 +2408,7 @@ impl AlphaBeta {
     }
 
     /// Search one remembered action (TT move or killer) with PVS; returns its score.
+    #[allow(clippy::too_many_arguments)]
     fn search_child(&mut self, s: &mut State, mark: Mark, first: bool, depth: i32, ply: usize, alpha: i32, beta: i32, pv: bool) -> i32 {
         let v = if first {
             -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, pv)
@@ -2613,11 +2512,11 @@ impl AlphaBeta {
         // then the killers.
         let mut pre_tried: Vec<MoveSeq> = Vec::new();
         let mut tt_ext = 0;
-        if depth >= SING_DEPTH && self.excluded.is_none() && ply > 0 {
-            if let Some(ta) = tt_action.clone() {
+        if depth >= SING_DEPTH && self.excluded.is_none() && ply > 0
+            && let Some(ta) = tt_action.clone() {
                 let info = self.tt.probe(key, |e| (mate_from_tt(e.score, ply), e.depth as i32, e.bound));
-                if let Some((sc, ed, bound)) = info {
-                    if ed >= depth - 3 && matches!(bound, Bound::Lower | Bound::Exact) && sc.abs() < MATE - 1000 {
+                if let Some((sc, ed, bound)) = info
+                    && ed >= depth - 3 && matches!(bound, Bound::Lower | Bound::Exact) && sc.abs() < MATE - 1000 {
                         let sb = sc - SING_MARGIN * depth;
                         self.excluded = Some(ta);
                         self.excl_key = key;
@@ -2631,9 +2530,7 @@ impl AlphaBeta {
                             tt_ext = 1;
                         }
                     }
-                }
             }
-        }
         let mut remembered: Vec<MoveSeq> = tt_action.iter().filter(|a| self.excluded.as_ref() != Some(*a)).cloned().collect();
         if let Some(x) = &self.excluded {
             pre_tried.push(x.clone());
@@ -2680,16 +2577,13 @@ impl AlphaBeta {
 
         let mut nb = self.bufs.pop().unwrap_or_default();
         let ss = nb.info.rebuild(s, true);
-        // At ply 1 (the replies to a root action) the checking travels travel_mate tries are
-        // searched right after the remembered actions, as at the root: such a travel comes after
-        // every action creating none, past the interior action cap, so a mate it starts against
-        // the root action went unseen.
+        // At ply 1, search travel_mate's checking travels right after the remembered actions;
+        // otherwise they fall past the action cap and their mates go unseen.
         let mut tchecks: Vec<MoveSeq> = Vec::new();
         if ply <= TRAVEL_MATE_PLY {
             let mate = {
                 let NodeBufs { info, order, .. } = &mut *nb;
                 self.travel_mate(s, info, &ss, order, if ply == 1 { Some(&mut tchecks) } else { None }, TRAVEL_MATE_COMPLETIONS, None)
-                    .or_else(|| if ply <= INTERIOR_SCAN_PLY { self.interior_mate_scan(s, info, &ss, order) } else { None })
             };
             if let Some(act) = mate {
                 self.bufs.push(nb);
@@ -2777,8 +2671,8 @@ impl AlphaBeta {
                         Ok(None) => {
                             // Every legal action may need a move on an optional board. (The
                             // ordering is unchanged: nothing was searched since it was made.)
-                            if generated == 0 {
-                                if let Some(f) = full.take() {
+                            if generated == 0
+                                && let Some(f) = full.take() {
                                     {
                                         let NodeBufs { info, cursor, order, .. } = &mut *nb;
                                         self.order_skipped(s, info, order, cursor);
@@ -2786,7 +2680,6 @@ impl AlphaBeta {
                                     nb.cursor.restart(&nb.info, f);
                                     continue;
                                 }
-                            }
                             exhausted = true;
                             break;
                         }
@@ -2990,10 +2883,8 @@ impl AlphaBeta {
         best
     }
 
-    /// At the action cap of a node whose best score `best` so far is mated: raise the cap once,
-    /// by its own size (returns whether it did). Mates the search claims through such a node
-    /// are otherwise often false: the escape lies past the cap (the LMP counts are tuned for
-    /// nodes that are not lost).
+    /// Doubles the action cap once when the node's best score `best` is mated, returning whether
+    /// it did, since the escape often lies past the cap.
     #[inline]
     fn mated_cap(cap: &mut usize, raised: &mut bool, best: i32) -> bool {
         if *raised || best >= -(MATE - 1000) {
@@ -3056,10 +2947,8 @@ impl AlphaBeta {
         pv
     }
 
-    /// The line to report for `pv` (a search's PV from `root`, scored `score` at `depth`):
-    /// when it stops short of the mate (for a mate score) or of `depth`, it is extended along
-    /// the transposition table's actions, each checked legal, up to that length, never past
-    /// a position already on the line.
+    /// The line to report for `pv`, extended with legal TT actions up to the mate or `depth`
+    /// when short, stopping at a repeated position.
     fn report_pv(&self, root: &State, pv: &[MoveSeq], score: i32, depth: i32) -> Vec<MoveSeq> {
         // (A score past MATE is no mate distance: a line of none is asked for, not one of
         // a wrapped-around length, which aborted the engine.)
@@ -3178,10 +3067,8 @@ enum HelperMsg {
     NewGame,
 }
 
-/// A Lazy SMP helper: a thread with its own searcher (killers, history, buffers, kept between
-/// searches), searching the jobs it is sent in order (one still finishing a stopped search
-/// joins the next as soon as it is done). It exits once its `Helper` is dropped and its
-/// current search is over.
+/// A Lazy SMP helper thread with its own persistent searcher, running the jobs it is sent in
+/// order. It exits once its `Helper` is dropped and its current search is over.
 struct Helper {
     tx: std::sync::mpsc::Sender<HelperMsg>,
 }
@@ -3353,12 +3240,9 @@ impl AlphaBeta {
         self.qkillers.iter_mut().for_each(|k| *k = None);
     }
 
-    /// Search `root` and return the action to play. With `Threads` above 1 this is Lazy SMP
-    /// (as in Apeiron): helper threads run the same iterative deepening on the same root into
-    /// the shared transposition table, odd ones a depth ahead, with no clock of their own; the
-    /// calling (main) thread keeps the time, reports progress, and stops the helpers when it
-    /// is done; the action played is chosen by the vote of the threads that report back within
-    /// a few milliseconds (never waiting longer on a helper).
+    /// Search `root` and return the action to play. With `Threads` above 1 this is Lazy SMP:
+    /// helpers share the TT, the main thread keeps time and stops them, and the action is
+    /// chosen by vote of the threads that report back promptly.
     pub fn find_best_move(&mut self, root: &State, limits: &Limits, stop: &AtomicBool, info: &mut dyn FnMut(String)) -> Option<Action> {
         if self.skill_level == 8 {
             return self.find_best_move_full(root, limits, stop, info);
@@ -3394,13 +3278,12 @@ impl AlphaBeta {
             risk
         }).collect();
         let choice = super::skill::pick(&scores, &risks, self.skill_level, super::book::random_seed());
-        if let Some(k) = choice {
-            if let Some(action) = lines[k].1.first() {
+        if let Some(k) = choice
+            && let Some(action) = lines[k].1.first() {
                 self.last_score = lines[k].0;
                 self.last_proven = false;
                 return Some(Action::from_moveseq(action, root));
             }
-        }
         fallback
     }
 
@@ -3458,16 +3341,9 @@ impl AlphaBeta {
 
         // Root actions (all of them, up to the root cap), ordered heuristically.
         let (mut hc, ss) = HcInfo::build_hc(root);
-        // A checkmate in one by a lone travel (every other board passing) is tried first, each
-        // such action exactly (`lone_travel_mate`). The root (like every node) leaves out moves
-        // on optional boards: a mate in one by a travel back from one of them is played unless
-        // the search finds a mate in one. Then
-        // a checkmate in one by a travel the root's actions come to late or never (one creating
-        // a timeline comes after every other action, and the root takes at most ROOT_CAP), as
-        // interior nodes look for it (`travel_mate`): the checking travels it tries are root
-        // actions too (see below). Then every legal action tested for checkmate, checking ones
-        // first (a mate in one needs specific helper moves on the other boards that no probe
-        // before is sure to pick). All bounded by counts, none by time.
+        // Mate-in-one probes before the search, in order: lone travels, travels from optional
+        // boards, late-ordered checking travels (`travel_mate`, which also become root actions),
+        // then a scan of every legal action, checks first.
         let mut travel_checks: Vec<MoveSeq> = Vec::new();
         let scan_start = Instant::now();
         let (budget, recheck) = self.root_mate_budget(plan.as_ref());
@@ -3527,10 +3403,8 @@ impl AlphaBeta {
             if !roots.is_empty() && stop.load(Ordering::Relaxed) {
                 break;
             }
-            // The space without moves on optional boards gets ROOT_FIRST_STEPS hypercuboids to yield
-            // a first action: when most of its points fail it can take far longer than the whole
-            // space (whose actions are then generated instead). The rest of the actions get
-            // ROOT_GEN_STEPS.
+            // The space without optional boards gets ROOT_FIRST_STEPS to yield a first action,
+            // falling back to the whole space; the remaining actions get ROOT_GEN_STEPS.
             if roots.is_empty() {
                 agen.set_budget(if full.is_some() { Some(ROOT_FIRST_STEPS) } else { None });
             } else if !gen_bounded {
@@ -3684,10 +3558,8 @@ impl AlphaBeta {
         Some(Action::from_moveseq(&chosen.best, root))
     }
 
-    /// Iterative deepening over the root actions `roots` (ordered best first; all legal ones
-    /// when `roots_complete`). The main thread (`thread_id` 0) keeps the time of `plan` and
-    /// reports each depth through `info` with the helpers' nodes (`helper_nodes`) added;
-    /// helpers search until stopped.
+    /// Iterative deepening over `roots` (best first). The main thread (`thread_id` 0) keeps
+    /// time and reports each depth through `info`; helpers search until stopped.
     #[allow(clippy::too_many_arguments)]
     fn iterate(
         &mut self,
@@ -3854,15 +3726,9 @@ impl AlphaBeta {
                     best = act;
                 }
             }
-            // A partially searched iteration still improves on the previous best, except that a
-            // mate an earlier depth found survives a depth that comes back longer, not mating
-            // or interrupted, and an interrupted depth's loss is not trusted (Stockfish's
-            // forgottenMate and abortedLossSearch). A mate that is not proven is only kept
-            // while this depth still finds a mate for its action (searched first): when the
-            // deeper search finds none, it refuted the mate (an escape, or a mate of the other
-            // side, that the shallower search pruned). A proven loss is final: no later score
-            // that is not a loss replaces it (it can only be a search that pruned the mate).
-            // (The kept mate is reported as proven or not, as it was found.)
+            // A partial iteration replaces the best, except: an earlier mate survives a worse or
+            // interrupted depth (unless unproven and refuted here), an interrupted loss is not
+            // trusted, and a proven loss is final.
             let refuted = !best_proven && roots.first().is_some_and(|r| r.1 == best) && scores.first().is_some_and(|&v| v <= MATE - 1000);
             let mut kept = false;
             if let Some((v, act, proven)) = iter_best {
@@ -3974,13 +3840,9 @@ impl AlphaBeta {
         ThreadResult { best, score: best_score, proven: best_proven, completed_depth, pv: best_pv, pv_len, nodes: self.nodes, thread_id: self.thread_id, lines }
     }
 
-    /// One depth of the MultiPV root search over `roots` (in order), as Apeiron's: the first
-    /// action is searched in the aspiration window `lo..hi` and again with a full window when
-    /// it falls outside; until `MultiPV` actions have exact scores, every action is searched
-    /// with a full window; after that (Stockfish-style) the bar is the `MultiPV`-th best exact
-    /// score, and an action is scouted at it (reduced late, as the plain search does) and only
-    /// re-searched for an exact score (and its line) when it beats it. An action that does not
-    /// is scored below the bar (its score is only an upper bound).
+    /// One depth of MultiPV root search: the first action uses the window `lo..hi`, the next
+    /// get full windows until `MultiPV` are exact, then each is scouted at the `MultiPV`-th best
+    /// score and re-searched only if it beats it.
     fn multipv_pass(&mut self, work: &mut State, roots: &[(i32, MoveSeq)], depth: i32, lo: i32, hi: i32, roots_complete: bool) -> MultiPass {
         let want = self.multipv;
         let mut pass = MultiPass { best: None, best_pv: Vec::new(), all_proven: roots_complete, scores: Vec::with_capacity(roots.len()), lines: Vec::new() };
@@ -4169,10 +4031,8 @@ mod tests {
         }
     }
 
-    /// MultiPV 3 reports three lines a depth (`multipv 1..3`), of distinct root actions,
-    /// best first; the line of the plain search's action has the plain search's score at
-    /// the same depth to within a few centipawns (one thread, fresh tables), and a plain
-    /// search tags no line.
+    /// MultiPV 3 reports three distinct lines per depth, best first, matching the plain search's
+    /// score for its action; a plain search tags no line.
     #[test]
     fn multipv_reports_distinct_sorted_lines() {
         let s = start_with_moves("(0T1)e2e4 submit (0T1)e7e5 submit");
@@ -4248,8 +4108,8 @@ mod tests {
     }
 
     /// Mate in one with three boards to play, the third a travel from a board ahead of the
-    /// present ((0T8)Ne1>>x(0T7)e3, Knights vs. Bishops, reported by a user): the mating action
-    /// is the 11,575th of the natural enumeration, past the root scan's first 1,024 actions (found within its time share).
+    /// present ((0T8)Ne1>>x(0T7)e3, Knights vs. Bishops): the mating action lies past the root
+    /// scan's first `ROOT_SCAN_ACTIONS` actions.
     #[test]
     fn mate_in_one_deep_in_the_action_space() {
         let s = crate::core::perft::parse_g_line("G 1 size 6x6 odd fen [r*bqk*br*/p*p*p*p*p*p*/6/6/P*P*P*P*P*P*/R*NQK*NR*:0:1:w] moves (0T1)f2f4 submit (0T1)e5e4 submit (0T2)b2b3 submit (0T2)a5a3 submit (0T3)b1a3 submit (0T3)b6a5 submit (0T4)c1b2 submit (0T4)a5d2 submit (0T5)d1d2 submit (0T5)c5c3 submit (0T6)b3c4 submit (0T6)e4e3 submit (0T7)d2c1 submit (0T7)c6(0T3)c2 submit (-1T4)a3c2 submit (-1T4)b6(0T5)b6 submit (-1T5)c2d4 submit (-1T5)c5d4 submit").unwrap();
@@ -4370,10 +4230,8 @@ mod tests {
         assert!(t.elapsed() < Duration::from_millis(2000), "took {:?}", t.elapsed());
     }
 
-    /// Turn Zero engine game, Black's move 30: (-2T16)Na5xb3 loses to the knight travel
-    /// (-2T17)Ng5>>x(-2T16)g7#, a branching travel from a board White must play, which interior
-    /// nodes reached only after every action creating no timeline (tactics suite, "T0 travel
-    /// mate").
+    /// Turn Zero, Black's move 30: (-2T16)Na5xb3 loses to the branching knight travel
+    /// (-2T17)Ng5>>x(-2T16)g7#, which must be found at interior nodes.
     #[test]
     fn checking_travel_reply_is_searched() {
         let s = start_with_moves(
@@ -4401,10 +4259,9 @@ mod tests {
     const UNICORNS_A: &str = "G 1 size 5x5 odd fen [1u1uk*/5/5/5/K*U1U1:0:1:w] moves (0T1)a1b2 submit (0T1)e5d4 submit \
          (0T2)b2a1 submit (0T2)d4c5 submit";
 
-    /// `UNICORNS_A` then 3.(0T3)Ub1>>(0T1)d3 (1T1)Ke5d4 4.(1T2)Ud1>>(0T1)d2+: every move of
-    /// Black's board (1T2) loses to a mate, but the unicorn on the inactive timeline L2 mates
-    /// first, (2T1)Ud5>>(0T1)b3#. Searched at ply 3 (past the plies `travel_mate` looks at),
-    /// the mated node searches the moves on optional boards.
+    /// `UNICORNS_A` then 3.(0T3)Ub1>>(0T1)d3 (1T1)Ke5d4 4.(1T2)Ud1>>(0T1)d2+: the unicorn on
+    /// inactive L2 mates with (2T1)Ud5>>(0T1)b3#; a mated node at ply 3 must search optional
+    /// boards.
     #[test]
     fn mated_node_searches_optional_boards() {
         let mut s = crate::core::perft::parse_g_line(&format!("{} (0T3)b1(0T1)d3 submit (1T1)e5d4 submit (1T2)d1(0T1)d2 submit", UNICORNS_A)).unwrap();
@@ -4430,10 +4287,8 @@ mod tests {
     }
 
     /// "Focused - Just Unicorns", 1.Ka1b2 Ke5d4 2.Kb2c1 Kd4c5 3.Kc1b2 Kc5d4 4.Kb2c1
-    /// (0T4)Ud5>>(0T1)a2+ 5.(-1T2)Kb2xa2 Ke5d4 6.Ka2b3 Kd4d3: White mates with the unicorn of
-    /// the board ahead of the present, 7.(0T5)Ub1>>(-1T4)b2#. The root probe's mate is a root
-    /// action: every depth reports it (the search alone saw White mated), and so does a
-    /// resumed search.
+    /// (0T4)Ud5>>(0T1)a2+ 5.(-1T2)Kb2xa2 Ke5d4 6.Ka2b3 Kd4d3 7.(0T5)Ub1>>(-1T4)b2#: the root
+    /// probe's mate is reported at every depth and by a resumed search.
     #[test]
     fn future_board_mate_is_reported_at_every_depth() {
         let s = crate::core::perft::parse_g_line(

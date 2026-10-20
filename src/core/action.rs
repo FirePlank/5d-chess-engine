@@ -274,11 +274,10 @@ impl FullMove {
     pub fn parse(input: &str) -> Result<FullMove, String> {
         let mut s: Vec<u8> = input.as_bytes().to_vec();
         let first_close = s.iter().position(|&c| c == b')');
-        if let Some(fc) = first_close {
-            if fc + 1 < s.len() && s[fc + 1].is_ascii_uppercase() {
+        if let Some(fc) = first_close
+            && fc + 1 < s.len() && s[fc + 1].is_ascii_uppercase() {
                 s.remove(fc + 1);
             }
-        }
         let search_from = first_close.map(|f| f + 1).unwrap_or(0);
         if let Some(rel) = s[search_from.min(s.len())..].iter().position(|&c| c == b'(') {
             let second_open = search_from + rel;

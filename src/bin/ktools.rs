@@ -1,7 +1,5 @@
 //! Command-line utilities: perft, legal-action dumps and node-count benchmarks.
-//!
-//! Positions are read as "G <promotions> <5duci position> moves <lan|submit>*" lines
-//! (the format emitted by `oracle lines`).
+//! Positions are read as "G <promotions> <5duci position> moves <lan|submit>*" lines.
 
 use kairos::core::action::MoveSeq;
 use kairos::core::hypercuboid::HcInfo;
@@ -242,7 +240,7 @@ fn main() {
                         }
                         if let Some(m) = max_eval {
                             let e = (i + 1).checked_sub(book_len).and_then(|k| evals.get(k).copied().flatten());
-                            if !e.is_some_and(|e| e.abs() <= m) {
+                            if e.is_none_or(|e| e.abs() > m) {
                                 continue;
                             }
                         }
@@ -258,6 +256,39 @@ fn main() {
                 }
             }
             eprintln!("buckets {:?}", counts);
+        }
+        "inactivebook" => {
+            // inactivebook <max> <games.jsonl>... : G lines of game positions with a timeline
+            // outside the active range, at most one per game.
+            use kairos::core::variants::{apply_uci_moves, position_from_uci};
+            let max: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(500);
+            let mut n = 0usize;
+            let mut games = 0usize;
+            'files: for path in &args[3..] {
+                let text = std::fs::read_to_string(path).expect("games");
+                for line in text.lines() {
+                    if n >= max {
+                        break 'files;
+                    }
+                    let (Some(pos), Some(moves)) = (json_field(line, "position"), json_field(line, "moves")) else { continue };
+                    games += 1;
+                    let acts: Vec<&str> = moves.split(" submit").map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+                    let Ok(mut s) = position_from_uci(pos) else { continue };
+                    for (i, a) in acts.iter().enumerate() {
+                        if apply_uci_moves(&mut s, &format!("{} submit", a)).is_err() {
+                            break;
+                        }
+                        let (lo, hi) = s.get_lines_range();
+                        let (amin, amax) = s.get_active_range();
+                        if (lo < amin || hi > amax) && (i + 1) % 5 == 0 && i + 6 < acts.len() {
+                            n += 1;
+                            writeln!(out, "G 1 {} moves {} submit", pos, acts[..=i].join(" submit ")).unwrap();
+                            break;
+                        }
+                    }
+                }
+            }
+            eprintln!("{} positions with an inactive timeline in {} games", n, games);
         }
         "chesspos" => {
             // chesspos <max> <games.jsonl>... : the single-timeline positions of the games and the
@@ -294,11 +325,9 @@ fn main() {
             }
         }
         "chessfeat" => {
-            // chessfeat <labels.tsv> <out.bin> [every=1] [max=1000000]: raw standard-chess term
-            // counts (white minus black) of the labelled positions ("<fen>	<expected>	<cp>",
-            // scripts/chess/peras_label.py), for scripts/chess/fit_chess.py. Skips positions with
-            // the side to move in check, mates and non-8x8-chess boards. Record: i16 phase,
-            // i16 side to move (1 black), i32 cp (side to move), then `chess::t::COUNT` i16.
+            // chessfeat <labels.tsv> <out.bin> [every=1] [max=1000000]: standard-chess term counts
+            // (white minus black) of labelled positions, for scripts/chess/fit_chess.py.
+            // Record: i16 phase, i16 side (1 black), i32 cp, then `chess::t::COUNT` i16.
             use kairos::core::board::Board;
             use kairos::engine::chess::{analyze, terms, threats, t, CountSink};
             let every: usize = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(1);
@@ -326,8 +355,8 @@ fn main() {
                     let mut sink = CountSink([0; t::COUNT]);
                     terms(&info, c, &mut sink);
                     threats(&info, c, if (c == 1) == black { t::THREAT_M } else { t::THREAT_W }, &mut sink);
-                    for i in 0..t::COUNT {
-                        v[i] += if c == 0 { sink.0[i] } else { -sink.0[i] };
+                    for (vi, &x) in v.iter_mut().zip(sink.0.iter()).take(t::COUNT) {
+                        *vi += if c == 0 { x } else { -x };
                     }
                 }
                 w.write_all(&(info.phase as i16).to_le_bytes()).unwrap();
@@ -653,6 +682,7 @@ fn main() {
         }
         "bookeval" => bookeval(&args[2..], &mut out),
         "mate1recall" => mate1recall(&args[2..], &mut out),
+        "matescan" => matescan(&args[2..], &mut out),
         "abbench" => abbench(
             args.get(2).map(|s| s.as_str()).unwrap_or("data/bench_ab.g"),
             args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20),
@@ -891,10 +921,9 @@ fn main() {
             }
         }
         "rules" => {
-            // rules [cap] [nomate] : boards, playable timelines, pseudo-legal moves, checks, mate
-            // type and up to `cap` legal actions per position, for cross-checking against other
-            // implementations ("nomate" skips the mate type and actions). Coordinates are
-            // "l,t,x,y" in the internal timeline numbering (y = 0 is rank 1).
+            // rules [cap] [nomate] : per-position rules dump (boards, moves, checks, mate type,
+            // up to `cap` actions) for cross-checking other implementations.
+            // Coordinates are "l,t,x,y" in internal timeline numbering (y = 0 is rank 1).
             let cap: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
             let mate = args.get(3).map(|s| s.as_str()) != Some("nomate");
             for line in stdin.lock().lines() {
@@ -1062,12 +1091,9 @@ fn main() {
             }
         }
         "hcverify" => {
-            // hcverify [cap] [seeds] : every action generator the engine uses (best-first under
-            // the engine ordering and under random orderings, and the evasion cursor) must
-            // produce exactly the hypercuboid search's set of legal actions, and none exactly
-            // when it has none. Positions with more than `cap` actions are compared on the
-            // first `cap` distinct actions of each generator (each must be legal). Generators
-            // that repeat an action are counted separately.
+            // hcverify [cap] [seeds] : checks that every action generator the engine uses yields
+            // exactly the hypercuboid search's legal actions. Above `cap` actions, only the first
+            // `cap` of each generator are checked for legality.
             let cap: usize = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(5000);
             let seeds: u64 = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(2);
             let (mut positions, mut complete, mut actions, mut bad, mut repeating) = (0u64, 0u64, 0u64, 0u64, 0u64);
@@ -1220,12 +1246,9 @@ fn main() {
             }
         }
         "subdump" => {
-            // subdump <spaces> <seed> [volume] : for positions too big to enumerate, the actions
-            // the search yields in `spaces` random parts of each position's search universe
-            // (every axis keeps its null semimove and a few random others, plus the departures
-            // of the arrivals kept, about `volume` points at most), as "S <k>" then
-            // "a <wastes a move: 0|1> <action>|<action without its wasted moves>" lines. Two
-            // builds' dumps (one leaving actions with wasted moves in) compare part by part.
+            // subdump <spaces> <seed> [volume] : dumps the actions found in `spaces` random
+            // sub-universes of positions too big to enumerate, so two builds compare part by part.
+            // Output: "S <k>" then "a <wastes 0|1> <action>|<action without wasted moves>" lines.
             use kairos::core::hypercuboid::{Entry, HcCursor};
             use kairos::core::naive::wastes_moves;
             use kairos::misc::geometry::{Hc, SearchSpace};
@@ -1311,15 +1334,9 @@ fn main() {
             }
         }
         "wastecheck" => {
-            // wastecheck [cap] : reads the `ktools dump` output of a generator that still yields
-            // actions with wasted moves (G line, then M and a lines) and checks the current
-            // hypercuboid search against it: its actions are exactly the dumped ones without
-            // wasted moves (`naive::wastes_moves`, found by playing each on a copy), removing an
-            // action's wasted moves leaves an action it yields, and the mate type is the same.
-            // A dump cut short (as many actions as `cap`) is checked one way: every dumped
-            // action without wasted moves is yielded, and every yielded one is legal without
-            // wasted moves. Positions where the current search has `cap` actions or more are
-            // skipped.
+            // wastecheck [cap] : checks the hypercuboid search against a `ktools dump` that still
+            // includes wasted-move actions: same actions once those are dropped, same mate type.
+            // Truncated dumps are checked one way; positions with `cap`+ actions are skipped.
             use kairos::core::action::FullMove;
             use kairos::core::naive::{is_legal_action, wastes_moves};
             use std::collections::BTreeSet;
@@ -1614,7 +1631,7 @@ fn json_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     if let Some(r) = rest.strip_prefix('"') {
         Some(&r[..r.find('"')?])
     } else {
-        let end = rest.find(|c| c == ',' || c == '}').unwrap_or(rest.len());
+        let end = rest.find([',', '}']).unwrap_or(rest.len());
         Some(rest[..end].trim())
     }
 }
@@ -1894,10 +1911,8 @@ fn puzzles(path: &str, ms: u64, out: &mut impl Write) {
     writeln!(out, "solved {}/{}", solved, total).unwrap();
 }
 
-/// Tactics regression suite (see `kairos::misc::tactics`): searches each position for `ms`
-/// with `threads` threads (a fresh engine, no opening book) and reports it solved when the
-/// action played is one of the correct ones, with the time from which every reported line
-/// (and the action played) started with a correct action.
+/// Tactics regression suite (`kairos::misc::tactics`): searches each position for `ms` and
+/// reports whether the played action is correct, and from when every reported line agreed.
 fn tactics(path: &str, ms: u64, threads: usize, out: &mut impl Write) {
     use kairos::core::action::Action;
     use kairos::engine::ab::AlphaBeta;
@@ -1972,20 +1987,9 @@ fn tactics(path: &str, ms: u64, threads: usize, out: &mut impl Write) {
     .unwrap();
 }
 
-/// Eval-net training records from harness JSONL games: for every position where an engine
-/// chose an action, the net inputs, the handcrafted score, the engine's reported score and
-/// the game result, all from the side to move's view, and the game number. The teacher score
-/// is in internal units (records on the reported scale are converted back).
-///   ktools netdata out.bin games1.jsonl games2.jsonl ...
-/// Record: NI + 4 little-endian f32 (inputs, base, teacher or NaN, wdl, game).
-/// With `NETDATA_FEN=<path>` set, `<path>` gets one line per record: for a position with a
-/// single timeline, its present board (5D FEN, `*` = unmoved) and the side to move as
-/// "<fen>|<w|b>", otherwise "-" (for plain-chess teacher labels, scripts/chess/).
-/// With `NETDATA_NO_CHECK` set, positions where the side to move is in check (5D, as
-/// `State::has_phantom_check`) are left out. Held-out test sets must be built this way: being
-/// in check predicts the result strongly, so terms correlated with it look far better offline
-/// than they play (the search resolves those positions by evasions, not by their evaluation;
-/// hce_exposure lost 27 Elo after a -0.005 log-loss "gain" from check terms).
+/// `netdata out.bin games.jsonl...`: eval-net records (NI + 4 f32: inputs, base, teacher or NaN,
+/// wdl, game; side to move's view). NETDATA_FEN=<path> also writes single-timeline FENs.
+/// NETDATA_NO_CHECK drops in-check positions; use it for held-out sets, as check leaks the result.
 fn netdata(args: &[String], out: &mut impl Write) {
     use kairos::core::variants::{apply_uci_moves, position_from_uci};
     use kairos::engine::evalnet::{inputs, NI};
@@ -2227,13 +2231,9 @@ fn hcverify(s: &State, cap: usize, seeds: u64) -> Result<(usize, bool, Option<St
     Ok((reference.len(), full, repeats))
 }
 
-/// Time overruns over positions: every G line of the files (labelled by a preceding "# "
-/// line) is searched with each thread count and each limit, one search at a time, and the
-/// time past the hard limit (`TimePlan::maximum`) is reported, with searches that return no
-/// action or an illegal one. A search running 30 s past its limit is reported as hung (and
-/// left behind).
-///   ktools overrunpos <file.g>... [threads=1,4] [ms=100,1000] [clock=2000+100,30000+300]
-/// (`clock` is time left + increment in ms).
+/// `overrunpos <file.g>... [threads=1,4] [ms=100,1000] [clock=2000+100,30000+300]`: reports
+/// how far each search runs past its hard time limit, and searches returning no or illegal
+/// actions. `clock` is time left + increment in ms; 30 s past the limit counts as hung.
 fn overrunpos(args: &[String], out: &mut impl Write) {
     use kairos::engine::ab::AlphaBeta;
     use kairos::engine::time::TimePlan;
@@ -2485,10 +2485,9 @@ fn mc_cases(path: &str, max: usize) -> Vec<McCase> {
     cases
 }
 
-/// Plays one case: two engines (one per side, each keeping its tables between its moves as in
-/// a game) search every position with `nodes` nodes and play their actions (or the record's).
-/// Self-play stops at a mate, at `max_plies`, when no mate is claimed in the first 4 plies, or
-/// a few plies after a claimed mate should have been delivered.
+/// Plays one case with one engine per side (or along the record), searching every position.
+/// Stops at mate, at `max_plies`, if no mate is claimed in 4 plies, or soon after a claimed
+/// mate is overdue.
 fn mc_play(case: &McCase, nodes: u64, max_plies: usize, depth_limit: u32, max_ms: u64) -> (Vec<McPly>, bool) {
     use kairos::engine::ab::AlphaBeta;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -2518,10 +2517,11 @@ fn mc_play(case: &McCase, nodes: u64, max_plies: usize, depth_limit: u32, max_ms
             r
         });
         let Some((ply, next)) = r else { break };
-        if due.is_none() && case.forced.is_none() {
-            if let Some(m) = mc_mate(ply.score).filter(|&m| m > 0) {
-                due = Some(j + 2 * m as usize - 2);
-            }
+        if due.is_none()
+            && case.forced.is_none()
+            && let Some(m) = mc_mate(ply.score).filter(|&m| m > 0)
+        {
+            due = Some(j + 2 * m as usize - 2);
         }
         plies.push(ply);
         s = next;
@@ -2553,9 +2553,7 @@ fn mc_ply(
     {
         let _g = kairos::core::hypercuboid::interrupt_on(stop, None);
         let (w, ss) = HcInfo::build_hc(s);
-        if w.search(s, ss).next().is_none() {
-            return None;
-        }
+        w.search(s, ss).next()?;
     }
     let forced = match &case.forced {
         Some(f) => Some(f.get(j)?.as_str()),
@@ -2584,7 +2582,10 @@ fn mc_ply(
 }
 
 /// Inconsistencies of a played line (see `matecheck`), as (ply, kind, detail).
-fn mc_flags(plies: &[McPly], mated: bool) -> (Option<(usize, i32)>, Vec<(usize, &'static str, String)>) {
+/// (ply, kind, detail) of one inconsistency.
+type McFlag = (usize, &'static str, String);
+
+fn mc_flags(plies: &[McPly], mated: bool) -> (Option<(usize, i32)>, Vec<McFlag>) {
     let mut flags = Vec::new();
     for (j, p) in plies.iter().enumerate() {
         if let Some(m) = p.reported.filter(|&m| mc_mate(p.score) != Some(m)) {
@@ -2601,7 +2602,7 @@ fn mc_flags(plies: &[McPly], mated: bool) -> (Option<(usize, i32)>, Vec<(usize, 
     if k >= 1 && plies[k - 1].black != winner && mc_mate(plies[k - 1].score).is_none_or(|m| m > 0) && plies[k - 1].depth >= 2 * n {
         flags.push((k - 1, "WALKED", format!("loser depth {} saw {}, then mate {}", plies[k - 1].depth, mc_text(plies[k - 1].score), n)));
     }
-    if k >= 2 && plies[k - 2].black == winner && plies[k - 2].depth >= 2 * n + 1 {
+    if k >= 2 && plies[k - 2].black == winner && plies[k - 2].depth > 2 * n {
         flags.push((k - 2, "EARLY", format!("winner depth {} saw {}, then mate {} after the reply", plies[k - 2].depth, mc_text(plies[k - 2].score), n)));
     }
     let mut bound = n;
@@ -2649,28 +2650,9 @@ fn mc_text(score: i32) -> String {
     }
 }
 
-/// Mate consistency checker: `matecheck <cases> [nodes] [max_cases] [threads] [records_out]`.
-/// Each case's position is played out by the engine (both sides, `nodes` nodes a search, one
-/// thread, a fresh pair of engines per case) or along a record's actions, and every position
-/// is searched. Once a side claims mate in N, it must claim mate in N-1 or less a move later,
-/// and the other side must see itself mated. Flags:
-///   LOST       the winner's mate disappeared, at a depth enough to see it (FADED: below)
-///   LONGER     the winner's mate got longer than one move less
-///   BLIND      the loser did not see itself mated at a depth enough to see it (UNSEEN: below)
-///   REFUTED    the loser found a mate of its own (the claim was false)
-///   WALKED     the loser let the mate in although its depth was enough to see it
-///   EARLY      the winner, a move earlier, searched deep enough but saw no mate
-///   UNREALIZED the line ended without the mate (the claim was false, or the mate lost)
-///   SLOW       the mate came later than claimed
-/// Cases are G lines, records (written to `records_out` for replaying with another build:
-/// the same actions, to compare what each build sees), or harness JSONL games (the position
-/// two actions before the game's first mate score). `nodes` 0 searches without a node limit;
-/// env MC_DEPTH limits the depth (default 64), MC_MAX_PLIES the plies a case plays (40), MC_MS
-/// the time of one ply (60000 ms: a longer search is stopped).
-/// Cases run in parallel and are reported as they finish; a mate score ending in `!` is
-/// proven (see `AlphaBeta::last_proven`), `/d` gives the depth reached, `(Mn)` the mate the last
-/// completed depth reported when an unfinished deeper one replaced it, `#` marks a line ending
-/// in checkmate. DROPPED flags such a replaced mate.
+/// `matecheck <cases> [nodes] [max_cases] [threads] [records_out]`: plays out each case and
+/// checks that a claimed mate in N becomes mate in N-1 or less and the loser sees it coming.
+/// Cases: G lines, records or JSONL games. Env: MC_DEPTH, MC_MAX_PLIES, MC_MS.
 fn matecheck(args: &[String], out: &mut impl Write) {
     use std::sync::atomic::{AtomicUsize, Ordering};
     lower_priority();
@@ -2750,15 +2732,9 @@ fn matecheck(args: &[String], out: &mut impl Write) {
     writeln!(out, "cases {} | mate claimed {} | consistent {} | flagged cases by kind {:?} | proven claims undelivered {} | {} nodes/search, {:.0}s", total, claimed, clean, counts, proven_false, nodes, t0.elapsed().as_secs_f64()).unwrap();
 }
 
-/// `bookeval [nodes] [threads] [out.tsv] [max_secs] [depth_cap] [book_file]`: search every
-/// position of the opening book (the positions with book actions and every position an action
-/// reaches, each once however it was reached) with a fixed node budget per position (deterministic,
-/// one thread and a fresh table each; `max_secs` and `depth_cap` only bound the odd position)
-/// and write one line per position to `out.tsv`: key, present turn and side to move, depth
-/// reached, score kind and value (from the side to move's view), the best action, nodes,
-/// seconds, the PV. Also writes `<out>.edges.tsv` (every book action: parent and child key, tag,
-/// weight, PGN, a line leading to the parent) and `<out>.positions.tsv` (key, turn, side,
-/// opening name, a line leading there). Resumes: positions already in `out.tsv` are skipped.
+/// `bookeval [nodes] [threads] [out.tsv] [max_secs] [depth_cap] [book_file]`: searches every
+/// book position once with a fixed node budget and writes its score, best action and PV.
+/// Also writes `<out>.edges.tsv` and `<out>.positions.tsv`; resumes past rows already written.
 fn bookeval(args: &[String], out: &mut impl Write) {
     use kairos::engine::ab::AlphaBeta;
     use kairos::engine::{Limits, OptionValue};
@@ -2786,20 +2762,36 @@ fn bookeval(args: &[String], out: &mut impl Write) {
     }
     let mut edges: Vec<Edge> = Vec::new();
     let mut names: HashMap<u64, String> = HashMap::new();
+    // The source comment block printed before a position (the guides' notes on the line it starts).
+    let mut notes: HashMap<u64, String> = HashMap::new();
+    let mut pending: Vec<String> = Vec::new();
     let mut cur: Option<(u64, State)> = None;
-    let add = |s: &State, states: &mut HashMap<u64, State>, order: &mut Vec<u64>| -> u64 {
+    // The distinct histories (full hashes) that reach one frontier position: the book keys by the boards in
+    // play, so these are merged, but the search of the first one does not tell about the others.
+    let mut histories: HashMap<u64, std::collections::HashSet<u64>> = HashMap::new();
+    let mut add = |s: &State, states: &mut HashMap<u64, State>, order: &mut Vec<u64>| -> u64 {
         let k = s.frontier_hash();
-        if !states.contains_key(&k) {
-            states.insert(k, s.clone());
+        histories.entry(k).or_default().insert(s.hash());
+        if let std::collections::hash_map::Entry::Vacant(e) = states.entry(k) {
+            e.insert(s.clone());
             order.push(k);
         }
         k
     };
     for line in text.lines() {
         let line = line.trim();
+        if line.is_empty() {
+            pending.clear();
+        } else if let Some(c) = line.strip_prefix('#') {
+            pending.push(c.trim().to_string());
+        }
         if let Some(g) = line.strip_prefix("P ") {
             let s = parse_g_line(g).expect("book position");
             let k = add(&s, &mut states, &mut order);
+            if !pending.is_empty() {
+                notes.entry(k).or_insert_with(|| pending.join(" "));
+            }
+            pending.clear();
             cur = Some((k, s));
         } else if let Some(n) = line.strip_prefix("N ") {
             let (k, _) = cur.as_ref().expect("name after position");
@@ -2837,15 +2829,15 @@ fn bookeval(args: &[String], out: &mut impl Write) {
         let here = line_to[&k].clone();
         for &i in children.get(&k).map(|v| v.as_slice()).unwrap_or(&[]) {
             let e = &edges[i];
-            if !line_to.contains_key(&e.child) {
-                line_to.insert(e.child, if here.is_empty() { e.pgn.clone() } else { format!("{} {}", here, e.pgn) });
+            if let std::collections::hash_map::Entry::Vacant(v) = line_to.entry(e.child) {
+                v.insert(if here.is_empty() { e.pgn.clone() } else { format!("{} {}", here, e.pgn) });
                 queue.push_back(e.child);
             }
         }
     }
     let turn_of = |k: u64| -> (i32, bool) {
         let (t, c) = states[&k].get_present();
-        (t as i32, c)
+        (t, c)
     };
     {
         let mut f = std::fs::File::create(format!("{}.edges.tsv", path)).expect("edges file");
@@ -2854,10 +2846,10 @@ fn bookeval(args: &[String], out: &mut impl Write) {
             writeln!(f, "{:016x}\t{:016x}\t{}\t{}\t{}\t{}\t{}", e.parent, e.child, e.tag, e.weight, e.lan, e.pgn, line_to.get(&e.parent).cloned().unwrap_or_default()).unwrap();
         }
         let mut f = std::fs::File::create(format!("{}.positions.tsv", path)).expect("positions file");
-        writeln!(f, "key\tturn\tside\tname\tline").unwrap();
+        writeln!(f, "key\tturn\tside\tname\tline\tnote\thistories").unwrap();
         for &k in &order {
             let (t, c) = turn_of(k);
-            writeln!(f, "{:016x}\t{}\t{}\t{}\t{}", k, t, if c { "b" } else { "w" }, names.get(&k).cloned().unwrap_or_default(), line_to.get(&k).cloned().unwrap_or_default()).unwrap();
+            writeln!(f, "{:016x}\t{}\t{}\t{}\t{}\t{}\t{}", k, t, if c { "b" } else { "w" }, names.get(&k).cloned().unwrap_or_default(), line_to.get(&k).cloned().unwrap_or_default(), notes.get(&k).cloned().unwrap_or_default().replace('\t', " "), histories.get(&k).map_or(1, |h| h.len())).unwrap();
         }
     }
     let done: std::collections::HashSet<String> = std::fs::read_to_string(&path)
@@ -2946,12 +2938,9 @@ fn bookeval(args: &[String], out: &mut impl Write) {
     writeln!(out, "done in {:.0}s", t0.elapsed().as_secs_f64()).unwrap();
 }
 
-/// `mate1recall <games.jsonl|positions.g>... [-n max] [-t threads]`: the recall of the mate-in-one search. Every
-/// checkmate game gives a position that has a mate in one (the one before the winner's last
-/// action); the engine searches it to depth 1 (so only the root's probes and scans can find the
-/// mate) and the report counts how often the action it plays mates, with the time of the search.
-/// Env: `MATE_VERIFY` is the engine's `MateVerify` option (auto, milliseconds or exhaustive),
-/// `M1_DEPTH` the depth (1), `M1_CLOCK` a clock in ms (a game's time plan instead of an analysis). Positions are taken every `stride`-th game when `M1_STRIDE` is set.
+/// `mate1recall <games.jsonl|positions.g>... [-n max] [-t threads]`: how often a depth-1 search
+/// finds the mate in one before each checkmate game's final action, and how long it takes.
+/// Env: MATE_VERIFY (engine `MateVerify`), M1_DEPTH, M1_CLOCK (ms), M1_STRIDE.
 fn mate1recall(args: &[String], out: &mut impl Write) {
     use kairos::core::variants::{apply_uci_moves, position_from_uci};
     use kairos::engine::ab::AlphaBeta;
@@ -2993,7 +2982,7 @@ fn mate1recall(args: &[String], out: &mut impl Write) {
                 continue;
             }
             n += 1;
-            if n % stride != 0 {
+            if !n.is_multiple_of(stride) {
                 continue;
             }
             let (Some(pos), Some(moves)) = (json_field(line, "position"), json_field(line, "moves")) else { continue };
@@ -3066,4 +3055,123 @@ fn mate1recall(args: &[String], out: &mut impl Write) {
     for m in missed.iter().take(20) {
         writeln!(out, "missed #{} ({:.3}s): {}", m.0, m.2, m.3.chars().take(120).collect::<String>()).unwrap();
     }
+}
+
+/// `matescan <file.g>... [-n max] [-t threads]`: runs the root mate-in-one scan (depth 1) on each
+/// position and reports whether it played a mate, what the scan reported, and the time.
+/// Env as for `mate1recall`, plus M1_PLY (for jsonl games) and M1_SAVE=<path> for mated lines.
+fn matescan(args: &[String], out: &mut impl Write) {
+    use kairos::core::variants::{apply_uci_moves, position_from_uci};
+    use kairos::engine::ab::AlphaBeta;
+    use kairos::engine::{Limits, OptionValue};
+    let mut files = Vec::new();
+    let (mut max, mut threads) = (usize::MAX, 8usize);
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "-n" => max = it.next().and_then(|v| v.parse().ok()).unwrap_or(max),
+            "-t" => threads = it.next().and_then(|v| v.parse().ok()).unwrap_or(threads),
+            f => files.push(f.to_string()),
+        }
+    }
+    let verify = std::env::var("MATE_VERIFY").ok();
+    let clock: Option<u64> = std::env::var("M1_CLOCK").ok().and_then(|v| v.parse().ok());
+    if std::env::var_os("MREGION_VERIFY").is_some() {
+        kairos::engine::ab::REGION_VERIFY.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    let back: usize = std::env::var("M1_PLY").ok().and_then(|v| v.parse().ok()).unwrap_or(1).max(1);
+    let stride: usize = std::env::var("M1_STRIDE").ok().and_then(|v| v.parse().ok()).unwrap_or(1).max(1);
+    let save = std::env::var("M1_SAVE").ok();
+    let mut positions: Vec<State> = Vec::new();
+    let mut sources: Vec<String> = Vec::new();
+    let mut n = 0usize;
+    'files: for f in &files {
+        let text = std::fs::read_to_string(f).expect("positions file");
+        if f.ends_with(".g") {
+            for line in text.lines().filter(|l| l.starts_with("G ")) {
+                if positions.len() >= max {
+                    break 'files;
+                }
+                positions.push(parse_g_line(line).expect("G line"));
+                sources.push(line.to_string());
+            }
+            continue;
+        }
+        for line in text.lines() {
+            if positions.len() >= max {
+                break 'files;
+            }
+            n += 1;
+            if !n.is_multiple_of(stride) {
+                continue;
+            }
+            let (Some(pos), Some(moves)) = (json_field(line, "position"), json_field(line, "moves")) else { continue };
+            let acts: Vec<&str> = moves.split(" submit").map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
+            if acts.len() < back + 2 {
+                continue;
+            }
+            let Ok(mut s) = position_from_uci(pos) else { continue };
+            if acts[..acts.len() - back].iter().all(|a| apply_uci_moves(&mut s, &format!("{} submit", a)).is_ok()) && !is_mated(&s) {
+                positions.push(s);
+                sources.push(line.to_string());
+            }
+        }
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    // (index, mate played, scan line, seconds)
+    let results = std::sync::Mutex::new(Vec::<(usize, bool, String, f64)>::new());
+    std::thread::scope(|sc| {
+        for _ in 0..threads {
+            sc.spawn(|| {
+                let stop = std::sync::atomic::AtomicBool::new(false);
+                let mut e = AlphaBeta::new();
+                e.set_option("Hash", &OptionValue::Int(16));
+                e.set_option("Threads", &OptionValue::Int(1));
+                if let Some(v) = &verify {
+                    e.set_option("MateVerify", &OptionValue::Str(v.clone()));
+                }
+                loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(p) = positions.get(i) else { break };
+                    e.new_game();
+                    let mut scan = String::new();
+                    let limits = match clock {
+                        Some(ms) => Limits { depth: Some(1), time_left: Some(ms), increment: Some(100), ..Default::default() },
+                        None => Limits { depth: Some(1), ..Default::default() },
+                    };
+                    let t = Instant::now();
+                    let a = e.find_best_move(p, &limits, &stop, &mut |m| {
+                        if let Some(k) = m.find("mate1 ") {
+                            scan = m[k + 6..].to_string();
+                        }
+                    });
+                    let secs = t.elapsed().as_secs_f64();
+                    let mated = a.and_then(|a| p.can_apply_action(&a)).is_some_and(|q| is_mated(&q));
+                    results.lock().unwrap().push((i, mated, scan, secs));
+                }
+            });
+        }
+    });
+    let mut r = results.into_inner().unwrap();
+    r.sort_by_key(|x| x.0);
+    for x in &r {
+        writeln!(out, "#{} {} {:.4}s {}", x.0, if x.1 { "MATE" } else { "-" }, x.3, x.2).unwrap();
+    }
+    if let Some(path) = &save {
+        let lines: Vec<&str> = r.iter().filter(|x| x.1).map(|x| sources[x.0].as_str()).collect();
+        std::fs::write(path, lines.join("\n") + "\n").expect("M1_SAVE file");
+    }
+    let mates = r.iter().filter(|x| x.1).count();
+    let none = r.iter().filter(|x| x.2.starts_with("none")).count();
+    let partial = r.iter().filter(|x| x.2.starts_with("partial")).count();
+    let unresolved: usize = r.iter().filter_map(|x| x.2.split(", ").find(|w| w.ends_with("unresolved")).and_then(|w| w.split(' ').next()?.parse::<usize>().ok())).sum();
+    let mut times: Vec<f64> = r.iter().map(|x| x.3).collect();
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let q = |p: f64| times.get(((times.len() as f64 - 1.0) * p) as usize).copied().unwrap_or(0.0);
+    write!(out, "{}", kairos::misc::prof::report()).unwrap();
+    if kairos::engine::ab::REGION_VERIFY.load(std::sync::atomic::Ordering::Relaxed) {
+        let st = |i: usize| kairos::engine::ab::REGION_STATS[i].load(std::sync::atomic::Ordering::Relaxed);
+        writeln!(out, "regions {} | actions checked {} | broken {}", st(0), st(1), st(2)).unwrap();
+    }
+    writeln!(out, "positions {} | mate {} | none {} | partial {} (unresolved checks {}) | time p50 {:.4}s p90 {:.4}s p99 {:.4}s max {:.4}s total {:.2}s", r.len(), mates, none, partial, unresolved, q(0.5), q(0.9), q(0.99), q(1.0), times.iter().sum::<f64>()).unwrap();
 }
