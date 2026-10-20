@@ -3705,10 +3705,9 @@ impl AlphaBeta {
                     }
                 }
             }
-            // Every root action searched loses to a mate, or the best wins only by a mate in 3
-            // or more: the actions on boards the side to move need not play are added (once,
-            // searched first) and the depth is searched again (they may mate sooner or save).
-            if !self.aborted && !root_widened && iter_best.as_ref().is_some_and(|b| b.0 < -MATE + 1000 || (b.0 > MATE - 1000 && b.0 <= MATE - 5)) {
+            // Every root action searched loses to a mate: the ones on boards the side to move
+            // need not play are added (once, searched first) and the depth is searched again.
+            if !self.aborted && !root_widened && iter_best.as_ref().is_some_and(|b| b.0 < -MATE + 1000) {
                 root_widened = true;
                 let extra = self.root_widen(root, &roots);
                 if !extra.is_empty() {
