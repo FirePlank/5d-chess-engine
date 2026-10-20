@@ -1389,8 +1389,10 @@ impl AlphaBeta {
                             Vec::new()
                         }
                     });
-                    // Any capture, a piece giving check first.
-                    if c.contains(&(m.to.l(), m.to.xy())) { CHECK_BONUS } else { piece_value(*victim) }
+                    if !c.contains(&(m.to.l(), m.to.xy())) {
+                        continue;
+                    }
+                    CHECK_BONUS
                 };
                 travels.push((priority, fa, *idx, n, i));
             }
