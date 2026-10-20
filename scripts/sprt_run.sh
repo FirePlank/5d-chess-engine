@@ -13,13 +13,27 @@
 #        MAX_MIN (wall-clock cap in minutes, default 20: the run is cancelled then and the
 #        result is read from the games played so far),
 #        BOOK (openings from this G file of the repo, e.g. data/books/timelines4.g, each
-#        played with both colors; default: generated openings).
+#        played with both colors; default: generated openings),
+#        GH_RETRY_S (how long one GitHub call is retried through network errors, default 1800).
+#   Network trouble never stops it: every gh call has a timeout and is retried, a run whose
+#   status cannot be read is waited on (or past the time cap cancelled when GitHub answers
+#   again), and the shard download retries until the artifacts come.
 set -euo pipefail
 NAME=$1 BASE_SHA=$2 PATCH=$3 GAMES=$4 TC=${5:-tc 10+0.1} E0=${6:-0} E1=${7:-5}
 R=$(git rev-parse --show-toplevel); W="$R/../5d-sprt-branch"
 [ "$PATCH" = "-" ] || PATCH=$(realpath "$PATCH")
 mkdir -p "$R/games/sprt"
-ghr() { local o; for _ in $(seq 40); do o=$("$@") && { echo "$o"; return 0; }; sleep 30; done; return 1; }
+# A gh call retried (60 s timeout each, a hung TLS handshake included) for up to GH_RETRY_S.
+ghr() {
+  local o end=$(( $(date +%s) + ${GH_RETRY_S:-1800} )) n=0
+  while :; do
+    o=$(timeout 60 "$@") && { echo "$o"; return 0; }
+    n=$((n + 1))
+    (( n == 1 || n % 10 == 0 )) && echo "$(date +%H:%M:%S) GitHub call failed ($n): $*; retrying" >&2
+    [ "$(date +%s)" -ge "$end" ] && return 1
+    sleep 15
+  done
+}
 REPO=$(ghr gh repo view --json nameWithOwner -q .nameWithOwner)
 if [ -n "${RUN_ID:-}" ]; then
   ID=$RUN_ID; SHA=$(ghr gh run view "$ID" --json headSha -q .headSha)
@@ -58,10 +72,15 @@ fi
 echo "run $ID  https://github.com/$REPO/actions/runs/$ID"
 STALL_S=1200
 declare -A LAST_SEEN LAST_CHANGE
-run_status() { ghr gh api "repos/$REPO/actions/runs/$ID" -q .status; }
+# The run's status, or "unknown" after 2 min without GitHub (the loop goes on and keeps
+# checking the time cap).
+run_status() { GH_RETRY_S=120 ghr gh api "repos/$REPO/actions/runs/$ID" -q .status || echo unknown; }
+# Cancel the run (a completed run needs none) and wait up to 15 min for it to stop; the shard
+# download that follows works either way.
 cancel_and_wait() {
-  ghr gh api -X POST "repos/$REPO/actions/runs/$ID/cancel" > /dev/null
-  until [ "$(run_status)" = completed ]; do sleep 5; done
+  local end=$(( $(date +%s) + 900 )) st
+  ghr gh api -X POST "repos/$REPO/actions/runs/$ID/cancel" > /dev/null 2>&1 || true
+  until st=$(run_status); [ "$st" = completed ] || [ "$(date +%s)" -ge "$end" ]; do sleep 10; done
 }
 tick=0
 T0=$(date +%s)
@@ -99,7 +118,7 @@ while :; do
 done
 # A run whose setup failed (build error, null test, bad config) played no games: stop here
 # instead of waiting for shard artifacts that will never exist.
-SETUP=$(ghr gh api "repos/$REPO/actions/runs/$ID/jobs?per_page=100" -q '[.jobs[] | select(.name | startswith("play") | not)] | map(.conclusion) | join(",")')
+SETUP=$(ghr gh api "repos/$REPO/actions/runs/$ID/jobs?per_page=100" -q '[.jobs[] | select(.name | startswith("play") | not)] | map(.conclusion) | join(",")') || SETUP=""
 if grep -qE 'failure|timed_out|startup_failure' <<< "$SETUP"; then
   echo "ERROR: run $ID setup failed ($SETUP):" >&2
   gh run view "$ID" --log-failed 2> /dev/null | grep -E '##\[error\]' | head -5 >&2
@@ -109,7 +128,7 @@ T="$R/games/sprt/.remote_${NAME}_$$"; rm -rf "$T"
 tries=0
 until timeout 600 gh run download "$ID" -p "shard-*" -D "$T"; do
   rm -rf "$T"; tries=$((tries + 1))
-  if [ $tries -ge 10 ]; then
+  if [ $tries -ge 60 ]; then
     echo "ERROR: no shard artifacts for run $ID after $tries attempts" >&2
     exit 2
   fi
