@@ -699,12 +699,25 @@ fn exchange_loss(b: &Board, to: i32, player: bool, mover_value: i32) -> i32 {
     (mover_value - least).max(0)
 }
 
+const HISTORY_MASK: usize = (1 << 19) - 1;
+
 #[inline]
 fn history_index_of(mover: Piece, m: &FullMove) -> usize {
     let pc = mover as usize;
     let d = m.to - m.from;
-    let k = (pc * 64 + m.to.xy() as usize) * 16 + (((d.t() + 2).clamp(0, 3)) * 4 + (d.l().signum() + 1)) as usize;
-    k & 0xffff
+    // Backward travels of different distances have their own buckets.
+    let tb = match d.t() {
+        i32::MIN..=-5 => 0,
+        -4 | -3 => 1,
+        -2 => 2,
+        -1 => 3,
+        0 => 4,
+        1 => 5,
+        2 => 6,
+        _ => 7,
+    };
+    let k = (pc * 64 + m.to.xy() as usize) * 32 + (tb * 4 + d.l().signum() + 1) as usize;
+    k & HISTORY_MASK
 }
 
 fn history_index(s: &State, m: &FullMove) -> usize {
@@ -809,7 +822,7 @@ impl<'a> CheckDetector<'a> {
 struct PhysStatic {
     /// Score without the history value and the check bonus.
     base: i32,
-    history: u16,
+    history: u32,
     capture: bool,
     /// Gives check on its own board.
     physical_check: bool,
@@ -874,7 +887,7 @@ impl AlphaBeta {
             local_vals: super::local::values_from(&hce[hce::fi::MAT_A..hce::fi::MAT_A + 10]),
             hce,
             tt,
-            history: vec![0; 1 << 16],
+            history: vec![0; 1 << 19],
             killers: vec![[None, None]; MAX_PLY + 1],
             qkillers: vec![None; MAX_PLY + 1],
             nodes: 0,
@@ -1001,7 +1014,7 @@ impl AlphaBeta {
         if mover == KING_W || mover == COMMON_KING_W {
             base -= 200;
         }
-        PhysStatic { base, history: history_index_of(mover, m) as u16, capture: victim != NO_PIECE, physical_check: has_physical_check(b, !s.get_present().1) }
+        PhysStatic { base, history: history_index_of(mover, m) as u32, capture: victim != NO_PIECE, physical_check: has_physical_check(b, !s.get_present().1) }
     }
 
     fn coord_score(&self, s: &State, info: &HcInfo, n: usize, i: Index, checks: &mut Option<CheckDetector>, history: Option<i32>) -> i32 {
