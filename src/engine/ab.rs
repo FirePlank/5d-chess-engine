@@ -2703,18 +2703,7 @@ impl AlphaBeta {
                                 skipped = true;
                                 continue;
                             }
-                            let mut sc = self.action_score(s, &act, ply);
-                            // Past the cap only checks continue (`action_score` has no check
-                            // bonus): they are classified by playing them, and go first.
-                            if searched + batch.len() >= cap {
-                                let mark = Self::make(s, &act);
-                                let check = self.in_check(s);
-                                s.unmake(mark);
-                                if check {
-                                    sc += CHECK_BONUS;
-                                }
-                            }
-                            batch.push((sc, act));
+                            batch.push((self.action_score(s, &act, ply), act));
                         }
                     }
                 }
