@@ -105,12 +105,6 @@ const ROOT_WIDEN_CAP: usize = 256;
 /// Interior nodes up to this ply (the root is 0) look for a checkmate in one by a checking
 /// travel the node would search late or never (`travel_mate`).
 const TRAVEL_MATE_PLY: usize = 2;
-/// Actions that create a timeline outside the active range, one the opponent need not play on
-/// (`made_inactive_line`), and give no check: 0 searched as any other; 1 pruned when the mover already
-/// had an inactive line on that side, 2 pruned whenever, 3 pruned whenever unless they capture a rook
-/// or better, 4 reduced one more ply whenever, 5 reduced one more ply when the mover already had one.
-/// Not at the root, not at a node's first action, not at depth 1, not in a node already lost to a mate.
-const INACTIVE_MODE: u8 = 2;
 /// Hypercuboids the search for an evasion of such a check may look at (an evasion is usually
 /// found in a few; past this the check counts as no mate).
 const TRAVEL_MATE_STEPS: u32 = 64;
@@ -2413,21 +2407,6 @@ impl AlphaBeta {
         best
     }
 
-    /// After an action that created a timeline outside the active range (one the opponent need
-    /// not play on): whether the mover already had such a line on that side before (`before` is
-    /// `Multiverse::ranges` ahead of the action). None when it created none, or an active one.
-    #[inline]
-    fn made_inactive_line(before: (i32, i32, i32, i32), s: &State) -> Option<bool> {
-        let (lo0, hi0, amin0, amax0) = before;
-        let (lo1, hi1, amin1, amax1) = s.multiverse().ranges();
-        let hi = hi1 > hi0;
-        let lo = lo1 < lo0;
-        if !(hi || lo) || !((hi && hi1 > amax1) || (lo && lo1 < amin1)) {
-            return None;
-        }
-        Some(if hi { hi0 > amax0 } else { lo0 < amin0 })
-    }
-
     /// Search one remembered action (TT move or killer) with PVS; returns its score.
     #[allow(clippy::too_many_arguments)]
     fn search_child(&mut self, s: &mut State, mark: Mark, first: bool, depth: i32, ply: usize, alpha: i32, beta: i32, pv: bool) -> i32 {
@@ -2460,7 +2439,6 @@ impl AlphaBeta {
             return self.static_eval(s);
         }
         let alpha0 = alpha;
-        let ranges0 = s.multiverse().ranges();
         let key = s.live_hash();
         let mut tt_action: Option<MoveSeq> = None;
         // Ok((score, proven)): a cutoff; Err(action): the remembered action, if any. (Read
@@ -2741,34 +2719,6 @@ impl AlphaBeta {
                         child_check = Some(ic);
                         if !ic {
                             r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
-                        }
-                    }
-                    if INACTIVE_MODE != 0 && ply > 0 && depth >= 2 && searched > 0 && best > -(MATE - 1000) {
-                        if let Some(had) = Self::made_inactive_line(ranges0, s) {
-                            let ic = *child_check.get_or_insert_with(|| self.in_check(s));
-                            if !ic {
-                                let big_capture = sc >= 10_000 + 10 * piece_value(ROOK_W) - 1000;
-                                match INACTIVE_MODE {
-                                    1 if had => {
-                                        s.unmake(mark);
-                                        skipped = true;
-                                        continue;
-                                    }
-                                    2 => {
-                                        s.unmake(mark);
-                                        skipped = true;
-                                        continue;
-                                    }
-                                    3 if !big_capture => {
-                                        s.unmake(mark);
-                                        skipped = true;
-                                        continue;
-                                    }
-                                    4 => r = (r + 1).clamp(0, depth - 2),
-                                    5 if had => r = (r + 1).clamp(0, depth - 2),
-                                    _ => {}
-                                }
-                            }
                         }
                     }
                     let mut v;
