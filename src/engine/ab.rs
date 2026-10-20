@@ -130,7 +130,7 @@ fn lmr(depth: i32, index: usize) -> i32 {
 /// Ordering bonus of a checking semimove (above every capture).
 const CHECK_BONUS: i32 = 30_000;
 /// Extra depth of a root action that is an f7-style sacrifice travel (`sac::signature_travels`).
-const SAC_ROOT_EXT: i32 = 2;
+const SAC_ROOT_EXT: i32 = 4;
 /// Local nodes the f7 sac table's probes may use before every search, whatever the clock (the
 /// same work for the same position, in analysis and in games).
 const SAC_PREP_NODES: u64 = 50_000;
