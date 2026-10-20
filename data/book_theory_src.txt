@@ -133,40 +133,40 @@
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. Nd4 / c5 3. c3 {play 5} / cxd4 {know} 4. Qb3 {play 10} / Qb6 {know} 5. Qc4 {play 10} / e6 {know} 6. (0T6)Qc4>>x(0T3)f7~ (>L1) {play 10} / (1T3)Kxf7 {know} 7. (1T4)Nf5 {play 10}
 
 # --- e3 structures (309-352).
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {play 2} / d5 {play 5} 3. c4 {play 3} / c6 {play 10}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / d5 3. Nd4 {know} / c6 {know}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / d5 3. Bd3 {play 3}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} {play 2} / d5 {play 5} 3. c4 {play 3} / c6 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / d5 3. Nd4 {know} / c6 {know}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / d5 3. Bd3 {play 3}
 # 2...c5, the Symmetrical English Invitational (334): 3. b3 (336) sets the Bb2 trap, a softmate
 # by the queen travel from h5 to f7 (338-339, one line in the guide's two), so Black answers
 # 3...d5 (343).
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c5 {play 3} 3. b3 {play 5} / d5 {play 10}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c5 3. b3 / Nc6 {know} 4. Bb2 {play 10} / b6 {know} 5. Ng5 {play 10} / e6 {know} 6. Bxf6 {play 10} / Qxf6 {know} 7. Qh5 {play 10} / g6 {know} 8. (0T8)Qh5>>x(0T6)f7~ (>L1) {play 10}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c5 3. Bd3 {play 3}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / c5 {play 3} 3. b3 {play 5} / d5 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / c5 3. b3 / Nc6 {know} 4. Bb2 {play 10} / b6 {know} 5. Ng5 {play 10} / e6 {know} 6. Bxf6 {play 10} / Qxf6 {know} 7. Qh5 {play 10} / g6 {know} 8. (0T8)Qh5>>x(0T6)f7~ (>L1) {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / c5 3. Bd3 {play 3}
 # 2...e6 (349) is the most flexible; 3. c3 is "often not a good idea" and Black answers c5 or c6
 # for the queen's parallel defence (prose of 351).
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / e6 {play 3} 3. c3 {know} / c5 {play 5}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / e6 3. c3 / c6 {play 5}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / e6 {play 3} 3. c3 {know} / c5 {play 5}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / e6 3. c3 / c6 {play 5}
 # 1. Nf3 Nf6 2. e3 c6 (360, fixed "2. e3 c6"): 3. Bc4 invites the f7 sac and refutes 3...Qb6 with
 # Bxf7+ and the knight travel to f5 (363, fixed "(>1L)"); 3...d5 is the critical reply (365).
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c6 {play 2} 3. Bc4 {play 10} / d5 {play 10}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c6 3. Bc4 / Qb6 {know} 4. Bxf7+ {play 10} / Kxf7 {know} 5. (0T5)Nf3>>(0T4)f5~ (>L1) {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / c6 {play 2} 3. Bc4 {play 10} / d5 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / c6 3. Bc4 / Qb6 {know} 4. Bxf7+ {play 10} / Kxf7 {know} 5. (0T5)Nf3>>(0T4)f5~ (>L1) {play 10}
 
 # --- 1. e3 Nf6 2. Nf3 (322-376; the Trojan lines' headers say Standard, the section is Turn
 # Zero). 1. e3 is not our first move (1. Nf3 is), but Black must know the traps.
 # 2...e6 3. b3 stops the f-pawn phase: Ba3 trades for the f8 bishop (369).
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 {play 10} / e6 {play 10} 3. b3 {play 10} / Ng4 {know} 4. Ba3 {play 10} / f5 {know} 5. Bxf8 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 {exact} {play 10} / e6 {play 10} 3. b3 {play 10} / Ng4 {know} 4. Ba3 {play 10} / f5 {know} 5. Bxf8 {play 10}
 # 2...Ng4 (371): "With perfect play, Black will be forced to sac a piece"; the recommended White
 # line (374) and White's counter-travel when Black travels anyway (376).
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / Ng4 {know} 3. Ng5 {play 10} / f5 {know} 4. Qxg4 {play 10} / fxg4 {know} 5. Nf7 {play 10} / e6 {know} 6. Nxd8 {play 10} / Kxd8 {know} 7. a3 {play 10} / Na6 {know} 8. f4 {play 10} / Nc5 {know} 9. g3 {play 10} / (0T9)Bf8>>x(0T3)f2~ (>L-1) {know} 10. (-1T4)Ke1>>(0T5)d1~ (>L1) {play 10} / (-1T4)e6 {know} 11. (0T10)Bf1>>(0T4)f7~ (>L2) {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 {exact} / Ng4 {know} 3. Ng5 {play 10} / f5 {know} 4. Qxg4 {play 10} / fxg4 {know} 5. Nf7 {play 10} / e6 {know} 6. Nxd8 {play 10} / Kxd8 {know} 7. a3 {play 10} / Na6 {know} 8. f4 {play 10} / Nc5 {know} 9. g3 {play 10} / (0T9)Bf8>>x(0T3)f2~ (>L-1) {know} 10. (-1T4)Ke1>>(0T5)d1~ (>L1) {play 10} / (-1T4)e6 {know} 11. (0T10)Bf1>>(0T4)f7~ (>L2) {play 10}
 # 2...d5 3. Bd3 c6 4. Ng5, the Trojan's Trap (322): 4...Bg4 loses to the queen sac and the
 # bishop travel to f7 (325, 326). "Black will be winning" if they stabilize, so 2...d5 is
 # playable for Black, but 3...c6 walks into the trap and is not for us.
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / d5 {play 5} 3. Bd3 {play 10} / c6 {know} 4. Ng5 {play 10} / Bg4 {know} 5. Qxg4 {play 10} / Nxg4 {know} 6. Bf5 {play 10} / Qc7 {know} 7. Nxf7 {play 10} / Nxe3 {know} 8. fxe3 {play 10} / Nd7 {know} 9. (0T9)Bf5>>x(0T7)f7~ (>L1) {play 10} / (1T7)Kd8 {know} 10. (1T8)Ne6 {play 10}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / d5 3. Bd3 / c6 4. Ng5 / Bg4 5. Qxg4 / Nxg4 6. Bf5 / Nf6 {know} 7. (0T7)Bf5>>x(0T5)f7~ (>L1) {play 10} / (1T5)Kd7 {know} 8. (1T6)Qxg4 {play 10} / (1T6)Nxg4 {know} 9. (1T7)Bxd5 {play 10} / (0T7)Ng4 (1T7)cxd5 {know} 10. (0T8)Ne6 (1T8)Nf7 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 {exact} / d5 {play 5} 3. Bd3 {play 10} / c6 {know} 4. Ng5 {play 10} / Bg4 {know} 5. Qxg4 {play 10} / Nxg4 {know} 6. Bf5 {play 10} / Qc7 {know} 7. Nxf7 {play 10} / Nxe3 {know} 8. fxe3 {play 10} / Nd7 {know} 9. (0T9)Bf5>>x(0T7)f7~ (>L1) {play 10} / (1T7)Kd8 {know} 10. (1T8)Ne6 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 {exact} / d5 3. Bd3 / c6 4. Ng5 / Bg4 5. Qxg4 / Nxg4 6. Bf5 / Nf6 {know} 7. (0T7)Bf5>>x(0T5)f7~ (>L1) {play 10} / (1T5)Kd7 {know} 8. (1T6)Qxg4 {play 10} / (1T6)Nxg4 {know} 9. (1T7)Bxd5 {play 10} / (0T7)Ng4 (1T7)cxd5 {know} 10. (0T8)Ne6 (1T8)Nf7 {play 10}
 # 3. h3 (329) stops ...Bg4; after 4. b3 Bg4 5. h3 the bishop keeps the pin with Bh5 and goes
 # to g6 after g4, which weakens White's king (331).
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / d5 3. h3 {play 3}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / d5 3. Bd3 / c6 4. b3 {know} / Bg4 {play 5} 5. h3 {play 10} / Bh5 {play 10} 6. g4 {know} / Bg6 {play 10}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 {exact} / d5 3. h3 {play 3}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 {exact} / d5 3. Bd3 / c6 4. b3 {know} / Bg4 {play 5} 5. h3 {play 10} / Bh5 {play 10} 6. g4 {know} / Bg6 {play 10}
 
 # --- f7 sac defences (f7_sac_guide_notes.md, Lavamat's f7-sac guide; "in Turn Zero the same
 # applies to both colours"). After 1. e3 or 1. c3 and 1...Nf6, White's queen and bishop routes
@@ -1358,22 +1358,22 @@
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. Na3 / d5 3. Nb5 / c6 4. Nbd4 / Bg4 {name Digolian Attack: 2...d5: Trap line (4...Bg4)}
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. Na3 / d5 3. Nb5 / c5 {name Digolian Attack: Digolian Denied}
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. Na3 / e6 {name Digolian Attack: 2...e6}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {name e3 Structure}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / d5 {name e3 Structure: 2...d5}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / d5 3. c4 / c6 {name e3 Structure: Inverse Sarp's Counterattack}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / d5 3. Nd4 / c6 {name e3 Structure: Mongolian Attack Transposition}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / d5 3. Bd3 {name e3 Structure: 2...d5 3. Bd3}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c5 {name e3 Structure: 2...c5 Symmetrical English Invitational}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c5 3. b3 {name e3 Structure: Symmetrical English Invitational: 3. b3}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c5 3. b3 / d5 {name e3 Structure: Symmetrical English Invitational: 3. b3 d5 Center Blockade}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c5 3. Bd3 {name e3 Structure: Symmetrical English Invitational: 3. Bd3}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / e6 {name e3 Structure: 2...e6}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / e6 3. c3 / c5 {name e3 vs f2/f7 Sac: 1. Nf3 Nf6 2. e3 e6 3. c3}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 / c6 3. Bc4 / d5 {name e3 vs f2/f7 Sac: 1. Nf3 Nf6 2. e3 c6 3. Bc4}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / e6 3. b3 / Ng4 {name e3 vs f2/f7 Sac: 1. e3 Nf6 2. Nf3 e6 3. b3}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / Ng4 {name e3 vs f2/f7 Sac: 1. e3 Nf6 2. Nf3 Ng4}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / d5 3. Bd3 / c6 4. Ng5 {name e3 vs f2/f7 Sac: Trojan's Trap}
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 / d5 3. h3 {name e3 vs f2/f7 Sac: 1. e3 Nf6 2. Nf3 d5 3. h3}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} {name e3 Structure}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / d5 {name e3 Structure: 2...d5}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / d5 3. c4 / c6 {name e3 Structure: Inverse Sarp's Counterattack}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / d5 3. Nd4 / c6 {name e3 Structure: Mongolian Attack Transposition}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / d5 3. Bd3 {name e3 Structure: 2...d5 3. Bd3}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / c5 {name e3 Structure: 2...c5 Symmetrical English Invitational}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / c5 3. b3 {name e3 Structure: Symmetrical English Invitational: 3. b3}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / c5 3. b3 / d5 {name e3 Structure: Symmetrical English Invitational: 3. b3 d5 Center Blockade}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / c5 3. Bd3 {name e3 Structure: Symmetrical English Invitational: 3. Bd3}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / e6 {name e3 Structure: 2...e6}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / e6 3. c3 / c5 {name e3 vs f2/f7 Sac: 1. Nf3 Nf6 2. e3 e6 3. c3}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. Nf3 / Nf6 2. e3 {exact} / c6 3. Bc4 / d5 {name e3 vs f2/f7 Sac: 1. Nf3 Nf6 2. e3 c6 3. Bc4}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 {exact} / e6 3. b3 / Ng4 {name e3 vs f2/f7 Sac: 1. e3 Nf6 2. Nf3 e6 3. b3}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 {exact} / Ng4 {name e3 vs f2/f7 Sac: 1. e3 Nf6 2. Nf3 Ng4}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 {exact} / d5 3. Bd3 / c6 4. Ng5 {name e3 vs f2/f7 Sac: Trojan's Trap}
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. Nf3 {exact} / d5 3. h3 {name e3 vs f2/f7 Sac: 1. e3 Nf6 2. Nf3 d5 3. h3}
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. b4 {name Magic Wall}
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. b4 / e6 3. Bb2 {name Magic Wall: Mainline (2...e6)}
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. e3 / Nf6 2. b4 / e6 3. Bb2 / d5 {name Magic Wall: Mainline (2...e6 3. Bb2 d5)}
@@ -1401,6 +1401,10 @@
 [Board "Standard - Defended Pawn"] [Mode "5D"] 1. c4 / Nf6 2. Nf3 / Ne6 3. b3 / g6 4. Bb2 / Bg7 5. h4 {name Defended Pawn: Ryan's Opening: 5. h4 (the plan against g6)}
 [Board "Standard - Defended Pawn"] [Mode "5D"] 1. b4 {name Defended Pawn: 1. b4}
 
+# {exact} on an action: from there on the positions of this line are only valid for their own move order
+# (a travel decides them, and the transposed history's earlier boards change what it finds). Used for the
+# e3/Nf3 move order: 1. e3 Nf6 2. Nf3 Ng4 3. Ng5 f5 4. Qxg4 works because f3 is empty on turn 1, while after
+# 1. Nf3 Nf6 2. e3 the knight blocks the bishop's travel (reported by a strong player, 2026-10-20).
 # ============================================================================ Contributed lines (2026-10)
 # Lines sent by T0 players. Most transpose to known theory through another move order (the book
 # is keyed by the boards in play, so they share positions); these add the lines past it. A first

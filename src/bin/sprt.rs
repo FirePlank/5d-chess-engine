@@ -1,35 +1,6 @@
-//! SPRT match harness for 5DUCI engines.
-//!
-//! Plays opening pairs (colors swapped) between a NEW and a BASE engine, referees every action
-//! with the kairos rules core, and stops on a pentanomial GSPRT decision (fastchess math).
-//!
-//! sprt --new "<cmd>" --base "<cmd>" [--book book.g | --book-plies 6]
-//!      [--movetime 100 | --tc 10+0.1[/dD][/tT] | --nodes N | --depth D]
-//!      [--concurrency 8] [--max-games 20000] [--min-games 0] [--elo0 0] [--elo1 5]
-//!      [--alpha 0.05] [--beta 0.05] [--model normalized|logistic] [--max-actions 160]
-//!      [--games-out games.jsonl] [--seed 1] [--compact] [--max-seconds 0]
-//!      [--new-option Name=Value]... [--base-option Name=Value]...
-//!
-//! `--tc base+inc` is a clock in seconds; `/dD` adds a delay of D s per action and `/tT` a
-//! delay of T s per active timeline (at the start of the action); both may be given. A
-//! delay clock waits `D + T * timelines` before the base runs down, and unused delay is lost:
-//! the 5D tournament clock is `--tc 300+0/t3`. Engines get `go wtime btime winc binc` plus
-//! `wdelay bdelay` (D, ms) and `wtldelay btldelay` (T, ms) when nonzero.
-//!
-//! Without `--book`, every pair opens from a generated opening: a random 8x8 built-in variant
-//! and `--book-plies` actions chosen by a shallow search with noise, the same for both games.
-//!
-//! `--games-out` appends one JSON object per game; games 2k and 2k+1 form pair k. Its moves
-//! start with the opening's `book` actions. Its `evals` are the engines' reported scores on
-//! the reported scale (`"eval_scale":4800`: internal units * 100 / 4800, see
-//! `kairos::engine::REPORT_SCALE`; mates as +-20000); records without `eval_scale` are older
-//! and hold internal units.
-//!
-//! An engine that exits (or stops answering) mid-game loses it with reason `protocol: <who>
-//! exited` (or `timed out ...`); its record keeps the moves played so far and adds
-//! `exit_status`, the engine's last `stderr` lines (a panic message: engines run with
-//! `RUST_BACKTRACE=1`), and the `last_position` / `last_go` commands it was given, to replay
-//! the crash. The same report goes to stderr.
+//! SPRT match harness: plays colour-swapped opening pairs between NEW and BASE 5DUCI engines,
+//! referees every action with the kairos rules core and stops on a pentanomial GSPRT decision.
+//! sprt --new <cmd> --base <cmd> [--book f | --book-plies N] [--tc B+I[/dD][/tT]] [--games-out f]
 
 use kairos::core::action::{ExtMove, MoveSeq};
 use kairos::core::hypercuboid::{HcCursor, HcInfo};
@@ -354,11 +325,10 @@ impl Proc {
                 Ok(l) if l.starts_with(prefix) => return Ok(l),
                 Ok(l) if prefix == "bestmove" && l.starts_with("nobestmove") => return Ok(l),
                 Ok(l) => {
-                    if l.starts_with("info") {
-                        if let Some(sc) = info_score(&l) {
+                    if l.starts_with("info")
+                        && let Some(sc) = info_score(&l) {
                             self.last_score = Some(sc);
                         }
-                    }
                     continue;
                 }
                 Err(RecvTimeoutError::Timeout) => return Err(format!("{} timed out waiting for {}", self.name, prefix)),
@@ -516,11 +486,9 @@ fn starts() -> Vec<String> {
         format!("size 8x8 even fen [{STD}:-0:1:w][{STD}:+0:1:w]"),
     ]
 }
-/// Each opening action is chosen among this many candidates (the engine's best-ordered half,
-/// then random ones), each scored by a search to BOOK_DEPTH; one of those within the margin
-/// of the best is played, uniformly at random. Each side's first action takes the wider
-/// BOOK_FIRST_MARGIN (it only excludes blunders): opening scores at this depth swing by
-/// over a thousand between candidates.
+/// Candidates per generated opening action, scored to BOOK_DEPTH; a random one within the
+/// margin of the best is played. Each side's first action uses the wider BOOK_FIRST_MARGIN,
+/// since shallow opening scores are too noisy to do more than exclude blunders.
 const BOOK_CANDIDATES: usize = 32;
 const BOOK_DEPTH: u32 = 2;
 const BOOK_MARGIN: i32 = 80;
@@ -946,7 +914,6 @@ fn main() {
             log.clone(),
             jsonl.clone(),
         );
-        let start = start;
         handles.push(std::thread::spawn(move || {
             let mut procs: [Option<Proc>; 2] = [None, None];
             let mut book_engine = AlphaBeta::new();

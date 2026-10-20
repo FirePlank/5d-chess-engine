@@ -1,9 +1,6 @@
 //! Borrowed view for finding royal captures over a state plus overlaid boards.
-//! Scan order is behavior: the first check found decides the problem slice the
-//! hypercuboid search removes.
-//!
-//! Turns are handled as half-turn indices `v = 2t + c`; every line keeps a direct pointer
-//! to its stored boards, so a board lookup is a few integer compares.
+//! Scan order matters: the first check found decides the slice the hypercuboid search removes.
+//! Turns are half-turn indices `v = 2t + c`.
 
 use super::action::FullMove;
 use super::bitboard::*;

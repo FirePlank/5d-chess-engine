@@ -125,12 +125,9 @@ pub const VARIANT_NAMES: [&str; 44] = [
     "Checkmate Practice - Pawns",
 ];
 
-/// The official variants beyond the hand-written ones above: (name, width, height, timelines,
-/// boards). As in adri326/5dchess-notation's variant table (parsers/game.js), from which these
-/// are taken: boards are FEN rows from Black's side, one per timeline separated by spaces
-/// (`|` between consecutive boards of one timeline); `timelines` names each one's line (`-0`/`+0`
-/// for even layouts) with an optional `:n`, the half-turns after White's turn 1 at which it
-/// starts. Brawns are `w`/`W`, royal queens `y`/`Y`, common kings `c`/`C`.
+/// Official variants from adri326/5dchess-notation: (name, width, height, timelines, boards).
+/// Boards are space-separated per timeline, `|` between boards of one timeline; a timeline may
+/// carry `:n`, its start half-turn. Brawns `w`/`W`, royal queens `y`/`Y`, common kings `c`/`C`.
 const OFFICIAL: [(&str, i32, i32, &str, &str); 37] = [
     ("Standard - Princess", 8, 8, "0", "rnbskbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBSKBNR"),
     ("Simple - No Bishops", 6, 6, "0", "rnqknr/pppppp/6/6/PPPPPP/RNQKNR"),
@@ -231,7 +228,7 @@ pub fn parse_board_fen_metadata(s: &str) -> Result<BoardSpec, String> {
     };
     let l: i32 = lnum.trim().parse().map_err(|_| format!("Expect number after ':': {}", s))?;
     let t: i32 = ts.trim().parse().map_err(|_| format!("Expect number after ':': {}", s))?;
-    if l < 0 || l > Vec4::L_MAX || t < 0 || t > Vec4::T_MAX {
+    if !(0..=Vec4::L_MAX).contains(&l) || !(0..=Vec4::T_MAX).contains(&t) {
         return Err(format!("Board coordinate out of range: {}", s));
     }
     let c = match cs.trim() {
@@ -256,12 +253,11 @@ pub fn position_from_uci(position: &str) -> Result<State, String> {
             None => fen = rest,
             Some(fp) => {
                 let mut it = rest[..fp].split_whitespace();
-                if let Some(sz) = it.next() {
-                    if let Some((a, b)) = sz.split_once('x') {
+                if let Some(sz) = it.next()
+                    && let Some((a, b)) = sz.split_once('x') {
                         m = a.parse().unwrap_or(0);
                         n = b.parse().unwrap_or(0);
                     }
-                }
                 if it.next() == Some("even") {
                     even = true;
                 }

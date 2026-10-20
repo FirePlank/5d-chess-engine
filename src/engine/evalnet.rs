@@ -1,9 +1,6 @@
-//! Eval net: a small MLP over per-side handcrafted features that adds a capped correction
-//! (residual) to the handcrafted evaluation. Inputs are from the side to move's view: its
-//! own features, the opponent's, then a few global terms (including the handcrafted score).
-//!
-//! Weights live in `data/evalnet.bin`, written by `scripts/evalnet/train.py` from
-//! `ktools netdata` records.
+//! Eval net: a small MLP over handcrafted features that adds a capped correction to the
+//! handcrafted evaluation. Inputs are from the side to move's view.
+//! Weights live in `data/evalnet.bin`, written by `scripts/evalnet/train.py`.
 
 use crate::core::state::State;
 use std::sync::OnceLock;
@@ -82,6 +79,8 @@ fn transpose(w: &[f32], rows: usize, cols: usize) -> Vec<f32> {
     t
 }
 
+// Index loops keep the float operations in a fixed order (the net's output is bit-exact).
+#[allow(clippy::needless_range_loop)]
 impl Net {
     /// Format: b"KNET0001", u32 ni, h1, h2, f32 scale, cap, then w1 [h1][ni], b1, w2 [h2][h1],
     /// b2, w3 [h2], b3 (little endian).

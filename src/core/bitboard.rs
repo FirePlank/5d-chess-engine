@@ -1,7 +1,5 @@
 //! 8x8 bitboards (bit = x + 8*y) and attack tables.
-//!
-//! Square iteration is MSB-first; move and candidate ordering throughout the engine
-//! depends on it.
+//! Square iteration is MSB-first; engine move ordering depends on it.
 
 pub type Bitboard = u64;
 

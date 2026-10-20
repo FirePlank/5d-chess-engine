@@ -85,10 +85,8 @@ pub mod fi {
     /// Time-travel exposure of the squares next to enemy royals (`ex::F7_WEAK` ..= `ex::KN_CHECKS`),
     /// white's minus black's.
     pub const F7: usize = 70;
-    /// The f7 sac table (`sac`), white's minus black's: created timelines whose latest board
-    /// is a known local mate for the side (and how close the mate is: 12 - plies), winning
-    /// travels it can play now (and those of the side to move, + for white to move), and open
-    /// routes to winning travel targets.
+    /// Terms from the f7 sac table (`sac`), white minus black: created timelines that are a
+    /// known local mate, winning travels available now, and open routes to winning targets.
     pub const SAC_LINE: usize = 75;
     pub const SAC_CLOSE: usize = 76;
     pub const SAC_NOW: usize = 77;
@@ -243,14 +241,8 @@ pub fn tuned_weights() -> Weights {
         ("f7_qreach", 248.4),
         ("f7_broute", -11.6),
         ("kn_checks", 296.2),
-        // Set by hand (untuned; see `split_sac`), for defence: the local proofs ignore
-        // time-travel defences and the other timelines, so they only nudge. A side to move
-        // with a verified f7 travel on hand is a pawn and a half up (its opponent should have
-        // stopped it), open routes to such a target cost the defender a little (prophylaxis
-        // such as ...Nf6 or ...d5 is cheap), and a created timeline the local search shows
-        // lost for the defender counts against it a little more. A closer proven mate there
-        // adds a little per ply saved (moderate: the proofs can be false, e.g. Trojan's Trap),
-        // so the f7 line does not hang on the net's correction alone.
+        // Set by hand, not tuned (see `split_sac`). Kept moderate because the local proofs
+        // ignore time-travel defences and other timelines, so they can be false.
         ("sac_line", 600.0),
         ("sac_close", 100.0),
         ("sac_now", 0.0),
@@ -486,12 +478,9 @@ pub mod ex {
     pub const UNDEVELOPED: usize = 4;
     pub const KING_PROX_5D: usize = 5;
     pub const QUEEN_PROX: usize = 6;
-    /// The f7 weakness, against enemy royals on their home rank: squares in front of them that
-    /// only the royal defends (empty or holding a pawn; the targets of time travel into the
-    /// past), open lines from those squares towards this side (up to the past boards' travel
-    /// squares, b3/f3/h5 for f7), whether an own queen is on or can reach such a line, and own
-    /// bishops on the back rank of such a square's file with the pawn in front gone (the f1
-    /// bishop's T7 -> T1 route once the f-pawn has moved).
+    /// The f7 weakness of enemy royals on their home rank: squares only the royal defends,
+    /// open lines from them towards this side, own queens on or reaching such a line, and
+    /// own back-rank bishops whose file's pawn has moved.
     pub const F7_WEAK: usize = 7;
     pub const F7_OPEN: usize = 8;
     pub const F7_QREACH: usize = 9;
@@ -950,15 +939,14 @@ fn sac_terms(s: &State, sd: &mut Sides, src: &mut impl TermSource) {
             }
         }
     }
-    if let Some(rt) = src.sac_root() {
-        if rt.n > 0 {
+    if let Some(rt) = src.sac_root()
+        && rt.n > 0 {
             let (now, open) = sac::root_terms(m, rt);
             for c in 0..2 {
                 sd.extra[c][ex::SAC_NOW] += now[c];
                 sd.extra[c][ex::SAC_OPEN] += open[c];
             }
         }
-    }
 }
 
 // ------------------------------------------------------------------ 5D royal danger
@@ -1093,7 +1081,9 @@ const KN_PAST: [(i32, i32, i32); 8] =
 
 /// Knight leaps that can land on another timeline's latest board: (dl, dt) and the square
 /// steps that go with it.
-const KN_NOW: [(i32, i32, &[(i32, i32)]); 8] = [
+/// (dl, dt, square steps) of a knight leap.
+type Leap = (i32, i32, &'static [(i32, i32)]);
+const KN_NOW: [Leap; 8] = [
     (1, 0, &[(2, 0), (-2, 0), (0, 2), (0, -2)]),
     (-1, 0, &[(2, 0), (-2, 0), (0, 2), (0, -2)]),
     (2, 0, &[(1, 0), (-1, 0), (0, 1), (0, -1)]),
@@ -1111,10 +1101,9 @@ fn spread1(r: Bitboard) -> Bitboard {
     h | shift_north(h) | shift_south(h)
 }
 
-/// Squares next to enemy royals on the past boards of line `l` where attacker `c`'s pieces
-/// there can land: [those no other enemy piece defends, and those among them `c` also covers]. (Landings
-/// on other timelines' past boards are left out: rarer, and they would tie the result to every
-/// neighbouring line.)
+/// Squares next to enemy royals on line `l`'s past boards where attacker `c` can land:
+/// [undefended by other enemy pieces, and of those, also covered by `c`].
+/// Landings from other timelines are ignored.
 fn past_line(g: &Geo, l: i32, c: bool) -> [i32; 2] {
     let mut past = [0i32; 2];
     // The latest board (`at(l, src_v(end, c))`) and the past boards before it.
@@ -1222,11 +1211,11 @@ const ATT_LINES: usize = 32;
 fn rays_from(t: Bitboard) -> [[Bitboard; 9]; 3] {
     let mut out = [[t; 9]; 3];
     let mut s = [t; 9];
-    for m in 0..3 {
-        for j in 1..9 {
-            s[j] = step(s[j], BACK9[j]);
+    for o in out.iter_mut() {
+        for (sj, &d) in s.iter_mut().zip(BACK9.iter()).skip(1) {
+            *sj = step(*sj, d);
         }
-        out[m] = s;
+        *o = s;
     }
     out
 }
@@ -1241,7 +1230,7 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
     // Time travel into the past: walk every source line's pieces backwards.
     let mut past = [[0i32; 2]; 2];
     for l in lo..=hi {
-        for ci in 0..2 {
+        for (ci, pc) in past.iter_mut().enumerate() {
             let c = ci == 1;
             let key = past_key(&g, l, c);
             let p = match src.past_get(key) {
@@ -1252,14 +1241,14 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
                     p
                 }
             };
-            past[ci][0] += p[0];
-            past[ci][1] += p[1];
+            pc[0] += p[0];
+            pc[1] += p[1];
         }
     }
-    for ci in 0..2 {
+    for (ci, pc) in past.iter().enumerate() {
         let f = &mut sd.side[1 - ci];
-        f[si::TRAVEL_PAST] += past[ci][0];
-        f[si::TRAVEL_BACKED] += past[ci][1];
+        f[si::TRAVEL_PAST] += pc[0];
+        f[si::TRAVEL_BACKED] += pc[1];
     }
     // Latest boards: lines to the enemy royals and landings next to them.
     let mut royals_active = [false; 2];
@@ -1379,10 +1368,8 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
                 if walk[di] == 0 {
                     continue;
                 }
-                // The boards outward from the target along this (timeline, time) direction:
-                // what blocks there and the attacker's movable pieces by axis count.
-                // (Up to three timelines away; `near` collects attacker sliders within reach
-                // of the target squares at all.)
+                // Boards up to three timelines out from the target in this (timeline, time)
+                // direction: blockers and the attacker's movable pieces by axis count.
                 let mut occ = [0u64; 3];
                 let mut block = [0u64; 3];
                 let mut att = [[0u64; 4]; 3];
@@ -1828,10 +1815,8 @@ mod royal_tests {
                     now[1] += (weak & att_c).count_ones() as i32;
                 };
                 for &(sl, st) in &[(-1i32, 0i32), (1, 0), (-1, -1), (1, -1)] {
-                    // The boards outward from the target along this (timeline, time) direction:
-                    // what blocks there and the attacker's movable pieces by axis count.
-                    // (Up to three timelines away; `near` collects attacker sliders within reach
-                    // of the target squares at all.)
+                    // Boards up to three timelines out from the target in this (timeline, time)
+                    // direction: blockers and the attacker's movable pieces by axis count.
                     let mut occ = [0u64; 3];
                     let mut block = [0u64; 3];
                     let mut att = [[0u64; 4]; 3];

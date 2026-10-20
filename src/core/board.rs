@@ -17,10 +17,18 @@ const LUNICORN: usize = 9;
 const LDRAGON: usize = 10;
 const N_BBS: usize = 11;
 
-#[derive(Clone, Copy, Hash, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct Board {
     bbs: [Bitboard; N_BBS],
     umove_mask: Bitboard,
+}
+
+impl std::hash::Hash for Board {
+    /// The fields in declaration order, as `derive(Hash)` would.
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.bbs.hash(state);
+        self.umove_mask.hash(state);
+    }
 }
 
 impl PartialEq for Board {

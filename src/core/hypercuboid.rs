@@ -166,13 +166,9 @@ struct BuildScratch {
     group_slots: GroupSlots,
 }
 
-/// What builds learn about one board as seen by one player (the defender), all of it
-/// depending on the board and the defender only, so it is kept per thread by board key and
-/// reused by every later build that looks at the same board: whether one of its royals is
-/// attacked there and which of its pieces are pinned to one, and per square whether a piece
-/// of its own leaving it (`dep_known` / `dep_safe`) or arriving there (`known` / `safe`,
-/// indexed by the arriving piece's royalty: an arrival only puts an own piece on its
-/// square) leaves its royals unattacked.
+/// Per-thread cache, keyed by board, of one board's royal-safety facts for a defender: check,
+/// pins, and per square whether a departure (`dep_*`) or an own arrival (`known`/`safe`,
+/// indexed by royalty) leaves the royals unattacked.
 struct BoardFacts {
     board: Board,
     defender: bool,
@@ -317,10 +313,8 @@ impl SafetyMemo<'_> {
     }
 }
 
-/// The physical entries of a played board (the safe moves that stay on it, in generation
-/// order), for a board (l, t) of the player to move after the board before it on its
-/// timeline (en passant looks at that one). Kept per thread by board key, so every later
-/// build playing the same board copies them instead of generating them.
+/// Per-thread cache, keyed by board, of a board's physical entries: its safe on-board moves
+/// in generation order (the previous board is part of the key for en passant).
 struct PhysSlot {
     lt: (i32, i32),
     player: bool,
@@ -479,14 +473,9 @@ fn arrival_board(s: &State, m: FullMove) -> Board {
     nb
 }
 
-/// The wasted moves (indices) of an action whose moves `mvs` were just played on `after`
-/// (move `i` created a timeline when `branching(i)`). With a timeline created by the
-/// action, a move that creates none is wasted when every board it creates (on its timeline,
-/// and on its departure timeline for a jump) stays out of the present: on a timeline
-/// inactive now, or ending after the present. A move played on a board that a
-/// timeline-creating move of the action then lands on is not wasted (it is what makes that
-/// move create a timeline). The legal-action search never yields an action with a wasted
-/// move (see `HcInfo::wasted_problem`): without its wasted moves it is legal as well.
+/// Indices of wasted moves in an action just played on `after` (`branching(i)`: move `i`
+/// created a timeline): non-branching moves whose boards all stay out of the present, other
+/// than ones a branch lands on. Same rule as `HcInfo::wasted_problem`.
 pub fn wasted_moves(after: &State, mvs: &[FullMove], branching: impl Fn(usize) -> bool) -> Vec<usize> {
     if !(0..mvs.len()).any(&branching) {
         return Vec::new();
@@ -700,13 +689,11 @@ impl HcInfo {
         (info, ss)
     }
 
-    /// Build the search context of `s` in place (reusing this one's buffers); returns the
-    /// initial search space. With `defer_branch`, the branch axes' arrival entries (their
-    /// boards) wait for `materialize_branch`: a hypercuboid whose branch coordinates are all
-    /// null never looks at them (cursors report when one would).
+    /// Rebuild the search context for `s` in place and return the initial search space.
+    /// With `defer_branch`, branch-axis arrival entries wait for `materialize_branch`.
     pub fn rebuild(&mut self, s: &State, defer_branch: bool) -> SearchSpace {
-        let _p = crate::misc::prof::scope(0);
-        let st_scope = crate::misc::prof::scope(15);
+        crate::misc::prof::scope(0);
+        crate::misc::prof::scope(15);
         let HcInfo {
             player: info_player,
             line_axes,
@@ -777,10 +764,8 @@ impl HcInfo {
         }
         arrivals[..nl].iter_mut().for_each(|a| a.clear());
         let (_, size_y) = s.get_board_size();
-        // Royal safety per board: only royal moves, pinned pieces, en passant or a board
-        // already in check can leave the mover's royal attacked, so most results skip the
-        // full check test.
-        // Memoized per board, by (line, turn) (entries stamped with this build).
+        // Royal safety per board, memoized by (line, turn) and stamped with this build. Only
+        // royal moves, pins, en passant or an existing check need the full check test.
         let nt = (lines_lo..=lines_hi).map(|l| s.get_timeline_end(l).0).max().unwrap_or(0) as usize + 1;
         let need = (lines_hi - lines_lo + 1) as usize * nt;
         if safety.1.len() < need {
@@ -794,8 +779,8 @@ impl HcInfo {
         let stamp = safety.0;
         let mut facts = FACTS_CACHE.with(|c| std::mem::take(&mut *c.borrow_mut()));
         let mut memo = SafetyMemo { s, player, lines_lo, nt, stamp, tab: &mut safety.1, facts: &mut facts };
-        drop(st_scope);
-        let gen_scope = crate::misc::prof::scope(1);
+        drop(());
+        crate::misc::prof::scope(1);
         // Every piece's moves: the physical ones become entries (those that leave no royal of
         // the mover attacked; a board played before reuses its entries), the jumps are
         // collected.
@@ -816,7 +801,7 @@ impl HcInfo {
             let locs = &mut axis_coords[axis];
             locs.clear();
             locs.push(Entry::Null);
-            let ph = crate::misc::prof::scope(18);
+            crate::misc::prof::scope(18);
             let key = s.multiverse().key_of(l, t, player);
             let slot = &mut cache.slots[key as usize % PHYS_SLOTS];
             match slot {
@@ -834,8 +819,8 @@ impl HcInfo {
                     phys_tags.push((key, generation));
                 }
             }
-            drop(ph);
-            let _sp = crate::misc::prof::scope(19);
+            drop(());
+            crate::misc::prof::scope(19);
             for pos in marked_pos(source.friendly(player) & !source.wall()) {
                 let from = Vec4::from_xy(pos, p0);
                 ml.clear();
@@ -855,7 +840,7 @@ impl HcInfo {
             }
         }
         PHYS_CACHE.with(|c| *c.borrow_mut() = cache);
-        drop(gen_scope);
+        drop(());
         let max_branch = departures[..np].iter().filter(|d| !d.is_empty()).count();
         jump_tab.clear();
         jump_tab.resize(np, [INVALID; 64]);
@@ -863,7 +848,7 @@ impl HcInfo {
             let i = jt[axis_of_line(axis_of, from.l())][from.xy() as usize];
             if i == INVALID { None } else { Some(i) }
         };
-        let ent_scope = crate::misc::prof::scope(12);
+        crate::misc::prof::scope(12);
         if axis_coords.len() < np {
             axis_coords.resize_with(np, Vec::new);
         }
@@ -907,24 +892,23 @@ impl HcInfo {
             }
         }
 
-        drop(ent_scope);
-        let br_scope = crate::misc::prof::scope(13);
+        drop(());
+        crate::misc::prof::scope(13);
         // The branch arrivals: only the ones whose result needs a check test get their board
         // here; the entries are built by `materialize_branch`.
         branch_moves.clear();
         for a in arrivals[..nl].iter_mut().flatten() {
-            if let Some(dep) = find_jump(jump_tab, axis_of, a.m.from) {
-                if a.safe(&mut memo) {
+            if let Some(dep) = find_jump(jump_tab, axis_of, a.m.from)
+                && a.safe(&mut memo) {
                     let fa = axis_of_line(axis_of, a.m.from.l()) as u32;
                     branch_moves.push((a.m, dep, fa, a.mover));
                 }
-            }
         }
         branch_entries.clear();
         branch_entries.push(Entry::Null);
         *branch_ready = false;
-        drop(br_scope);
-        let _fin = crate::misc::prof::scope(14);
+        drop(());
+        crate::misc::prof::scope(14);
         let new_l = s.new_line();
         let sign = signum(new_l);
         line_axes.clear();
@@ -1009,11 +993,10 @@ impl HcInfo {
         for (i, &(m, dep, fa, mover)) in self.branch_moves.iter().enumerate() {
             let victim = s.board(m.to.l(), m.to.t(), self.player).kind(m.to.xy());
             self.branch_entries.push(Entry::Arriving { m, b: arrival_board(s, m), idx: dep, fa, mover, victim });
-            if let Some(a) = self.line_to_axis(m.to.l()).filter(|&a| a < np) {
-                if s.get_timeline_end(m.to.l()) == (m.to.t(), self.player) {
+            if let Some(a) = self.line_to_axis(m.to.l()).filter(|&a| a < np)
+                && s.get_timeline_end(m.to.l()) == (m.to.t(), self.player) {
                     self.branch_onto[a].insert(i as Index + 1);
                 }
-            }
         }
         self.groups[np].rebuild(&self.branch_entries, 1, np, &mut self.scratch.group_slots);
         self.branch_ready = true;
@@ -1022,7 +1005,7 @@ impl HcInfo {
     /// Pick a point in `hc` whose departures and arrivals pair up (into `sc.point`). Prunes
     /// arrivals whose departure is no longer available.
     pub fn take_point(&self, hc: &mut Hc, order: &HcOrdering, sc: &mut PointScratch) -> bool {
-        let _p = crate::misc::prof::scope(2);
+        crate::misc::prof::scope(2);
         let dim = self.dimension();
         let PointScratch { g, must_include, edge_refs, want, point: result } = sc;
         g.reset(dim);
@@ -1147,16 +1130,16 @@ impl HcInfo {
 
 
     pub fn find_problem(&self, s: &State, p: &Point, hc: &Hc, buf: &mut CheckBuf) -> Option<Slice> {
-        let jp = crate::misc::prof::scope(3);
+        crate::misc::prof::scope(3);
         let r = self.jump_order_consistent(s, p, hc).or_else(|| {
             let pa = self.present_after(s, p)?;
             self.present_problem(s, p, &pa).or_else(|| self.wasted_problem(s, p, &pa))
         });
-        drop(jp);
+        drop(());
         if r.is_some() {
             return r;
         }
-        let _p = crate::misc::prof::scope(4);
+        crate::misc::prof::scope(4);
         self.find_checks(s, p, hc, buf)
     }
 
@@ -1175,11 +1158,10 @@ impl HcInfo {
                 if self.entry(m, im).is_null() && st.get_timeline_end(to.l()) == (to.t(), c) {
                     let mut s = IntegerSet::new();
                     for i in hc[n].iter() {
-                        if let Entry::Arriving { m: m3, .. } = self.entry(n, i) {
-                            if m3.to.tl() == to.tl() {
+                        if let Entry::Arriving { m: m3, .. } = self.entry(n, i)
+                            && m3.to.tl() == to.tl() {
                                 s.insert(i);
                             }
-                        }
                     }
                     let mut problem = Slice::new();
                     problem.fix_axis(n, s);
@@ -1193,18 +1175,16 @@ impl HcInfo {
                 let mut s1 = IntegerSet::new();
                 let mut s2 = IntegerSet::new();
                 for i in hc[n].iter() {
-                    if let Entry::Arriving { m: m1, .. } = self.entry(n, i) {
-                        if m1.from.tl() == critical {
+                    if let Entry::Arriving { m: m1, .. } = self.entry(n, i)
+                        && m1.from.tl() == critical {
                             s1.insert(i);
                         }
-                    }
                 }
                 for i in hc[axis_branch].iter() {
-                    if let Entry::Arriving { m: m2, .. } = self.entry(axis_branch, i) {
-                        if m2.to.tl() == critical {
+                    if let Entry::Arriving { m: m2, .. } = self.entry(axis_branch, i)
+                        && m2.to.tl() == critical {
                             s2.insert(i);
                         }
-                    }
                 }
                 let mut problem = Slice::new();
                 problem.fix_axis(n, s1);
@@ -1238,10 +1218,8 @@ impl HcInfo {
         }
     }
 
-    /// What the point does to the present, computed exactly: moved timelines advance one
-    /// half-turn, new timelines start after their arrival, and the active range is recomputed
-    /// from the final timeline span (which can reactivate old timelines). `None` when no
-    /// timeline is active.
+    /// The exact present after the point, with the active range recomputed from the final
+    /// timeline span. `None` when no timeline is active.
     fn present_after(&self, st: &State, p: &Point) -> Option<PresentAfter> {
         let (l_min, l_max) = st.get_lines_range();
         let c = self.player;
@@ -1310,11 +1288,10 @@ impl HcInfo {
                 let line = if c { l_min - 1 - j as i32 } else { l_max + 1 + j as i32 };
                 let active = line >= amin && line <= amax;
                 for i in self.universe[n].iter() {
-                    if let Entry::Arriving { m, .. } = self.entry(n, i) {
-                        if !active || m.to.t() >= t_w {
+                    if let Entry::Arriving { m, .. } = self.entry(n, i)
+                        && (!active || m.to.t() >= t_w) {
                             s.insert(i);
                         }
-                    }
                 }
             } else {
                 s.insert(0);
@@ -1325,25 +1302,9 @@ impl HcInfo {
         Some(problem)
     }
 
-    /// Whether the point (which moves the present to `pa`) plays a wasted move: it creates a
-    /// timeline, and another of its moves creates none and leaves every board it creates out
-    /// of the present that the point leaves, on a timeline inactive after it or later than
-    /// that present. Such a board waits unchanged until the present reaches it, so playing the
-    /// move now only gives up flexibility; the action without it is legal as well (it moves
-    /// the present to the same place, and leaves the opponent a subset of the boards to move
-    /// on), so these actions are not generated. A typical case: a jump that branches into the
-    /// past moves the present back, and the point also moves a board of the old present. A
-    /// semimove on a board one of the point's branches lands on is never wasted: it is what
-    /// makes that jump branch (`plays_wasted_move` is the same rule on a played action).
-    ///
-    /// The slice keeps the wasted semimove's axis on its non-null semimoves that waste a move
-    /// for the same reason (its physical moves, and the arrivals whose departure board is out
-    /// of the present too) and keeps the point's reason on the other axes: a timeline at
-    /// least one branch axis creates, the present after the point below the wasted boards
-    /// (held by a timeline that ends before them whatever the slice's points do), no more new
-    /// timelines than the point (the active range only widens with them) when a board is
-    /// wasted for being inactive, and no branch landing on a board of those semimoves. The
-    /// null semimove stays outside, so the action without the wasted move survives.
+    /// Slice of points that branch and also play a wasted move: one whose boards all stay out
+    /// of the present. Dropping it gives an equally legal action, so these are not generated.
+    /// The null semimove stays outside the slice, so the action without that move survives.
     fn wasted_problem(&self, st: &State, p: &Point, pa: &PresentAfter) -> Option<Slice> {
         if pa.k == 0 {
             return None;
@@ -1420,10 +1381,8 @@ impl HcInfo {
             s
         };
         if bound != i32::MAX {
-            // A timeline that ends before `bound` in every point of the slice: the cheapest
-            // of the point's active ones (one active from the first new timeline on that
-            // keeps its end whatever its axis does, else one fixing its axis; one only
-            // active with as many new timelines as the point also needs that many).
+            // Pick the cheapest active timeline that ends before `bound` in every point of
+            // the slice, preferring one whose end does not depend on its axis.
             let (l_min, l_max) = st.get_lines_range();
             let (a1, b1) = self.active_after(st, 1);
             #[derive(Clone, Copy)]
@@ -1467,11 +1426,10 @@ impl HcInfo {
                     let c = self.player as i32;
                     let mut s = IntegerSet::new();
                     for i in self.universe[na + j].iter() {
-                        if let Entry::Arriving { m, .. } = self.entry(na + j, i) {
-                            if 2 * m.to.t() + c + 1 < bound {
+                        if let Entry::Arriving { m, .. } = self.entry(na + j, i)
+                            && 2 * m.to.t() + c + 1 < bound {
                                 s.insert(i);
                             }
-                        }
                     }
                     problem.restrict_axis(na + j, s);
                 }
@@ -1488,12 +1446,9 @@ impl HcInfo {
         Some(problem)
     }
 
-    /// Whether a check is possible after `p`: `NoCheck` when `p` moves existing timelines
-    /// only and none of the checks their next boards could give survives the move (see
-    /// `moves_may_check` for several), `Lines` when only the timelines in
-    /// `env_checks.maybe` may give one. Only for contexts whose timelines all end on the
-    /// mover's turn, where the moved timelines' next boards are the only ones the opponent
-    /// moves on.
+    /// Whether a check is possible after a point moving only existing timelines: `NoCheck`,
+    /// or `Lines` when only `env_checks.maybe` may give one. Valid only when every timeline
+    /// ends on the mover's turn.
     fn lone_move_may_check(&self, st: &State, p: &Point, lo: i32, hi: i32, buf: &mut CheckBuf) -> MayCheck {
         let mut moved = None;
         let mut moved_lines = 0;
@@ -1532,14 +1487,9 @@ impl HcInfo {
         if checks.iter().any(|m| attackers & pmask(m.from.xy()) != 0) { MayCheck::All } else { MayCheck::NoCheck }
     }
 
-    /// `lone_move_may_check` for a point moving several existing timelines (and no new one).
-    /// Each moved timeline's checks are found once per build from its next board with every
-    /// opponent piece in place, against the other playable timelines' next boards at their
-    /// worst: present, holding the mover's royals on every square any of their semimoves
-    /// leaves one on, and nothing else. Whatever an actual point's boards hold there, a check
-    /// it allows either is one of those or runs into one of those royals first, so a point
-    /// with no surviving attacker among them gives no check. The moved timelines with a
-    /// surviving attacker are left in `env_checks.maybe`.
+    /// `lone_move_may_check` for several moved timelines. Checks are precomputed per build
+    /// against a worst case of the other boards (royals on every square they could hold);
+    /// timelines with a surviving attacker are left in `env_checks.maybe`.
     fn moves_may_check(&self, st: &State, p: &Point, lo: i32, hi: i32, buf: &mut CheckBuf) -> bool {
         let c = self.player;
         let mut env = self.env_checks.borrow_mut();
@@ -1684,7 +1634,7 @@ impl HcInfo {
         let l2 = check.to.l();
         if let Some(n2) = self.line_to_axis(l2) {
             let loc0 = self.entry(n2, p[n2]);
-            if !(loc0.is_null() || !is_next(loc0.tl().0, check.to.t())) {
+            if !loc0.is_null() && is_next(loc0.tl().0, check.to.t()) {
                 let mut expose = IntegerSet::new();
                 for i in hc[n2].iter() {
                     let loc = self.entry(n2, i);
@@ -1790,11 +1740,9 @@ thread_local! {
 /// Cursor steps (hypercuboids taken) between interrupt checks.
 const INTERRUPT_EVERY: u32 = 4;
 
-/// While the guard lives, the cursors of this thread stop enumerating once `stop` is set or
-/// `deadline` has passed: `next`/`next_with` then report no further action, and the caller
-/// must ask `interrupted()` before taking that for the end of the actions. Finding a legal
-/// action can take arbitrarily long (huge spaces where most points fail, or none is legal),
-/// so a search on a clock enumerates under such a guard.
+/// While the guard lives, this thread's cursors stop once `stop` is set or `deadline` passes.
+/// They then report no further action, so callers must check `interrupted()` before treating
+/// that as the end. Needed because finding a legal action can take arbitrarily long.
 pub fn interrupt_on(stop: &std::sync::atomic::AtomicBool, deadline: Option<std::time::Instant>) -> InterruptGuard<'_> {
     let prev = INTERRUPT.with(|c| c.replace(Some(Interrupt { stop: stop as *const _, deadline })));
     InterruptGuard { prev, _stop: std::marker::PhantomData }
@@ -1829,11 +1777,8 @@ pub fn interrupted() -> bool {
     })
 }
 
-/// Problems found while enumerating one context (`find_problem`'s slices). Each holds
-/// only points that fail whatever hypercuboid they lie in (its axes are fixed by properties of
-/// single coordinates), so a later hypercuboid inside one is dropped, and a later point inside
-/// one is cut out with it, without looking again: with many timelines the same check is
-/// otherwise found again in every piece the earlier cuts left.
+/// Problem slices found while enumerating one context. Each holds only failing points, so a
+/// later hypercuboid or point inside one is cut without re-finding the same problem.
 #[derive(Default)]
 struct ProblemMemo {
     slices: Vec<Slice>,
@@ -1876,6 +1821,38 @@ impl ProblemMemo {
     }
 }
 
+/// Caller-excluded regions (e.g. proven mate-free, see `exclude`), skipped like problems.
+/// Bounded: the oldest is replaced, which costs time but never loses an action.
+#[derive(Default)]
+struct RegionMemo {
+    slices: Vec<Slice>,
+    next: usize,
+}
+
+/// Regions a cursor keeps (`RegionMemo`).
+const REGION_MEMO: usize = 64;
+
+impl RegionMemo {
+    fn clear(&mut self) {
+        self.slices.clear();
+        self.next = 0;
+    }
+    fn add(&mut self, s: Slice) {
+        if self.slices.len() < REGION_MEMO {
+            self.slices.push(s);
+        } else {
+            self.slices[self.next] = s;
+            self.next = (self.next + 1) % REGION_MEMO;
+        }
+    }
+    fn covers(&self, hc: &Hc) -> bool {
+        self.slices.iter().any(|s| s.fixed.iter().all(|(n, c)| hc[*n].is_subset_of(c)))
+    }
+    fn holding(&self, p: &Point) -> Option<&Slice> {
+        self.slices.iter().find(|s| s.contains(p))
+    }
+}
+
 /// Resumable legal-action enumeration. The caller supplies the context and the state it
 /// was built from on every call (the state may be modified between calls if restored).
 pub struct HcCursor {
@@ -1890,6 +1867,10 @@ pub struct HcCursor {
     checks: CheckBuf,
     /// Problems found in the current context (cleared by `forget`).
     memo: ProblemMemo,
+    /// Regions skipped (`exclude`; cleared by `forget`).
+    excluded: RegionMemo,
+    /// The point of the last action found.
+    last: Point,
 }
 
 impl Default for HcCursor {
@@ -1900,7 +1881,17 @@ impl Default for HcCursor {
 
 impl HcCursor {
     pub fn new(ss: SearchSpace, order: HcOrdering) -> Self {
-        HcCursor { ss, order, branch_pending: false, budget: u32::MAX, sc: PointScratch::default(), checks: CheckBuf::default(), memo: ProblemMemo::default() }
+        HcCursor {
+            ss,
+            order,
+            branch_pending: false,
+            budget: u32::MAX,
+            sc: PointScratch::default(),
+            checks: CheckBuf::default(),
+            memo: ProblemMemo::default(),
+            excluded: RegionMemo::default(),
+            last: Point::new(),
+        }
     }
 
     pub fn next(&mut self, info: &HcInfo, s: &State) -> Option<MoveSeq> {
@@ -1910,12 +1901,22 @@ impl HcCursor {
     /// Forget the problems found so far: call when `ss` is set for another context (state).
     pub fn forget(&mut self) {
         self.memo.clear();
+        self.excluded.clear();
     }
 
-    /// `next`, filling the branch axes' order with `fill_branch` when `branch_pending` and a
-    /// hypercuboid first leaves several coordinates on a branch axis (only then can taking a
-    /// point look at that order). Stops with `NeedBranch` (and no progress) when the next
-    /// hypercuboid needs the branch entries `info` deferred.
+    /// Skip every point of `region` from now on (points the caller has no use for, e.g. actions
+    /// proven to be no mate).
+    pub fn exclude(&mut self, region: Slice) {
+        self.excluded.add(region);
+    }
+
+    /// The point (coordinates) of the last action found.
+    pub fn last_point(&self) -> &Point {
+        &self.last
+    }
+
+    /// `next`, filling branch-axis order lazily via `fill_branch` when first needed. Returns
+    /// `NeedBranch` without progress when the next hypercuboid needs deferred branch entries.
     pub fn next_with(
         &mut self,
         info: &HcInfo,
@@ -1925,7 +1926,7 @@ impl HcCursor {
         let mut steps = 0u32;
         while !self.ss.is_empty() {
             steps += 1;
-            if steps % INTERRUPT_EVERY == 0 && interrupted() || self.budget == 0 {
+            if steps.is_multiple_of(INTERRUPT_EVERY) && interrupted() || self.budget == 0 {
                 return Ok(None);
             }
             self.budget -= 1;
@@ -1941,15 +1942,20 @@ impl HcCursor {
                 self.branch_pending = false;
             }
             let memo = info.first_branch_axis() >= PROBLEM_MEMO_MIN_AXES;
-            if memo && self.memo.covers(&hc) {
+            if memo && self.memo.covers(&hc) || self.excluded.covers(&hc) {
                 continue;
             }
             if !info.take_point(&mut hc, &self.order, &mut self.sc) {
                 continue;
             }
             let pt = &self.sc.point;
+            if let Some(region) = self.excluded.holding(pt) {
+                self.ss.push_back(hc);
+                self.ss.remove_slice_backwards(region, true, 10, 1);
+                continue;
+            }
             if let Some(problem) = memo.then(|| self.memo.holding(pt)).flatten() {
-                let _p = crate::misc::prof::scope(5);
+                crate::misc::prof::scope(5);
                 self.ss.push_back(hc);
                 self.ss.remove_slice_backwards(problem, true, 10, 1);
                 continue;
@@ -1958,10 +1964,11 @@ impl HcCursor {
                 None => {
                     let act = info.to_action(pt);
                     hc.remove_point_with(pt, |h| self.ss.push_back(h));
+                    self.last.clone_from(pt);
                     return Ok(Some(act));
                 }
                 Some(problem) => {
-                    let _p = crate::misc::prof::scope(5);
+                    crate::misc::prof::scope(5);
                     if memo {
                         self.memo.add(&problem);
                     }
@@ -1979,16 +1986,9 @@ impl HcCursor {
 #[derive(Debug)]
 pub struct NeedBranch;
 
-/// Legal actions roughly best-first by the sum of per-axis coordinate scores. The remaining
-/// space is kept as hypercuboids in a heap keyed by the score of their best point (each
-/// axis' first coordinate in `order`, which must be sorted by `scores` descending), so
-/// after the top action the next ones deviate on whichever axis loses least, instead of
-/// varying the last axis first. Problems are removed from the popped hypercuboid only.
-/// Subspaces of the initial search space keep their precedence (later ones first).
-///
-/// With one playable board, the actions without a branch (the first class) are each one move
-/// of that board: they are walked in its order, each tested on its own, which is the order
-/// the hypercuboids would give.
+/// Legal actions roughly best-first by summed per-axis scores (`order` sorted by `scores`
+/// descending), via a heap of hypercuboids keyed by their best point. With one playable
+/// board, non-branching actions are walked directly in that board's order.
 pub struct BestFirstCursor {
     heap: BfHeap,
     sc: PointScratch,
@@ -2008,6 +2008,10 @@ pub struct BestFirstCursor {
     budget: Option<u32>,
     /// Problems found since the last `restart` of another context (see `ProblemMemo`).
     memo: ProblemMemo,
+    /// Regions skipped (`exclude`; cleared by `forget`).
+    excluded: RegionMemo,
+    /// The point of the last action found.
+    last: Point,
 }
 
 /// The first class of a context with one playable board: the coordinates of its axis 0 still
@@ -2056,7 +2060,7 @@ impl BfHeap {
     }
 
     fn push(&mut self, hc: Hc, class: i32, fill: &mut BranchFill) {
-        let _p = crate::misc::prof::scope(11);
+        crate::misc::prof::scope(11);
         self.need_branch(&hc, false, fill);
         let mut bound = 0i64;
         let shared = match &self.order {
@@ -2130,6 +2134,8 @@ impl Default for BestFirstCursor {
             limit_taken: 0,
             budget: None,
             memo: ProblemMemo::default(),
+            excluded: RegionMemo::default(),
+            last: Point::new(),
         }
     }
 }
@@ -2151,6 +2157,17 @@ impl BestFirstCursor {
     /// context. A `restart` on the same context keeps them.
     pub fn forget(&mut self) {
         self.memo.clear();
+        self.excluded.clear();
+    }
+
+    /// Skip every point of `region` from now on (see `HcCursor::exclude`).
+    pub fn exclude(&mut self, region: Slice) {
+        self.excluded.add(region);
+    }
+
+    /// The point (coordinates) of the last action found.
+    pub fn last_point(&self) -> &Point {
+        &self.last
     }
 
     /// Enumerate `ss` (of the context `info`) from the start under the current ordering.
@@ -2165,15 +2182,13 @@ impl BestFirstCursor {
         // The first class is the last hypercuboid; with one playable board and every branch
         // axis null there, its points are the coordinates of axis 0 (see `next_with`).
         self.lone = None;
-        if info.first_branch_axis() == 1 && matches!(self.heap.order, HcOrdering::Precomputed(_)) {
-            if let Some(hc) = hcs.last() {
-                if !hc[0].is_empty() && (1..hc.dimension()).all(|n| hc[n].single() == Some(0)) {
+        if info.first_branch_axis() == 1 && matches!(self.heap.order, HcOrdering::Precomputed(_))
+            && let Some(hc) = hcs.last()
+                && !hc[0].is_empty() && (1..hc.dimension()).all(|n| hc[n].single() == Some(0)) {
                     let hc = hcs.pop().unwrap();
                     let dim = hc.dimension();
                     self.lone = Some(LoneWalk { hc, pos: 0, point: vec![0; dim] });
                 }
-            }
-        }
         // (The classes count from the first, as if it were still there.)
         let n = hcs.len() + self.lone.is_some() as usize;
         for (k, hc) in hcs.into_iter().enumerate() {
@@ -2255,8 +2270,12 @@ impl BestFirstCursor {
                     continue;
                 }
                 walk.point[0] = i;
+                if self.excluded.holding(&walk.point).is_some() {
+                    continue;
+                }
                 if info.lone_point_legal(s, &walk.point, &mut self.checks) {
                     self.last_class = 0;
+                    self.last.clone_from(&walk.point);
                     return Ok(Some(info.to_action(&walk.point)));
                 }
             }
@@ -2265,7 +2284,7 @@ impl BestFirstCursor {
         let mut steps = 0u32;
         while !self.heap.heap.is_empty() {
             steps += 1;
-            if steps % INTERRUPT_EVERY == 0 && interrupted() || !self.spend() {
+            if steps.is_multiple_of(INTERRUPT_EVERY) && interrupted() || !self.spend() {
                 return Ok(None);
             }
             let BfItem { key, mut hc } = self.heap.heap.pop().unwrap();
@@ -2286,7 +2305,7 @@ impl BestFirstCursor {
                 }
             }
             let memo = info.first_branch_axis() >= PROBLEM_MEMO_MIN_AXES;
-            if memo && self.memo.covers(&hc) {
+            if memo && self.memo.covers(&hc) || self.excluded.covers(&hc) {
                 continue;
             }
             self.heap.need_branch(&hc, true, fill);
@@ -2295,8 +2314,12 @@ impl BestFirstCursor {
             }
             let pt = &self.sc.point;
             let heap = &mut self.heap;
+            if let Some(region) = self.excluded.holding(pt) {
+                hc.remove_slice_with(region, |h| heap.push(h, class, fill));
+                continue;
+            }
             if let Some(problem) = memo.then(|| self.memo.holding(pt)).flatten() {
-                let _p = crate::misc::prof::scope(5);
+                crate::misc::prof::scope(5);
                 hc.remove_slice_with(problem, |h| heap.push(h, class, fill));
                 continue;
             }
@@ -2305,10 +2328,11 @@ impl BestFirstCursor {
                     let act = info.to_action(pt);
                     hc.remove_point_with(pt, |h| heap.push(h, class, fill));
                     self.last_class = class;
+                    self.last.clone_from(pt);
                     return Ok(Some(act));
                 }
                 Some(problem) => {
-                    let _p = crate::misc::prof::scope(5);
+                    crate::misc::prof::scope(5);
                     if memo {
                         self.memo.add(&problem);
                     }

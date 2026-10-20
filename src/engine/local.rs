@@ -1,11 +1,6 @@
-//! Single-board tactics.
-//!
-//! The side to move plays at most one move on each board it moves on, and moves on different
-//! boards only interact through pieces jumping between boards. So the captures still pending
-//! at a quiescent leaf can be resolved board by board: every board gets its own capture
-//! search, with its own stand-pat, and the gains add up. That covers every capture on every
-//! board at a few bitboard operations per board, instead of enumerating whole multi-board
-//! turns.
+//! Single-board tactics: pending captures at a quiescent leaf, resolved board by board.
+//! Each board gets its own capture search and stand-pat, and the gains are summed, which is
+//! far cheaper than enumerating multi-board turns.
 
 use crate::core::bitboard::*;
 use crate::core::board::Board;

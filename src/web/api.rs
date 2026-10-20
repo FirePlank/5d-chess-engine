@@ -103,10 +103,8 @@ impl Api {
                 self.game = Some(g);
                 Ok(ok(obj![("tree", tree), ("meta", obj![("format", "new"), ("variant", variant.unwrap_or("Custom"))])]))
             }
-            // A position from the board editor (5DFEN, a 5DUCI position or a game, which counts
-            // as its last position), checked without touching the loaded game: whether it
-            // loads, its view (present, checks, status) and whether the side to move could
-            // capture a royal at once (the side that just moved left it in check).
+            // Check a board-editor position without touching the loaded game: whether it
+            // loads, its view, and whether the side to move can capture a royal at once.
             "inspect" => {
                 let text = j.get("text").str().ok_or("missing text")?;
                 let mut l = match record::load(text, None) {
@@ -309,13 +307,9 @@ impl Api {
         Ok(s)
     }
 
-    /// Run the engine on a 5DUCI position (`position` plus optional `moves`). With `book`
-    /// true, a book position is answered from the opening book without a search (`OwnBook`).
-    /// Limits (ms): `depth`, `movetime`, `nodes`; a clock: `timeLeft` and `increment`, and a
-    /// delay clock's `delay` (fixed per action) and `delayPerTimeline` (per active timeline of
-    /// the position; 5D tournament clock: `timeLeft` 300000, `delayPerTimeline` 3000).
-    /// `multiPV` K (1..=256, default 1) reports the best K root actions' lines: each streamed
-    /// `info` line then carries `multipv k` (see README).
+    /// Run the engine on a 5DUCI position, answering from the opening book first if `book`.
+    /// Takes search limits, clock fields (`timeLeft`, `increment`, `delay`, `delayPerTimeline`)
+    /// and `multiPV` (see README).
     fn search(&mut self, j: &Json, info: &mut dyn FnMut(&str)) -> Result<Json, String> {
         let s = Self::uci_state(j.get("position").str().ok_or("missing position")?)?;
         let limits = Limits {

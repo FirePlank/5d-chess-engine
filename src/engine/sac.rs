@@ -1,26 +1,6 @@
-//! The f7/f2 sac table.
-//!
-//! Most opening theory in Standard and Turn Zero is a queen or bishop travelling back onto
-//! f7/f2 of a past board: a new timeline where the king faces a softmate attack 6-10 plies
-//! deep on that one timeline, which the full search (where every other board doubles the
-//! depth) cannot see. Past boards never change, so the outcome of such a travel depends on its
-//! target board alone: it is worked out once per process by a small mate search on the new
-//! timeline alone (`resolve`) and kept in tables shared by every search thread.
-//!
-//! The local search plays on one timeline only, the side to move always moving on its latest
-//! board. A royal counts as attacked physically or by a piece travelling straight back along
-//! the timeline onto a past board where the royal stood (the softmates of the f7 lines: after
-//! 1. Qxf7+ Kxf7 .. 5. Qb3 the queen reaches the king's old square f7 through time, and only
-//! taking the queen helps). A side that is attacked with no move on the board is mated: its
-//! other escapes would create timelines, a softmate, which counts as a win. No move and no
-//! attack is no mate. En passant is left out. Time-travel defences and the other timelines are
-//! ignored, so a local win is a strong signal, not a proof: the evaluation terms built on it
-//! (`hce`) are ones the main search can still override.
-//!
-//! Positions are keyed by their timeline's recent boards (the multiverse's own board keys, so
-//! the evaluation reads them for free): `RESULTS` holds the outcome of each candidate travel
-//! and of the latest boards of created timelines; `PROOF` every position of a local mate proof
-//! with its distance, so the evaluation can follow a sac line in progress move by move.
+//! The f7/f2 sac table: outcomes of queen/bishop travels onto f7/f2 of past boards, found by a
+//! single-timeline mate search (`resolve`) too deep for the main search, cached across threads.
+//! The local search ignores time-travel defences, so its wins are a signal, not a proof.
 
 use crate::core::action::FullMove;
 use crate::core::bitboard::*;
@@ -690,11 +670,9 @@ impl Local {
     }
 }
 
-/// Whether `attacker` can force a mate on timeline `l` alone within `max_moves` of its moves,
-/// searching at most `budget` nodes. `history`: the timeline's boards up to the position (the
-/// side to move moves on the last one), the first at half-turn `v0`. Wins store every proof
-/// position in `PROOF`. Returns the outcome, the nodes searched, and whether `deadline` or
-/// `stop` cut the search short (its unknown outcome is then no verdict on the position).
+/// Whether `attacker` can force a mate on timeline `l` alone within `max_moves`, in at most
+/// `budget` nodes; `history` starts at half-turn `v0`. Wins store their proof in `PROOF`.
+/// Returns the outcome, nodes searched, and whether `deadline` or `stop` cut it short.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve(history: &[Board], l: i32, v0: i32, attacker: bool, h: i32, max_moves: u32, budget: u64, deadline: Option<Instant>, stop: Option<&AtomicBool>) -> (Outcome, u64, bool) {
     LOCAL.with(|cell| {
@@ -795,10 +773,9 @@ fn at(m: &Multiverse, l: i32, v: i32) -> Option<&Board> {
     }
 }
 
-/// The f7 squares of attacker `c` on line `l`: on its past boards (up to `MAX_BACK` turns
-/// back), the squares next to a defender royal that no other defender piece covers and where a
-/// queen (any of them) or a bishop (the diagonal ones) gives check on landing. `f(v, sq, queen,
-/// board)`.
+/// Calls `f(v, sq, queen, board)` for attacker `c`'s f7 squares on line `l`'s past boards:
+/// squares next to a defender royal that no other defender covers, where a queen or bishop
+/// checks on landing. Looks back at most `MAX_BACK` turns.
 fn line_targets(m: &Multiverse, l: i32, c: bool, mut f: impl FnMut(i32, i32, bool, &Board)) {
     let tl = m.timeline(l);
     let vs = src_v(tl.end(), c);
@@ -823,11 +800,9 @@ fn line_targets(m: &Multiverse, l: i32, c: bool, mut f: impl FnMut(i32, i32, boo
     }
 }
 
-/// The routes of a queen (`queen`) or bishop travel of `c` onto `sq` of its past board at
-/// half-turn `v` of line `l`: forward in time from the target, one turn and at most one square
-/// per axis per step, every past board on the way with its square empty. Calls `f(square,
-/// goes_on)` with the square each open route reaches on the side's latest board there, and
-/// whether it goes on (on the board) one turn later.
+/// Open time-travel routes of a queen or bishop of `c` onto `sq` at half-turn `v` of line `l`.
+/// Calls `f(square, goes_on)` with each route's square on the side's latest board, and whether
+/// the route continues one turn later.
 fn routes(m: &Multiverse, l: i32, c: bool, v: i32, sq: i32, queen: bool, mut f: impl FnMut(i32, bool)) {
     let (w, h) = m.get_board_size();
     let vs = src_v(m.timeline_end_v(l), c);
@@ -854,11 +829,9 @@ fn routes(m: &Multiverse, l: i32, c: bool, v: i32, sq: i32, queen: bool, mut f: 
     }
 }
 
-//// The winning travels each side has at the root of a search, worked out once there: per
-/// (line, side), the squares of the side's latest board on the line from where a queen or
-/// bishop travels onto a target whose travel is a known local win. Past boards do not change
-/// inside a search, so a node only checks that the side still moves from that same board
-/// (`vs`) and that the piece is still on such a square (`root_terms`).
+/// Winning travels per (line, side), computed once at the search root: squares on the latest
+/// board from which a queen or bishop travels to a known local win. Past boards don't change
+/// within a search, so nodes only recheck the source board and piece (`root_terms`).
 #[derive(Clone, Copy, Default, Debug)]
 pub struct RootTravels {
     pub n: u8,
@@ -964,10 +937,8 @@ pub fn root_terms(m: &Multiverse, rt: &RootTravels) -> ([i32; 2], [i32; 2]) {
 /// Turns up to which a travel's target board makes the f-sac signature.
 pub const SIG_TURN: i32 = 6;
 
-/// The f-sac signature travels of the side to move: a queen or bishop on a board it can play
-/// travelling onto a past board of turn `SIG_TURN` at most (so creating a timeline), next to an
-/// enemy royal there, capturing or giving check (a queen always does next to the royal, a bishop
-/// on the diagonals). Ordered: onto f7/f2 first, queens before bishops.
+/// The side to move's f-sac travels: a queen or bishop onto a square next to an enemy royal on
+/// a past board up to turn `SIG_TURN`, capturing or checking. Ordered f7/f2 first, then queens.
 pub fn signature_travels(s: &State) -> Vec<FullMove> {
     let m = s.multiverse();
     let c = s.get_present().1;
@@ -1049,14 +1020,9 @@ fn note_travel(tk: Option<u64>, o: Outcome) {
     }
 }
 
-/// Work out the local outcomes the position may need, most urgent first, with at most
-/// `probe_nodes` local nodes per probe and `budget` in all, before `deadline` and until `stop`
-/// is set: the latest boards of active created timelines (for both sides) with no known proof,
-/// then the f7 travels a side can play now, then those it can line up with one move. Only
-/// targets up to turn `MAX_TARGET_TURN` with the defender's royal on its home rank. Known
-/// outcomes (this process's or the precomputed table's) are not searched again. With `all`,
-/// every f7 target of the past boards is worked out whatever its routes (for the precomputed
-/// table).
+/// Resolve the local outcomes the position may need, most urgent first, within the node
+/// budgets, `deadline` and `stop`. Known outcomes are skipped. With `all`, every f7 target is
+/// resolved regardless of routes (used to build the precomputed table).
 pub fn prepare(s: &State, budget: u64, deadline: Option<Instant>, stop: Option<&AtomicBool>, probe_nodes: u64, all: bool) -> PrepStats {
     load_table();
     let m = s.multiverse();
@@ -1065,7 +1031,8 @@ pub fn prepare(s: &State, budget: u64, deadline: Option<Instant>, stop: Option<&
     let (l0, l1) = s.get_initial_lines_range();
     let mut st = PrepStats::default();
     // (priority, line, first board's half-turn, boards, attacker, travel_key of a travel)
-    let mut jobs: Vec<(i32, i32, i32, Vec<Board>, bool, Option<u64>)> = Vec::new();
+    type Job = (i32, i32, i32, Vec<Board>, bool, Option<u64>);
+    let mut jobs: Vec<Job> = Vec::new();
     for l in amin..=amax {
         if (l < l0 || l > l1) && line_win(m, l).is_none() {
             let tl = m.timeline(l);

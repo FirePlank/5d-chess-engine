@@ -52,19 +52,19 @@ impl Vec4 {
 
     #[inline(always)]
     pub const fn l(self) -> i32 {
-        ((self.0 as i32) >> (T_BITS + Y_BITS + X_BITS)) as i32
+        (self.0 as i32) >> (T_BITS + Y_BITS + X_BITS)
     }
     #[inline(always)]
     pub const fn t(self) -> i32 {
-        (((self.0 << L_BITS) as i32) >> (L_BITS + Y_BITS + X_BITS)) as i32
+        ((self.0 << L_BITS) as i32) >> (L_BITS + Y_BITS + X_BITS)
     }
     #[inline(always)]
     pub const fn y(self) -> i32 {
-        (((self.0 << (L_BITS + T_BITS)) as i32) >> (L_BITS + T_BITS + X_BITS)) as i32
+        ((self.0 << (L_BITS + T_BITS)) as i32) >> (L_BITS + T_BITS + X_BITS)
     }
     #[inline(always)]
     pub const fn x(self) -> i32 {
-        (((self.0 << (32 - X_BITS)) as i32) >> (32 - X_BITS)) as i32
+        ((self.0 << (32 - X_BITS)) as i32) >> (32 - X_BITS)
     }
 
     #[inline(always)]

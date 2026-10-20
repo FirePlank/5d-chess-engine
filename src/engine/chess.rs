@@ -1,11 +1,6 @@
-//! Standard-chess evaluation terms of one 8x8 board: material, piece-square tables, pawn
-//! structure, piece placement, threats, king safety and mobility, with a middlegame/endgame
-//! taper. The coefficients of `chess_tab::TAB` are fitted offline (`scripts/chess/fit_chess.py`)
-//! to Peras' centipawn evaluation of single-timeline positions; the weights of `hce` only scale
-//! the groups, and fade them with the number of active timelines.
-//!
-//! Every term is a count of one colour (`Sink::add(term, count)`); the same code feeds the
-//! evaluation (`EvalSink`: table dot product) and the fit (`ktools chessfeat`: raw counts).
+//! Standard-chess evaluation terms of one 8x8 board, tapered middlegame to endgame.
+//! Coefficients in `chess_tab::TAB` are fitted offline by `scripts/chess/fit_chess.py`.
+//! Terms are per-colour counts fed to a `Sink`, shared by the evaluation and `ktools chessfeat`.
 
 use crate::core::bitboard::*;
 use crate::core::board::Board;
