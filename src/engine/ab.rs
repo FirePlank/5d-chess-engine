@@ -65,6 +65,13 @@ const ROOT_PROBE_STEPS: u32 = 2048;
 /// most actions it tries; the same for the first scan of the actions with a checking entry.
 const ROOT_SCAN_STEPS: u32 = 4096;
 const ROOT_SCAN_ACTIONS: usize = 1024;
+/// Past those counts the scan goes on, up to this many actions and hypercuboids, while a time
+/// share lasts (a mate in one needing three boards played came as the 11,575th action): a
+/// 1/`ROOT_SCAN_MORE_DIV` share of the optimum time, at most `ROOT_SCAN_MORE_CAP_MS`.
+const ROOT_SCAN_MORE_STEPS: u32 = 1 << 18;
+const ROOT_SCAN_MORE_ACTIONS: usize = 1 << 15;
+const ROOT_SCAN_MORE_DIV: u64 = 12;
+const ROOT_SCAN_MORE_CAP_MS: u64 = 100;
 const ROOT_CHECKING_SCAN_STEPS: u32 = 512;
 const ROOT_CHECKING_SCAN_ACTIONS: usize = 64;
 /// Hypercuboids to the first root action in the space without moves on optional boards (past
@@ -1358,7 +1365,7 @@ impl AlphaBeta {
     /// A checkmate in one among the legal actions of `s`, as far as the counts go
     /// (`ROOT_CHECKING_SCAN_*`, `ROOT_SCAN_*`): first the actions containing a precomputed
     /// checking entry (most mates), then all of them. Returns the first mating action found.
-    fn root_mate_scan(&mut self, s: &mut State, info: &mut HcInfo, ss: &SearchSpace, scratch: &mut OrderScratch) -> Option<MoveSeq> {
+    fn root_mate_scan(&mut self, s: &mut State, info: &mut HcInfo, ss: &SearchSpace, scratch: &mut OrderScratch, more: Duration) -> Option<MoveSeq> {
         let dim = info.dimension();
         let fba = info.first_branch_axis();
         info.materialize_branch(s);
@@ -1399,7 +1406,7 @@ impl AlphaBeta {
                 }
             }
             // A few actions (it finds the usual mates at once): the rest is for the full scan below.
-            let found = self.scan_for_mate(s, info, scratch, space, ROOT_CHECKING_SCAN_ACTIONS, ROOT_CHECKING_SCAN_STEPS);
+            let found = self.scan_for_mate(s, info, scratch, space, ROOT_CHECKING_SCAN_ACTIONS, ROOT_CHECKING_SCAN_STEPS, None);
             if found.is_some() {
                 return found;
             }
@@ -1410,14 +1417,22 @@ impl AlphaBeta {
         // Then every legal action, as far as the counts go: the checking entries are not a
         // sure necessary condition (a mate can come from a discovered check or one the detector
         // does not flag), and a position with few actions is scanned whole in a moment.
-        self.scan_for_mate(s, info, scratch, SearchSpace::from_vec(ss.hcs.clone()), ROOT_SCAN_ACTIONS, ROOT_SCAN_STEPS)
+        let found = self.scan_for_mate(s, info, scratch, SearchSpace::from_vec(ss.hcs.clone()), ROOT_SCAN_ACTIONS, ROOT_SCAN_STEPS, None);
+        if found.is_some() || interrupted() || more.is_zero() {
+            return found;
+        }
+        // The actions past the counts, as far as the time share goes.
+        self.scan_for_mate(s, info, scratch, SearchSpace::from_vec(ss.hcs.clone()), ROOT_SCAN_MORE_ACTIONS, ROOT_SCAN_MORE_STEPS, Some((ROOT_SCAN_ACTIONS, Instant::now() + more)))
     }
 
     /// The first of the first `limit` actions of `space` after which `s` is checkmate, each
     /// enumeration looking at `steps` hypercuboids at most. Two enumerations take turns, the
     /// best-first one (checks, then captures) and the natural order: with millions of actions
     /// either may reach a mate long before the other.
-    fn scan_for_mate(&mut self, s: &mut State, info: &HcInfo, scratch: &mut OrderScratch, space: SearchSpace, limit: usize, steps: u32) -> Option<MoveSeq> {
+    /// With `late` = (n, deadline): the actions after the first `n` are only tried until the
+    /// deadline.
+    #[allow(clippy::too_many_arguments)]
+    fn scan_for_mate(&mut self, s: &mut State, info: &HcInfo, scratch: &mut OrderScratch, space: SearchSpace, limit: usize, steps: u32, late: Option<(usize, Instant)>) -> Option<MoveSeq> {
         let mut natural = HcCursor::new(SearchSpace::from_vec(space.hcs.clone()), HcOrdering::Natural);
         natural.budget = steps;
         let mut best_first = BestFirstCursor::default();
@@ -1442,6 +1457,11 @@ impl AlphaBeta {
                 continue;
             };
             tried += 1;
+            if let Some((n, deadline)) = late {
+                if tried > n && tried % 16 == 0 && Instant::now() >= deadline {
+                    return None;
+                }
+            }
             let mark = Self::make(s, &act);
             let mate = self.in_check(s) && !self.has_evasion(s);
             s.unmake(mark);
@@ -2775,7 +2795,10 @@ impl AlphaBeta {
             let mut scratch = OrderScratch::default();
             self.future_mate_in_one(&mut s, &hc, &ss, &mut scratch)
                 .or_else(|| self.travel_mate(&mut s, &mut hc, &ss, &mut scratch, Some(&mut travel_checks), ROOT_TRAVEL_MATE_COMPLETIONS, Some(ROOT_PROBE_STEPS)))
-                .or_else(|| self.root_mate_scan(&mut s, &mut hc, &ss, &mut scratch))
+                .or_else(|| {
+                    let more = Duration::from_millis(plan.as_ref().map_or(ROOT_SCAN_MORE_CAP_MS, |p| (p.optimum / ROOT_SCAN_MORE_DIV).min(ROOT_SCAN_MORE_CAP_MS)));
+                    self.root_mate_scan(&mut s, &mut hc, &ss, &mut scratch, more)
+                })
         };
         // A checkmate in one the probes found is proven (each confirms the mate exactly): it is
         // played at once, with no root actions generated and no search (MultiPV wants the
@@ -3515,6 +3538,21 @@ mod tests {
     #[test]
     fn mate_in_one_by_travel_onto_the_present() {
         let s = crate::core::perft::parse_g_line("G 1 size 6x6 odd fen [r*bqk*br*/p*p*p*p*p*p*/6/6/P*P*P*P*P*P*/R*NQK*NR*:0:1:w] moves (0T1)f2f4 submit (0T1)e5e4 submit (0T2)b2b3 submit (0T2)d5d3 submit (0T3)c1b2 submit (0T3)c5c3 submit (0T4)b3c4 submit (0T4)d3e2 submit (0T5)d1c1 submit (0T5)c6(0T1)c2 submit (-1T2)e1c2 submit (-1T2)e5(0T2)e5 submit").unwrap();
+        let mut e = AlphaBeta::new();
+        let stop = AtomicBool::new(false);
+        let mut last = String::new();
+        let a = e.find_best_move(&s, &Limits { depth: Some(2), ..Default::default() }, &stop, &mut |m| last = m).unwrap();
+        let seq: MoveSeq = a.moves().iter().map(|m| m.fm).collect();
+        assert_eq!(AlphaBeta::child(&s, &seq).get_mate_type(), MateType::Checkmate, "played {:?}", seq);
+        assert!(last.contains("score mate 1 "), "{}", last);
+    }
+
+    /// Mate in one with three boards to play, the third a travel from a board ahead of the
+    /// present ((0T8)Ne1>>x(0T7)e3, Knights vs. Bishops, reported by a user): the mating action
+    /// is the 11,575th of the natural enumeration, past the root scan's first 1,024 actions (found within its time share).
+    #[test]
+    fn mate_in_one_deep_in_the_action_space() {
+        let s = crate::core::perft::parse_g_line("G 1 size 6x6 odd fen [r*bqk*br*/p*p*p*p*p*p*/6/6/P*P*P*P*P*P*/R*NQK*NR*:0:1:w] moves (0T1)f2f4 submit (0T1)e5e4 submit (0T2)b2b3 submit (0T2)a5a3 submit (0T3)b1a3 submit (0T3)b6a5 submit (0T4)c1b2 submit (0T4)a5d2 submit (0T5)d1d2 submit (0T5)c5c3 submit (0T6)b3c4 submit (0T6)e4e3 submit (0T7)d2c1 submit (0T7)c6(0T3)c2 submit (-1T4)a3c2 submit (-1T4)b6(0T5)b6 submit (-1T5)c2d4 submit (-1T5)c5d4 submit").unwrap();
         let mut e = AlphaBeta::new();
         let stop = AtomicBool::new(false);
         let mut last = String::new();
