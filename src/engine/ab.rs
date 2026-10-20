@@ -73,16 +73,10 @@ const ROOT_SCAN_MORE_ACTIONS: usize = 1 << 15;
 const ROOT_SCAN_MORE_DIV: u64 = 12;
 const ROOT_SCAN_MORE_CAP_MS: u64 = 100;
 const ROOT_SCAN_ANALYSIS_MS: u64 = 1000;
-/// Hypercuboids an escape search that ran out of its quick budget (`TRAVEL_MATE_STEPS`) may go
-/// on to at the root: a mate has no escape, so proving it takes the whole space of them.
+/// Hypercuboids a second look at an evasion search that ran out of its quick budget
+/// (`TRAVEL_MATE_STEPS`) may take at the root: a mate has no evasion, so proving it takes the
+/// whole space of them.
 const MATE_RECHECK_STEPS: u32 = 4096;
-/// Hypercuboids an escape search takes between looks at the clock once a deadline applies.
-const MATE_CHUNK_STEPS: u32 = 256;
-/// Escapes found last, replayed (checked for legality) before a new escape search is built:
-/// the replies to a scan's checks are mostly the same few actions.
-const ESCAPE_MEMO: usize = 4;
-/// Positions whose escape search result is remembered (see `MateMemo`) before it is cleared.
-const MATE_MEMO_CAP: usize = 1 << 18;
 const ROOT_CHECKING_SCAN_STEPS: u32 = 512;
 const ROOT_CHECKING_SCAN_ACTIONS: usize = 64;
 /// Hypercuboids to the first root action in the space without moves on optional boards (past
@@ -205,39 +199,10 @@ struct MateBudget {
 #[derive(Debug)]
 enum ScanEnd {
     Found(MoveSeq),
-    /// Every legal action was tried and each is proven no mate: there is no checkmate in one.
+    /// Every legal action was tried: there is no checkmate in one.
     Exhausted,
-    /// The budget ran out after `tried` distinct actions, `unresolved` of them checks whose
-    /// escape search ran out too (possible mates).
-    OutOfBudget { tried: usize, unresolved: usize },
-}
-
-/// Hashes of `u64` position keys (already uniformly distributed) as they are.
-#[derive(Default, Clone, Copy)]
-struct KeyHasher(u64);
-
-impl std::hash::Hasher for KeyHasher {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-    fn write(&mut self, _: &[u8]) {
-        unreachable!("only u64 keys")
-    }
-    fn write_u64(&mut self, k: u64) {
-        self.0 = k;
-    }
-}
-
-type KeyBuild = std::hash::BuildHasherDefault<KeyHasher>;
-
-/// What the scans for a checkmate in one at a node share: the positions they reached (an
-/// action found again, by the other enumeration or a later scan, is skipped) and the checks
-/// whose escape search ran out (tried again with larger budgets before a scan may call its
-/// space exhausted).
-#[derive(Default)]
-struct ScanMemo {
-    seen: std::collections::HashSet<u64, KeyBuild>,
-    pending: Vec<MoveSeq>,
+    /// The budget ran out after `tried` actions.
+    OutOfBudget { tried: usize },
 }
 
 /// Whether the side to move has a legal action, as far as the hypercuboids looked at show.
@@ -247,30 +212,6 @@ enum Evasion {
     No,
     /// The budget ran out before one was found.
     Unknown,
-}
-
-/// Escape search results by position (`State::hash`): proven ones, and the budget a search
-/// that ran out had (a smaller one would run out too), so the same check met again (the
-/// probes, the scans, the next iteration's interior nodes) costs a lookup.
-#[derive(Default)]
-struct MateMemo {
-    map: std::collections::HashMap<u64, (Evasion, u32), KeyBuild>,
-}
-
-impl MateMemo {
-    fn get(&self, key: u64, steps: u32) -> Option<Evasion> {
-        match self.map.get(&key) {
-            Some(&(Evasion::Unknown, tried)) if tried >= steps => Some(Evasion::Unknown),
-            Some(&(Evasion::Unknown, _)) | None => None,
-            Some(&(e, _)) => Some(e),
-        }
-    }
-    fn put(&mut self, key: u64, e: Evasion, steps: u32) {
-        if self.map.len() >= MATE_MEMO_CAP {
-            self.map.clear();
-        }
-        self.map.insert(key, (e, steps));
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -580,13 +521,9 @@ pub struct AlphaBeta {
     own_book: bool,
     /// How far the search for a checkmate in one goes (`MateVerify`).
     mate_verify: MateVerify,
-    /// Hypercuboids an escape search that ran out of `TRAVEL_MATE_STEPS` may go on to (0: none;
-    /// the root's search sets it for its probes, see `is_mate`).
+    /// Hypercuboids of the second look at an escape search that ran out (0: none; the root's
+    /// search sets it for its probes, see `is_mate`).
     mate_recheck: u32,
-    /// Escapes found last, most recent first (see `ESCAPE_MEMO`).
-    escapes: Vec<MoveSeq>,
-    /// Escape search results by position.
-    mate_memo: MateMemo,
     skill_level: u8,
     /// `SacBot` (testing): play an f-sac signature travel (`sac::signature_travels`) whenever
     /// one is legal, without a search: the opponent of the sac gauntlet.
@@ -915,8 +852,6 @@ impl AlphaBeta {
             own_book: false,
             mate_verify: MateVerify::Auto,
             mate_recheck: 0,
-            escapes: Vec::new(),
-            mate_memo: MateMemo::default(),
             skill_level: 8,
             sac_bot: false,
             helpers: Vec::new(),
@@ -1284,31 +1219,26 @@ impl AlphaBeta {
         for &(fa, dep, n, i) in &travels {
             // The travel with a few legal moves on the other boards: those the side to move
             // must play, and the boards a branching travel activates (the check does not
-            // depend on them). Every hypercuboid holding the travel: the space is split into
-            // many, and its legal completions need not lie in the first.
-            let mut space = Vec::new();
-            for hc in ss.hcs.iter().filter(|hc| {
+            // depend on them).
+            let Some(hc) = ss.hcs.iter().find(|hc| {
                 hc[fa].contains(dep) && hc[n].contains(i) && (0..dim).all(|a| a == fa || a == n || mandatory.contains(&a) || hc[a].contains(0))
-            }) {
-                let mut h: Hc = hc.clone();
-                for a in 0..dim {
-                    // (A branching travel can activate a line whose board must then be played
-                    // too, so the other playable boards keep their moves; extra branches do not.)
-                    if a != fa && a != n && a >= fba {
-                        h[a].assign_singleton(0);
-                    }
-                }
-                h[fa].assign_singleton(dep);
-                h[n].assign_singleton(i);
-                space.push(h);
-            }
-            if space.is_empty() {
+            }) else {
                 continue;
+            };
+            let mut h: Hc = hc.clone();
+            for a in 0..dim {
+                // (A branching travel can activate a line whose board must then be played
+                // too, so the other playable boards keep their moves; extra branches do not.)
+                if a != fa && a != n && a >= fba {
+                    h[a].assign_singleton(0);
+                }
             }
+            h[fa].assign_singleton(dep);
+            h[n].assign_singleton(i);
             // Best first (checks, then captures): the helper moves of a mate are usually
             // captures or blocks, which the natural order reaches last.
             let mut probe = BestFirstCursor::default();
-            self.start_actions(s, info, &mut probe, scratch, SearchSpace::from_vec(space), false);
+            self.start_actions(s, info, &mut probe, scratch, SearchSpace::from_vec(vec![h]), false);
             probe.set_budget(steps);
             for k in 0..completions {
                 if interrupted() {
@@ -1324,51 +1254,6 @@ impl AlphaBeta {
                 let mate = self.is_mate(s);
                 s.unmake(mark);
                 if mate {
-                    return Some(act);
-                }
-            }
-        }
-        None
-    }
-
-    /// A checkmate in one by a lone travel: one piece travelling (onto a board's end, or
-    /// branching off a timeline) with every other board passing, legal when the travel
-    /// plays every board the side to move must play or moves the present back so that none of
-    /// them must be played. The actions creating a timeline come after every other one, and a
-    /// travel's check is often one the check detector does not flag (a line from another
-    /// timeline onto the new board), so each such action is tried exactly: a few hundred
-    /// legality tests, the checks among them each an escape search.
-    fn lone_travel_mate(&mut self, s: &mut State, info: &HcInfo) -> Option<MoveSeq> {
-        let dim = info.dimension();
-        let fba = info.first_branch_axis();
-        let u = info.get_universe();
-        let mut tried: Vec<FullMove> = Vec::new();
-        // Branch axes share their entries: the first one stands for all.
-        for n in 0..dim.min(fba + 1) {
-            for i in u[n].iter() {
-                let m = if n < fba {
-                    let Entry::Arriving { m, .. } = info.entry(n, i) else { continue };
-                    *m
-                } else {
-                    let Some((m, _, _)) = info.branch_departure(i) else { continue };
-                    m
-                };
-                if tried.contains(&m) {
-                    continue;
-                }
-                tried.push(m);
-                let mut act = MoveSeq::new();
-                act.push(m);
-                if interrupted() {
-                    return None;
-                }
-                if !Self::is_legal(s, &act) {
-                    continue;
-                }
-                let mark = Self::make(s, &act);
-                let mate = self.is_mate(s);
-                s.unmake(mark);
-                if mate && !interrupted() {
                     return Some(act);
                 }
             }
@@ -1468,10 +1353,8 @@ impl AlphaBeta {
     }
 
     /// Whether the side to move has a legal action (each evades the check), looking at `steps`
-    /// hypercuboids at most: one search, continued (not rebuilt) in chunks of
-    /// `MATE_CHUNK_STEPS` while `deadline` (if any) has not passed. Returns the hypercuboids
-    /// it looked at too. The action found is remembered for `replay_escape`.
-    fn evasion(&mut self, s: &State, steps: u32, deadline: Option<Instant>) -> (Evasion, u32) {
+    /// hypercuboids at most.
+    fn evasion(&mut self, s: &State, steps: u32) -> Evasion {
         let mut nb = self.bufs.pop().unwrap_or_default();
         let r = {
             let NodeBufs { info, evasions, .. } = &mut *nb;
@@ -1479,96 +1362,35 @@ impl AlphaBeta {
             evasions.forget();
             evasions.order = HcOrdering::Natural;
             evasions.branch_pending = false;
-            let mut left = steps;
-            let r = loop {
-                let chunk = if deadline.is_some() { left.min(MATE_CHUNK_STEPS) } else { left };
-                evasions.budget = chunk;
-                if let Some(act) = evasions.next(info, s) {
-                    self.escapes.retain(|e| *e != act);
-                    self.escapes.insert(0, act);
-                    self.escapes.truncate(ESCAPE_MEMO);
-                    break Evasion::Yes;
-                }
-                if interrupted() {
-                    break Evasion::Unknown;
-                }
-                if evasions.budget > 0 {
-                    break Evasion::No;
-                }
-                left -= chunk;
-                if left == 0 || deadline.is_some_and(|d| Instant::now() >= d) {
-                    break Evasion::Unknown;
-                }
-            };
+            evasions.budget = steps;
+            let found = evasions.next(info, s).is_some();
+            let spent = evasions.budget == 0;
             evasions.budget = u32::MAX;
-            (r, steps - left)
+            if found {
+                Evasion::Yes
+            } else if spent || interrupted() {
+                Evasion::Unknown
+            } else {
+                Evasion::No
+            }
         };
         self.bufs.push(nb);
         r
     }
 
-    /// Whether `act` is a legal action of the side to move in `s` (any legal action: wasted
-    /// moves or not), played and taken back.
-    fn is_legal(s: &mut State, act: &MoveSeq) -> bool {
-        let player = s.get_present().1;
-        let mark = s.mark();
-        let mut ok = true;
-        for &m in act {
-            if s.get_board_ptr(m.from.l(), m.from.t(), player).is_none()
-                || s.get_timeline_end(m.from.l()) != (m.from.t(), player)
-                || s.get_board_ptr(m.to.l(), m.to.t(), player).is_none()
-                || !s.apply_move::<false>(m)
-            {
-                ok = false;
-                break;
-            }
-        }
-        let ok = ok && s.submit::<false>() && !s.royal_capturable(s.get_present().1);
-        s.unmake(mark);
-        ok
-    }
-
-    /// One of the escapes found last (`escapes`) that is legal in `s` too (moved to the front):
-    /// an exact refutation of the check, without building the escape search. The replies to
-    /// the checks of one scan are mostly the same few actions.
-    fn replay_escape(&mut self, s: &mut State) -> bool {
-        let _p = crate::misc::prof::scope(11);
-        for i in 0..self.escapes.len() {
-            if Self::is_legal(s, &self.escapes[i]) {
-                let e = self.escapes.remove(i);
-                self.escapes.insert(0, e);
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Whether the side to move is checkmated, within `steps` hypercuboids of its escape search
-    /// (past `deadline`, if any, the search stops): `No` (no escape) is a proven mate, `Yes` a
-    /// proven escape (or no check), `Unknown` a search that ran out. A check met before is
-    /// looked up (`mate_memo`), and the escapes found last are tried before a search is built.
-    fn mate_status(&mut self, s: &mut State, steps: u32, deadline: Option<Instant>) -> Evasion {
+    /// The side to move is checkmated: in check, with no evasion within `TRAVEL_MATE_STEPS`
+    /// hypercuboids. A search that ran out of those proves nothing (a mate has no evasion, so
+    /// proving it takes the whole space of them): it is taken as an evasion, unless
+    /// `mate_recheck` allows a second look with that many hypercuboids (the root's).
+    fn is_mate(&mut self, s: &State) -> bool {
         if !self.in_check(s) {
-            return Evasion::Yes;
+            return false;
         }
-        let key = s.hash();
-        if let Some(e) = self.mate_memo.get(key, steps) {
-            return e;
+        match self.evasion(s, TRAVEL_MATE_STEPS) {
+            Evasion::No => true,
+            Evasion::Yes => false,
+            Evasion::Unknown => self.mate_recheck > 0 && !interrupted() && self.evasion(s, self.mate_recheck) == Evasion::No,
         }
-        let (e, spent) = if self.replay_escape(s) { (Evasion::Yes, 0) } else { self.evasion(s, steps, deadline) };
-        // An interrupted search proves nothing about a larger budget.
-        if e != Evasion::Unknown || !interrupted() {
-            self.mate_memo.put(key, e, spent);
-        }
-        e
-    }
-
-    /// The side to move is checkmated: in check, with no escape within `TRAVEL_MATE_STEPS`
-    /// hypercuboids, or within `mate_recheck` (the root's probes) when that is more. A search
-    /// that ran out proves nothing (a mate has no escape, so proving it takes the whole space
-    /// of them): it is taken as an escape.
-    fn is_mate(&mut self, s: &mut State) -> bool {
-        self.mate_status(s, TRAVEL_MATE_STEPS.max(self.mate_recheck), None) == Evasion::No
     }
 
     /// A checkmate in one among the root actions `without_future` leaves out: a piece that
@@ -1649,10 +1471,8 @@ impl AlphaBeta {
         None
     }
 
-    /// The actions of `ss` that contain a precomputed checking entry of `info` or a travel
-    /// (branch axes share their entries: the first one stands for all): where most mates in
-    /// one are. Every travel, checking or not: the detector misses checks a travel opens from
-    /// another timeline, and the actions creating a timeline come last in the full scan.
+    /// The actions of `ss` that contain a precomputed checking entry of `info` (branch axes
+    /// share their entries: the first one stands for all): where most mates in one are.
     fn checking_space(&mut self, s: &State, info: &HcInfo, ss: &SearchSpace, scratch: &mut OrderScratch) -> SearchSpace {
         let dim = info.dimension();
         let fba = info.first_branch_axis();
@@ -1662,7 +1482,7 @@ impl AlphaBeta {
             let u = info.get_universe();
             for n in 0..dim.min(fba + 1) {
                 for i in u[n].iter() {
-                    if n >= fba || matches!(info.entry(n, i), Entry::Arriving { .. }) || det.gives_check(n, i) {
+                    if det.gives_check(n, i) {
                         checking.push((n, i));
                     }
                 }
@@ -1702,44 +1522,39 @@ impl AlphaBeta {
             return None;
         }
         let budget = MateBudget { free: INTERIOR_SCAN_ACTIONS, actions: INTERIOR_SCAN_ACTIONS, steps: INTERIOR_SCAN_STEPS, deadline: None };
-        match self.scan_for_mate(s, info, scratch, space, &budget, &mut ScanMemo::default()) {
+        match self.scan_for_mate(s, info, scratch, space, &budget) {
             ScanEnd::Found(m) => Some(m),
             _ => None,
         }
     }
 
     /// A checkmate in one among the legal actions of `s`: first the actions containing a
-    /// precomputed checking entry or a travel (most mates, found at once), then every action,
-    /// as far as `budget` goes.
+    /// precomputed checking entry (most mates, found at once), then every action, as far as
+    /// `budget` goes.
     fn root_mate_scan(&mut self, s: &mut State, info: &mut HcInfo, ss: &SearchSpace, scratch: &mut OrderScratch, budget: &MateBudget) -> ScanEnd {
         info.materialize_branch(s);
         let info: &HcInfo = info;
         let space = self.checking_space(s, info, ss, scratch);
-        // The actions the quick scan tried are not tried again, its unresolved checks are.
-        let mut memo = ScanMemo::default();
         if !space.hcs.is_empty() {
             let quick = MateBudget { free: ROOT_CHECKING_SCAN_ACTIONS, actions: ROOT_CHECKING_SCAN_ACTIONS, steps: ROOT_CHECKING_SCAN_STEPS, deadline: None };
-            if let found @ ScanEnd::Found(_) = self.scan_for_mate(s, info, scratch, space, &quick, &mut memo) {
+            if let found @ ScanEnd::Found(_) = self.scan_for_mate(s, info, scratch, space, &quick) {
                 return found;
             }
             if interrupted() {
-                return ScanEnd::OutOfBudget { tried: memo.seen.len(), unresolved: memo.pending.len() };
+                return ScanEnd::OutOfBudget { tried: 0 };
             }
         }
         // Then every legal action: the checking entries are not a sure necessary condition (a mate
         // can come from a discovered check, or from one the detector does not flag because it
         // only exists with the other boards' moves played).
-        self.scan_for_mate(s, info, scratch, SearchSpace::from_vec(ss.hcs.clone()), budget, &mut memo)
+        self.scan_for_mate(s, info, scratch, SearchSpace::from_vec(ss.hcs.clone()), budget)
     }
 
     /// The first action of `space` after which `s` is checkmate, as far as `budget` goes. Two
     /// enumerations take turns, the best-first one (checks, then captures) and the natural
-    /// order: with millions of actions either may reach a mate long before the other. An action
-    /// reaching a position `memo` has seen (the other enumeration's, or an earlier scan's) is
-    /// skipped and not counted. Either enumeration finishing its space without running out of
-    /// hypercuboids proves there is no mate among the actions whose escape search did not run
-    /// out; the others (`memo.pending`) are then searched again with ever larger budgets.
-    fn scan_for_mate(&mut self, s: &mut State, info: &HcInfo, scratch: &mut OrderScratch, space: SearchSpace, budget: &MateBudget, memo: &mut ScanMemo) -> ScanEnd {
+    /// order: with millions of actions either may reach a mate long before the other. Either
+    /// one finishing its space without running out of hypercuboids is proof that there is none.
+    fn scan_for_mate(&mut self, s: &mut State, info: &HcInfo, scratch: &mut OrderScratch, space: SearchSpace, budget: &MateBudget) -> ScanEnd {
         let mut natural = HcCursor::new(SearchSpace::from_vec(space.hcs.clone()), HcOrdering::Natural);
         natural.budget = budget.steps;
         let mut best_first = BestFirstCursor::default();
@@ -1747,91 +1562,40 @@ impl AlphaBeta {
         best_first.set_budget(Some(budget.steps));
         let (mut natural_over, mut best_over) = (false, false);
         let (mut turn, mut tried) = (0usize, 0usize);
-        let recheck = TRAVEL_MATE_STEPS.max(self.mate_recheck);
-        let out = |tried: usize, memo: &ScanMemo| ScanEnd::OutOfBudget { tried, unresolved: memo.pending.len() };
         while !(natural_over && best_over) {
-            // Past the free actions the clock is looked at before each one (and inside its
-            // escape search).
-            let deadline = budget.deadline.filter(|_| tried >= budget.free);
-            if tried >= budget.actions || deadline.is_some_and(|d| Instant::now() >= d) {
-                return out(tried, memo);
+            if tried >= budget.actions || (tried >= budget.free && tried % 16 == 0 && budget.deadline.is_some_and(|d| Instant::now() >= d)) {
+                return ScanEnd::OutOfBudget { tried };
             }
             turn += 1;
             let use_natural = (turn % 2 == 0 && !natural_over) || best_over;
             let act = if use_natural { natural.next(info, s) } else { best_first.next(info, s) };
             if interrupted() {
-                return out(tried, memo);
+                return ScanEnd::OutOfBudget { tried };
             }
             let Some(act) = act else {
                 // No action left in that enumeration: its space is done, or its hypercuboids are.
                 if use_natural {
                     if natural.budget > 0 {
-                        return self.resolve_pending(s, budget, tried, memo);
+                        return ScanEnd::Exhausted;
                     }
                     natural_over = true;
                 } else {
                     if !best_first.budget_spent() {
-                        return self.resolve_pending(s, budget, tried, memo);
+                        return ScanEnd::Exhausted;
                     }
                     best_over = true;
                 }
                 continue;
             };
-            let mark = Self::make(s, &act);
-            if !memo.seen.insert(s.hash()) {
-                s.unmake(mark);
-                continue;
-            }
             tried += 1;
-            let status = self.mate_status(s, recheck, deadline);
+            let mark = Self::make(s, &act);
+            let mate = self.is_mate(s);
             s.unmake(mark);
-            match status {
-                Evasion::No if !interrupted() => return ScanEnd::Found(act),
-                Evasion::Unknown if !interrupted() => memo.pending.push(act),
-                _ => {}
+            if mate && !interrupted() {
+                return ScanEnd::Found(act);
             }
         }
-        out(tried, memo)
-    }
-
-    /// The end of a scan whose space is exhausted: the checks whose escape search ran out
-    /// (`memo.pending`) searched again with twice the budget each round, while the scan's
-    /// deadline allows (without one, up to `budget.steps` hypercuboids each). A mate among them
-    /// is found; with none left unresolved there is no mate in the space.
-    fn resolve_pending(&mut self, s: &mut State, budget: &MateBudget, tried: usize, memo: &mut ScanMemo) -> ScanEnd {
-        let mut steps = TRAVEL_MATE_STEPS.max(self.mate_recheck);
-        let deadline = budget.deadline.filter(|_| tried >= budget.free);
-        while !memo.pending.is_empty() {
-            if steps >= budget.steps || interrupted() || deadline.is_some_and(|d| Instant::now() >= d) {
-                break;
-            }
-            steps = steps.saturating_mul(2).min(budget.steps);
-            let mut i = 0;
-            while i < memo.pending.len() {
-                let act = memo.pending[i].clone();
-                let mark = Self::make(s, &act);
-                let status = self.mate_status(s, steps, deadline);
-                s.unmake(mark);
-                if interrupted() {
-                    return ScanEnd::OutOfBudget { tried, unresolved: memo.pending.len() };
-                }
-                match status {
-                    Evasion::No => return ScanEnd::Found(act),
-                    Evasion::Yes => {
-                        memo.pending.swap_remove(i);
-                    }
-                    Evasion::Unknown => i += 1,
-                }
-                if deadline.is_some_and(|d| Instant::now() >= d) {
-                    break;
-                }
-            }
-        }
-        if memo.pending.is_empty() {
-            ScanEnd::Exhausted
-        } else {
-            ScanEnd::OutOfBudget { tried, unresolved: memo.pending.len() }
-        }
+        ScanEnd::OutOfBudget { tried }
     }
 
     /// What `MateVerify` allows the search for a checkmate in one at the root, given the move's
@@ -3192,10 +2956,8 @@ impl AlphaBeta {
 
         // Root actions (all of them, up to the root cap), ordered heuristically.
         let (mut hc, ss) = HcInfo::build_hc(root);
-        // A checkmate in one by a lone travel (every other board passing) is tried first, each
-        // such action exactly (`lone_travel_mate`). The root (like every node) leaves out moves
-        // on optional boards: a mate in one by a travel back from one of them is played unless
-        // the search finds a mate in one. Then
+        // The root (like every node) leaves out moves on optional boards: a mate in one by a
+        // travel back from one of them is played unless the search finds a mate in one. Then
         // a checkmate in one by a travel the root's actions come to late or never (one creating
         // a timeline comes after every other action, and the root takes at most ROOT_CAP), as
         // interior nodes look for it (`travel_mate`): the checking travels it tries are root
@@ -3210,10 +2972,8 @@ impl AlphaBeta {
             let mut s = root.clone();
             s.enable_undo();
             let mut scratch = OrderScratch::default();
-            hc.materialize_branch(&s);
             let probed = self
-                .lone_travel_mate(&mut s, &hc)
-                .or_else(|| self.future_mate_in_one(&mut s, &hc, &ss, &mut scratch))
+                .future_mate_in_one(&mut s, &hc, &ss, &mut scratch)
                 .or_else(|| self.travel_mate(&mut s, &mut hc, &ss, &mut scratch, Some(&mut travel_checks), ROOT_TRAVEL_MATE_COMPLETIONS, Some(ROOT_PROBE_STEPS)));
             match probed {
                 Some(m) => (Some(m), None),
@@ -3228,9 +2988,7 @@ impl AlphaBeta {
         if !plan.as_ref().is_some_and(|p| p.clock) && future_mate.is_none() && !interrupted() {
             match scan_end {
                 Some(ScanEnd::Exhausted) => info("string mate1 none (every action tried)".to_string()),
-                Some(ScanEnd::OutOfBudget { tried, unresolved }) => {
-                    info(format!("string mate1 partial ({} actions, {} unresolved, {} ms)", tried, unresolved, scan_start.elapsed().as_millis()))
-                }
+                Some(ScanEnd::OutOfBudget { tried }) => info(format!("string mate1 partial ({} actions, {} ms)", tried, scan_start.elapsed().as_millis())),
                 _ => {}
             }
         }
@@ -4026,37 +3784,6 @@ mod tests {
         let mut last = String::new();
         e.find_best_move(&s, &Limits { depth: Some(1), ..Default::default() }, &stop, &mut |m| last = m);
         assert!(last.contains("score mate 1 "), "{}", last);
-    }
-
-    /// A position with a legal escape is no checkmate under a stop guard either (an interrupted
-    /// enumeration finds no action, which read as checkmate).
-    #[test]
-    fn mate_type_ignores_a_stop() {
-        use crate::core::state::MateType;
-        let s = crate::core::perft::parse_g_line(include_str!("../../tests/data/mate_interrupt.g").trim()).unwrap();
-        let (h, ss) = HcInfo::build_hc(&s);
-        let a = h.search(&s, ss).next().unwrap();
-        let child = AlphaBeta::child(&s, &a);
-        assert_eq!(child.get_mate_type(), MateType::Softmate);
-        let stop = AtomicBool::new(true);
-        let _guard = interrupt_on(&stop, None);
-        assert_eq!(child.get_mate_type(), MateType::Softmate);
-    }
-
-    /// A mate in one by a lone travel moving the present back, (-2T18)c5(2T14)c5, with every
-    /// other board passing, missed in a game: its check comes from another timeline (the
-    /// detector does not flag it) and it creates a timeline (last in the scan's order).
-    #[test]
-    fn mate_in_one_by_a_lone_travel_on_the_clock() {
-        let mut lines = include_str!("../../tests/data/lone_travel_mate.txt").lines();
-        let mut s = crate::core::variants::position_from_uci(lines.next().unwrap()).unwrap();
-        crate::core::variants::apply_uci_moves(&mut s, lines.next().unwrap()).unwrap();
-        let stop = AtomicBool::new(false);
-        let mut e = AlphaBeta::new();
-        let limits = Limits { depth: Some(1), time_left: Some(10_000), increment: Some(100), ..Default::default() };
-        let a = e.find_best_move(&s, &limits, &stop, &mut |_| {}).unwrap();
-        let child = s.can_apply_action(&a).unwrap();
-        assert_eq!(child.get_mate_type(), crate::core::state::MateType::Checkmate, "played {}", a);
     }
 
     /// Mate in one by (-1T3)Uc2>>c3 from a board ahead of the present (Timeline Strategos).

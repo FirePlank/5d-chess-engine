@@ -1800,13 +1800,6 @@ pub fn interrupt_on(stop: &std::sync::atomic::AtomicBool, deadline: Option<std::
     InterruptGuard { prev, _stop: std::marker::PhantomData }
 }
 
-/// While the guard lives, the cursors of this thread are not interrupted (an answer that must
-/// be exact, such as `State::get_mate_type`, takes no stop for the end of the actions).
-pub fn interrupt_off() -> InterruptGuard<'static> {
-    let prev = INTERRUPT.with(|c| c.replace(None));
-    InterruptGuard { prev, _stop: std::marker::PhantomData }
-}
-
 /// Restores the previous interrupt of the thread when dropped (see `interrupt_on`).
 pub struct InterruptGuard<'a> {
     prev: Option<Interrupt>,

@@ -16,14 +16,13 @@ fn setup() {
     assert!(evalnet::embedded().is_some());
 }
 
-/// The scored info lines (one per depth) of a fixed-depth search of the position in a G line.
+/// The info lines of a fixed-depth search of the position in a G line.
 fn search(g: &str, depth: u32) -> Vec<String> {
     setup();
     let s = parse_g_line(g).unwrap();
     let mut lines = Vec::new();
     let stop = AtomicBool::new(false);
     AlphaBeta::new().find_best_move(&s, &Limits { depth: Some(depth), ..Default::default() }, &stop, &mut |l| lines.push(l));
-    lines.retain(|l| l.split_whitespace().any(|w| w == "score"));
     lines
 }
 
