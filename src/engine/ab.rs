@@ -2495,6 +2495,8 @@ impl AlphaBeta {
         let mut best = -INF;
         let mut best_action = MoveSeq::new();
         let mut searched = 0usize;
+        let mut seen_tactical = [0u64; 128];
+        let mut seen_n = 0usize;
         // Mate proof: the best reply's, and every searched reply's (see `proven`).
         let (mut best_proven, mut all_proven) = (false, true);
         let mut cap = {
@@ -2709,6 +2711,40 @@ impl AlphaBeta {
                     if searched >= cap && !checks_left && !Self::mated_cap(&mut cap, &mut cap_raised, best) {
                         skipped = true;
                         break;
+                    }
+                    // The last quarter of the cap goes to ideas not tried yet: an action whose
+                    // captures and travels were all part of searched actions is passed over.
+                    let (mut tactical, mut fresh) = (false, false);
+                    let mut keys = [0u64; 8];
+                    let mut nk = 0;
+                    for m in &act {
+                        if mover_victim(s, m).1 != NO_PIECE || m.from.tl() != m.to.tl() {
+                            tactical = true;
+                            let k = (m.from.xy() as u64) | (m.to.xy() as u64) << 8 | ((m.from.l() & 0xff) as u64) << 16 | ((m.to.l() & 0xff) as u64) << 24 | ((m.from.t() & 0xffff) as u64) << 32 | ((m.to.t() & 0xffff) as u64) << 48;
+                            if !seen_tactical[..seen_n].contains(&k) {
+                                fresh = true;
+                                if nk < keys.len() {
+                                    keys[nk] = k;
+                                    nk += 1;
+                                }
+                            }
+                        }
+                    }
+                    if tactical && !fresh && searched * 4 >= cap * 3 && searched < cap {
+                        skipped = true;
+                        if generated < 4 * cap {
+                            continue;
+                        }
+                        // Enough looked at without a new idea: the cap is reached.
+                        searched = cap;
+                        checks_left = false;
+                        break;
+                    }
+                    for &k in &keys[..nk] {
+                        if seen_n < seen_tactical.len() {
+                            seen_tactical[seen_n] = k;
+                            seen_n += 1;
+                        }
                     }
                     let mark = Self::make(s, &act);
                     let quiet = sc < 10_000;
