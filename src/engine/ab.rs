@@ -2503,7 +2503,9 @@ impl AlphaBeta {
         let (mut best_proven, mut all_proven) = (false, true);
         let mut cap = {
             let base = LMP[(depth as usize).min(LMP.len() - 1)];
-            if pv { base * PV_CAP_MULT } else { base }
+            // The replies to every root action get twice the cap: the runner-up's line is
+            // otherwise pruned hard enough to hide its mates.
+            if pv { base * PV_CAP_MULT } else if ply == 1 { base * 2 } else { base }
         };
         // When every action searched loses to a mate, the cap is raised once by its own size:
         // a mated score made of the actions the cap let in claims mates the side to move
