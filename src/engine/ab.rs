@@ -113,7 +113,7 @@ const TRAVEL_MATE_STEPS: u32 = 64;
 const TRAVEL_MATE_COMPLETIONS: usize = 8;
 /// The same at the root, which has the time for more.
 const ROOT_TRAVEL_MATE_COMPLETIONS: usize = 512;
-/// Hypercuboids the cursor may take on a capturing travel (`optional_travels`) before it gives
+/// Hypercuboids the cursor may take on a capturing travel (`travel_captures`) before it gives
 /// it up (when most of its combinations with the other boards' moves are illegal, finding one
 /// can take thousands).
 const TRAVEL_CAPTURE_STEPS: u32 = 16;
@@ -1349,55 +1349,64 @@ impl AlphaBeta {
         None
     }
 
-    /// Travels touching an optional board (left out by `without_future`) that create no
-    /// timeline, each its own hypercuboid: captures appended to `first` (searched first, best
-    /// victim first), quiet ones from an optional board inserted at its front (searched last).
-    /// Returns how many capturing hypercuboids were appended.
-    fn optional_travels(&mut self, s: &State, info: &HcInfo, ss: &SearchSpace, first: &mut SearchSpace) -> usize {
+    /// Appends to `first` a hypercuboid per valuable capturing travel touching an optional board
+    /// (which `without_future` leaves out): captures of a queen, princess, rook or checker.
+    /// Returns how many were added.
+    fn travel_captures(&mut self, s: &State, info: &HcInfo, ss: &SearchSpace, first: &mut SearchSpace) -> usize {
         let dim = info.dimension();
         let fba = info.first_branch_axis();
         let present = s.get_present();
+        let player = present.1;
         let (amin, amax) = s.get_active_range();
         let (lo, hi) = s.get_lines_range();
         let optional: Vec<usize> = (lo..=hi)
             .filter(|&l| !(l >= amin && l <= amax && s.get_timeline_end(l) == present))
             .filter_map(|l| info.line_to_axis(l))
             .collect();
-        if optional.is_empty() || fba > 64 {
+        if optional.is_empty() {
             return 0;
         }
         // (priority, departure axis, departure coordinate, arrival axis, arrival coordinate)
-        let mut captures: Vec<(i32, usize, Index, usize, Index)> = Vec::new();
-        let mut quiet: Vec<(i32, usize, Index, usize, Index)> = Vec::new();
+        let mut travels: Vec<(i32, usize, Index, usize, Index)> = Vec::new();
+        // The pieces giving check (where they stand: the boards to play), once needed.
+        let mut checkers: Option<Vec<(i32, i32)>> = None;
         let u = info.get_universe();
         for n in 0..fba {
             let wanted = optional.contains(&n);
             for i in u[n].iter() {
-                let Entry::Arriving { idx, fa, victim, .. } = info.entry(n, i) else { continue };
+                let Entry::Arriving { m, idx, fa, victim, .. } = info.entry(n, i) else { continue };
                 let fa = *fa as usize;
-                if *victim != NO_PIECE {
-                    if wanted || optional.contains(&fa) {
-                        captures.push((piece_value(*victim), fa, *idx, n, i));
-                    }
-                } else if !wanted && optional.contains(&fa) {
-                    quiet.push((0, fa, *idx, n, i));
+                if *victim == NO_PIECE || !(wanted || optional.contains(&fa)) {
+                    continue;
                 }
+                let priority = if matches!(*victim, QUEEN_W | PRINCESS_W | ROOK_W | BISHOP_W | KNIGHT_W | UNICORN_W | DRAGON_W) {
+                    piece_value(*victim)
+                } else {
+                    let c = checkers.get_or_insert_with(|| {
+                        if self.in_check(s) {
+                            CheckPosition::for_phantom(s).checks(!player, true).iter().map(|m| (m.from.l(), m.from.xy())).collect()
+                        } else {
+                            Vec::new()
+                        }
+                    });
+                    if !c.contains(&(m.to.l(), m.to.xy())) {
+                        continue;
+                    }
+                    CHECK_BONUS
+                };
+                travels.push((priority, fa, *idx, n, i));
             }
         }
-        if captures.is_empty() && quiet.is_empty() {
-            return 0;
-        }
-        // Per hypercuboid of `ss` with every branch axis able to pass: the optional axes that
-        // cannot pass (bit per axis).
-        let bases: Vec<(&Hc, u64)> = ss
-            .hcs
-            .iter()
-            .filter(|hc| (fba..dim).all(|b| hc[b].contains(0)))
-            .map(|hc| (hc, optional.iter().filter(|&&p| !hc[p].contains(0)).fold(0u64, |m, &p| m | 1 << p)))
-            .collect();
-        let lone = |&(_, fa, dep, n, i): &(i32, usize, Index, usize, Index), out: &mut Vec<Hc>| {
-            for &(hc, stuck) in &bases {
-                if stuck & !(1 << fa | 1 << n) != 0 || !hc[fa].contains(dep) || !hc[n].contains(i) {
+        // The last hypercuboid comes first.
+        travels.sort_by_key(|t| t.0);
+        let k = first.hcs.len();
+        for &(_, fa, dep, n, i) in &travels {
+            for hc in &ss.hcs {
+                if !hc[fa].contains(dep)
+                    || !hc[n].contains(i)
+                    || optional.iter().any(|&p| p != fa && p != n && !hc[p].contains(0))
+                    || (fba..dim).any(|b| !hc[b].contains(0))
+                {
                     continue;
                 }
                 let mut h: Hc = hc.clone();
@@ -1409,25 +1418,14 @@ impl AlphaBeta {
                 }
                 h[fa].assign_singleton(dep);
                 h[n].assign_singleton(i);
-                out.push(h);
+                first.hcs.push(h);
             }
-        };
-        let mut front: Vec<Hc> = Vec::new();
-        for t in &quiet {
-            lone(t, &mut front);
-        }
-        first.hcs.splice(0..0, front);
-        // The last hypercuboid comes first.
-        captures.sort_by_key(|t| t.0);
-        let k = first.hcs.len();
-        for t in &captures {
-            lone(t, &mut first.hcs);
         }
         first.hcs.len() - k
     }
 
     /// Whether the action `cursor` just found is a capturing travel's (its class is one of the
-    /// first `travels`, see `optional_travels`): a travel is searched in one action, so the
+    /// first `travels`, see `travel_captures`): a travel is searched in one action, so the
     /// rest of its class is dropped.
     fn travel_class(cursor: &mut BestFirstCursor, travels: usize) -> bool {
         let class = cursor.last_class();
@@ -2635,7 +2633,7 @@ impl AlphaBeta {
         }
         let mut first = Self::without_future(s, &nb.info, &ss);
         // Capturing travels first: the first classes of the cursor (see `travel_class`).
-        let travels = self.optional_travels(s, &nb.info, &ss, &mut first);
+        let travels = self.travel_captures(s, &nb.info, &ss, &mut first);
         let mut full = Some(ss);
         {
             let NodeBufs { info, cursor, order, .. } = &mut *nb;
@@ -3390,7 +3388,7 @@ impl AlphaBeta {
         }
         let mut agen = BestFirstCursor::default();
         let mut first = Self::without_future(root, &hc, &ss);
-        let travels = self.optional_travels(root, &hc, &ss, &mut first);
+        let travels = self.travel_captures(root, &hc, &ss, &mut first);
         let mut travel_acts: Vec<MoveSeq> = Vec::new();
         self.start_actions(root, &hc, &mut agen, &mut OrderScratch::default(), first, false);
         agen.limit_classes(travels as i32, TRAVEL_CAPTURE_STEPS);
