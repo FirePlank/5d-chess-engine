@@ -62,6 +62,9 @@ const LMR_MIN_INDEX: usize = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
 const ROOT_LMR_MIN_INDEX: usize = 6;
+/// Root actions searched with an open window as PV nodes, as MultiPV does: a pruned
+/// zero-window search of the runner-up hides mates that need a quiet move deep in the line.
+const ROOT_PV_LINES: usize = 2;
 /// The most time (ms) the sac table's probes before the search may take whatever the time plan:
 /// a share of the optimum, which for an unbounded analysis (a day's `movetime`) is hours,
 /// while depth 1 should come at once.
@@ -3642,6 +3645,8 @@ impl AlphaBeta {
                         let mark = Self::make(&mut work, act);
                         let v = if k == 0 {
                             -self.negamax(&mut work, depth - 1, 1, -beta, -alpha, true)
+                        } else if k < ROOT_PV_LINES {
+                            -self.negamax(&mut work, depth - 1, 1, -INF, INF, true)
                         } else {
                             // Late root actions are reduced, never pruned.
                             let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(self.in_check(&work)) } else { None };
