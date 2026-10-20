@@ -258,3 +258,14 @@ fn transposed_move_orders_find_the_same_book_position() {
     let t0_start = book.probe(&position("Standard - Turn Zero", "")).unwrap();
     assert!(std_start.is_none_or(|m| m.len() != t0_start.len() || m.iter().zip(t0_start).any(|(x, y)| x.lan != y.lan || x.play != y.play)));
 }
+
+#[test]
+fn moves_that_transpose_into_the_book_are_listed() {
+    // 1. d4 Nf6 2. Nf3 reaches 1. Nf3 Nf6 2. d4 by another move order: known theory.
+    let s = position("Standard - Turn Zero", "(0T1)d2d4 submit (0T1)g8f6 submit");
+    let b = Book::theory();
+    let t = b.transpositions(&s);
+    assert!(t.iter().any(|m| m.lan == "(0T2)g1f3" && !m.play && m.weight == 0), "{:?}", t.iter().map(|m| &m.lan).collect::<Vec<_>>());
+    // Its own book moves are not repeated.
+    assert!(!t.iter().any(|m| m.lan == "(0T2)c1f4"));
+}

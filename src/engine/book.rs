@@ -41,6 +41,8 @@ pub struct Book {
     positions: HashMap<u64, Vec<BookMove>>,
     /// Opening names (`N` lines): "Family: Variation: Line", by the position they are reached at.
     names: HashMap<u64, String>,
+    /// Every distinct action of the book (LAN, 5dpgn), for `transpositions`.
+    all_actions: OnceLock<Vec<(String, String)>>,
 }
 
 impl Book {
@@ -123,6 +125,39 @@ impl Book {
     /// All book actions (play and know) of `s`, if it is a book position.
     pub fn probe(&self, s: &State) -> Option<&[BookMove]> {
         self.positions.get(&s.frontier_hash()).map(|v| v.as_slice()).filter(|v| !v.is_empty())
+    }
+
+    /// Actions of `s` that are not book actions of it but lead to a book position (a move order
+    /// that transposes into known theory, e.g. 1. d4 Nf6 2. Nf3): known theory, never played.
+    pub fn transpositions(&self, s: &State) -> Vec<BookMove> {
+        let all = self.all_actions.get_or_init(|| {
+            let mut seen = std::collections::HashSet::new();
+            let mut v = Vec::new();
+            for m in self.positions.values().flatten() {
+                if seen.insert(m.lan.clone()) {
+                    v.push((m.lan.clone(), m.pgn.clone()));
+                }
+            }
+            v
+        });
+        let own = self.positions.get(&s.frontier_hash());
+        // Only the actions of the turn being played can apply (their LAN starts with it).
+        let (t, c) = s.get_present();
+        let prefix = format!("(0T{})", t);
+        let _ = c;
+        let mut out = Vec::new();
+        for (lan, pgn) in all.iter() {
+            if !lan.starts_with(&prefix) || own.is_some_and(|o| o.iter().any(|m| &m.lan == lan)) {
+                continue;
+            }
+            let Ok(moves) = crate::web::tree::parse_lan_moves(lan) else { continue };
+            let Ok(child) = crate::web::tree::play_action(s, &moves) else { continue };
+            let h = child.frontier_hash();
+            if self.positions.get(&h).is_some_and(|v| !v.is_empty()) || self.names.contains_key(&h) {
+                out.push(BookMove { action: Action::from_vector(&moves, s), lan: lan.clone(), pgn: pgn.clone(), play: false, weight: 0 });
+            }
+        }
+        out
     }
 
     /// A `play` action of `s`, chosen with probability proportional to its weight using
