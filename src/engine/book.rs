@@ -22,6 +22,9 @@ use crate::core::state::State;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+/// Weight of an action that transposes into a position with played book actions.
+pub const TRANSPOSE_WEIGHT: u32 = 3;
+
 /// One candidate action of a book position.
 #[derive(Clone, Debug)]
 pub struct BookMove {
@@ -128,7 +131,8 @@ impl Book {
     }
 
     /// Actions of `s` that are not book actions of it but lead to a book position (a move order
-    /// that transposes into known theory, e.g. 1. d4 Nf6 2. Nf3): known theory, never played.
+    /// that transposes into known theory, e.g. 1. d4 Nf6 2. Nf3). Played (at `TRANSPOSE_WEIGHT`)
+    /// when the position they reach has played actions, otherwise only known.
     pub fn transpositions(&self, s: &State) -> Vec<BookMove> {
         let all = self.all_actions.get_or_init(|| {
             let mut seen = std::collections::HashSet::new();
@@ -154,7 +158,14 @@ impl Book {
             let Ok(child) = crate::web::tree::play_action(s, &moves) else { continue };
             let h = child.frontier_hash();
             if self.positions.get(&h).is_some_and(|v| !v.is_empty()) || self.names.contains_key(&h) {
-                out.push(BookMove { action: Action::from_vector(&moves, s), lan: lan.clone(), pgn: pgn.clone(), play: false, weight: 0 });
+                let play = self.positions.get(&h).is_some_and(|v| v.iter().any(|m| m.play));
+                out.push(BookMove {
+                    action: Action::from_vector(&moves, s),
+                    lan: lan.clone(),
+                    pgn: pgn.clone(),
+                    play,
+                    weight: if play { TRANSPOSE_WEIGHT } else { 0 },
+                });
             }
         }
         out
@@ -162,14 +173,15 @@ impl Book {
 
     /// A `play` action of `s`, chosen with probability proportional to its weight using
     /// `seed`; `None` when `s` has none.
-    pub fn choose(&self, s: &State, seed: u64) -> Option<&BookMove> {
-        let moves = self.probe(s)?;
+    pub fn choose(&self, s: &State, seed: u64) -> Option<BookMove> {
+        let mut moves: Vec<BookMove> = self.probe(s).map(|v| v.to_vec()).unwrap_or_default();
+        moves.extend(self.transpositions(s));
         let total: u64 = moves.iter().filter(|m| m.play).map(|m| m.weight as u64).sum();
         if total == 0 {
             return None;
         }
         let mut r = mix(seed ^ s.hash()) % total;
-        for m in moves.iter().filter(|m| m.play) {
+        for m in moves.into_iter().filter(|m| m.play) {
             if r < m.weight as u64 {
                 return Some(m);
             }
@@ -180,7 +192,8 @@ impl Book {
 
     /// Total `play` weight of `s` (0 if none), for reporting.
     pub fn play_weight(&self, s: &State) -> u32 {
-        self.probe(s).map_or(0, |v| v.iter().filter(|m| m.play).map(|m| m.weight).sum())
+        let own: u32 = self.probe(s).map_or(0, |v| v.iter().filter(|m| m.play).map(|m| m.weight).sum());
+        own + self.transpositions(s).iter().filter(|m| m.play).map(|m| m.weight).sum::<u32>()
     }
 }
 

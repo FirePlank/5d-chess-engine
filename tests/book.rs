@@ -260,12 +260,18 @@ fn transposed_move_orders_find_the_same_book_position() {
 }
 
 #[test]
-fn moves_that_transpose_into_the_book_are_listed() {
-    // 1. d4 Nf6 2. Nf3 reaches 1. Nf3 Nf6 2. d4 by another move order: known theory.
+fn moves_that_transpose_into_the_book_are_listed_and_played() {
+    // 1. d4 Nf6 2. Nf3 reaches 1. Nf3 Nf6 2. d4 by another move order, a position with played
+    // moves: the transposition is listed and played too (at a low weight).
     let s = position("Standard - Turn Zero", "(0T1)d2d4 submit (0T1)g8f6 submit");
     let b = Book::theory();
     let t = b.transpositions(&s);
-    assert!(t.iter().any(|m| m.lan == "(0T2)g1f3" && !m.play && m.weight == 0), "{:?}", t.iter().map(|m| &m.lan).collect::<Vec<_>>());
+    assert!(t.iter().any(|m| m.lan == "(0T2)g1f3" && m.play && m.weight == kairos::engine::book::TRANSPOSE_WEIGHT), "{:?}", t.iter().map(|m| &m.lan).collect::<Vec<_>>());
     // Its own book moves are not repeated.
     assert!(!t.iter().any(|m| m.lan == "(0T2)c1f4"));
+    let mut seen = std::collections::HashSet::new();
+    for seed in 0..500 {
+        seen.insert(b.choose(&s, seed).unwrap().lan);
+    }
+    assert!(seen.contains("(0T2)g1f3") && seen.contains("(0T2)c1f4"), "{:?}", seen);
 }
