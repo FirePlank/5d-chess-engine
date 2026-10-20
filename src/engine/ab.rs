@@ -102,6 +102,9 @@ const ROOT_FUTURE_MATE_PROBE: usize = 16;
 /// Root actions with a move on an optional board added when every root action loses to a
 /// mate (interior nodes take up to their action cap).
 const ROOT_WIDEN_CAP: usize = 256;
+/// Actions with a move on an optional board added to every root (best first): quiet moves on
+/// boards ahead of the present can start a mate or meet a threat.
+const ROOT_OPTIONAL_CAP: usize = 64;
 /// Interior nodes up to this ply (the root is 0) look for a checkmate in one by a checking
 /// travel the node would search late or never (`travel_mate`).
 const TRAVEL_MATE_PLY: usize = 2;
@@ -2044,7 +2047,7 @@ impl AlphaBeta {
     /// Root actions with a move on a board the side to move need not play (the ones
     /// `without_future` leaves out) that `roots` lacks: at most `ROOT_WIDEN_CAP`, in the
     /// cursor's order (checks, then captures), travels first.
-    fn root_widen(&self, root: &State, roots: &[(i32, MoveSeq)]) -> Vec<(i32, MoveSeq)> {
+    fn root_widen(&self, root: &State, roots: &[(i32, MoveSeq)], cap: usize) -> Vec<(i32, MoveSeq)> {
         let (hc, ss) = HcInfo::build_hc(root);
         if !Self::trims_future(root, &hc, &ss) {
             return Vec::new();
@@ -2052,7 +2055,7 @@ impl AlphaBeta {
         let mut cursor = BestFirstCursor::default();
         self.start_actions(root, &hc, &mut cursor, &mut OrderScratch::default(), Self::future_only(root, &hc, &ss), false);
         let mut out: Vec<(i32, MoveSeq)> = Vec::new();
-        while out.len() < ROOT_WIDEN_CAP {
+        while out.len() < cap {
             let Some(a) = cursor.next(&hc, root) else { break };
             if !roots.iter().any(|r| r.1 == a) {
                 out.push((self.action_score(root, &a, 0), a));
@@ -3449,6 +3452,8 @@ impl AlphaBeta {
                 roots.push((self.action_score(root, &a, 0), a));
             }
         }
+        let extra = self.root_widen(root, &roots, ROOT_OPTIONAL_CAP);
+        roots.extend(extra);
         roots.sort_by(|a, b| b.0.cmp(&a.0));
         // The probe's mate is a root action, searched first: every depth's line (and a
         // resumed search) has it.
@@ -3704,7 +3709,7 @@ impl AlphaBeta {
             // need not play are added (once, searched first) and the depth is searched again.
             if !self.aborted && !root_widened && iter_best.as_ref().is_some_and(|b| b.0 < -MATE + 1000) {
                 root_widened = true;
-                let extra = self.root_widen(root, &roots);
+                let extra = self.root_widen(root, &roots, ROOT_WIDEN_CAP);
                 if !extra.is_empty() {
                     roots.splice(0..0, extra);
                     continue;
