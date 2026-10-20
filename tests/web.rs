@@ -172,7 +172,8 @@ fn api_search_resumes_a_deeper_search() {
     let pos = r#""position":"startpos moves (0T1)e2e4 submit (0T1)e7e5 submit""#;
     let depths = |api: &mut Api, req: &str| {
         let mut d = Vec::new();
-        let r = Json::parse(&api.call(req, &mut |l| d.push(l.split_whitespace().nth(1).unwrap().parse::<i32>().unwrap()))).unwrap();
+        // Depth lines only (an analysis also reports how far its search for a mate in one went).
+        let r = Json::parse(&api.call(req, &mut |l| d.extend(l.split_whitespace().skip_while(|w| *w != "depth").nth(1).map(|n| n.parse::<i32>().unwrap())))).unwrap();
         assert_eq!(r.get("ok").bool(), Some(true), "{}", r);
         d
     };
