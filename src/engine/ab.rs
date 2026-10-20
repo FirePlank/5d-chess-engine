@@ -10,17 +10,17 @@ use super::hce;
 use super::time::TimePlan;
 use super::{Limits, OptionValue};
 use crate::core::action::{Action, FullMove, MoveSeq};
-use crate::core::bitboard::{marked_pos, pmask};
+use crate::core::bitboard::{marked_pos, pmask, Bitboard};
 use crate::core::board::Board;
 use crate::core::check_position::{BoardOverlay, CheckBuf, CheckKind, CheckPosition, SpReach};
 use crate::core::hypercuboid::{has_physical_check, interrupt_on, interrupted, plays_wasted_move, BestFirstCursor, Entry, HcCursor, HcInfo, NeedBranch};
-use crate::misc::geometry::Hc;
+use crate::misc::geometry::{Hc, Point, Slice};
 use crate::core::multiverse::{active_range_for, next_turn};
 use crate::core::piece::*;
 use crate::core::state::promotion_rank;
 use crate::core::state::{Mark, State};
 use crate::misc::geometry::SearchSpace;
-use crate::misc::integer_set::Index;
+use crate::misc::integer_set::{Index, IntegerSet};
 use crate::misc::ordering::{AxisOrders, HcOrdering};
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -28,6 +28,20 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub const MATE: i32 = 30000;
+
+/// Diagnostics (`ktools matescan` with MREGION_VERIFY): every region `no_mate_region` returns
+/// is checked on up to `REGION_VERIFY_POINTS` of its legal actions, its fact tested directly.
+pub static REGION_VERIFY: AtomicBool = AtomicBool::new(false);
+/// Regions returned, actions checked, actions breaking their region's fact.
+pub static REGION_STATS: [AtomicU64; 3] = [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+const REGION_VERIFY_POINTS: usize = 2000;
+
+/// The squares on which two boards differ (any piece, color or unmoved flag).
+fn board_diff(a: &Board, b: &Board) -> Bitboard {
+    a.raw_bbs().iter().zip(b.raw_bbs().iter()).fold(0, |d, (x, y)| d | (x ^ y))
+}
+
+
 pub const INF: i32 = 32000;
 const MAX_PLY: usize = 128;
 
@@ -83,6 +97,9 @@ const MATE_CHUNK_STEPS: u32 = 256;
 const ESCAPE_MEMO: usize = 4;
 /// Positions whose escape search result is remembered (see `MateMemo`) before it is cleared.
 const MATE_MEMO_CAP: usize = 1 << 18;
+/// A root action's region (`no_mate_region`) is looked for only when at least two of its axes
+/// play a physical move with this many alternatives (a smaller region costs more than it saves).
+const REGION_MIN_MOVES: usize = 4;
 const ROOT_CHECKING_SCAN_STEPS: u32 = 512;
 const ROOT_CHECKING_SCAN_ACTIONS: usize = 64;
 /// Hypercuboids to the first root action in the space without moves on optional boards (past
@@ -1784,7 +1801,23 @@ impl AlphaBeta {
             }
             tried += 1;
             let status = self.mate_status(s, recheck, deadline);
+            // What makes the action no mate, to rule out the region around it: no check, or a
+            // legal escape (the one just found or replayed, when it still is).
+            let refuted = match status {
+                Evasion::Yes if !self.in_check(s) => Some(None),
+                Evasion::Yes => self.escapes.iter().position(|e| Self::is_legal(s, e)).map(|i| Some(self.escapes[i].clone())),
+                _ => None,
+            };
             s.unmake(mark);
+            // Past the free actions only: the free part is bounded by counts, and the time the
+            // region takes is paid back by the actions it skips only within a time share.
+            if let Some(escape) = refuted.filter(|_| deadline.is_some()) {
+                let pt = if use_natural { natural.last_point() } else { best_first.last_point() }.clone();
+                if let Some(region) = self.no_mate_region(s, info, &pt, &act, escape.as_ref()) {
+                    natural.exclude(region.clone());
+                    best_first.exclude(region);
+                }
+            }
             match status {
                 Evasion::No if !interrupted() => return ScanEnd::Found(act),
                 Evasion::Unknown if !interrupted() => memo.pending.push(act),
@@ -1792,6 +1825,239 @@ impl AlphaBeta {
             }
         }
         out(tried, memo)
+    }
+
+    /// A region of root actions around the root action `act` (point `pt` of `info`'s space)
+    /// in which no action is a checkmate, when `act` is none: it gives no check (`escape`
+    /// None) or the escape `escape` is legal after it. Returned only when it holds more than
+    /// `act`; every axis but some playing a physical move is fixed to `act`'s coordinate.
+    ///
+    /// For each axis on which `act` plays a physical move, the physical moves that keep the
+    /// fact (no check / `escape` legal) when that axis alone is changed are found by playing
+    /// them. The region is the product of those sets over axes chosen so that no two can
+    /// interact: changing a physical move changes only its timeline's new board (and the
+    /// boards played on it next, or its phantom copy), and every check and every move's
+    /// legality is decided by one ray or one jump between two squares. A failure in the product
+    /// would be witnessed by a ray or jump touching changed squares of at least two axes (one
+    /// axis alone keeps the fact by construction): a jump touches one changed square, a ray from
+    /// a royal (or from the source of an escape move) lies in one time slice when it touches two
+    /// squares of the same half-turn (rays keep a board's color and step whole turns), so two
+    /// axes interact only when, seen from some royal or escape source in the slice of the new
+    /// boards or the next one, a changed square of each lies in the same direction. Those pairs
+    /// are kept apart (the axis with fewer moves left fixed).
+    fn no_mate_region(&mut self, s: &mut State, info: &HcInfo, pt: &Point, act: &MoveSeq, escape: Option<&MoveSeq>) -> Option<Slice> {
+        let fba = info.first_branch_axis();
+        if fba > 64 {
+            return None;
+        }
+        // Worth the cost (a few dozen positions played) only when the region can be large:
+        // at least two axes playing a physical move with a few alternatives each.
+        let u = info.get_universe();
+        let wide = (0..fba)
+            .filter(|&y| {
+                matches!(info.entry(y, pt[y]), Entry::Physical { .. })
+                    && u[y].iter().filter(|&e| matches!(info.entry(y, e), Entry::Physical { .. })).count() >= REGION_MIN_MOVES
+            })
+            .count();
+        if wide < 2 {
+            return None;
+        }
+        // A castling escape's legality also depends on the squares its king passes (origins this
+        // does not track): an escape with a move along a rank of two or more squares is left
+        // alone.
+        if escape.is_some_and(|d| d.iter().any(|m| m.from.tl() == m.to.tl() && m.from.y() == m.to.y() && (m.to.x() - m.from.x()).abs() > 1)) {
+            return None;
+        }
+        let player = s.get_present().1;
+        // (axis, the moves that keep the fact, squares where they change the board, line,
+        // half-turn of the board the move adds)
+        let mut cands: Vec<(usize, IntegerSet, Bitboard, i32, i32)> = Vec::new();
+        for y in 0..fba {
+            let Entry::Physical { m: ma, b: ba, .. } = info.entry(y, pt[y]) else { continue };
+            let (ma, ba) = (*ma, *ba);
+            // The action with this move replaced in place: a later move may travel onto the
+            // board it leaves (a branch only once it is played).
+            let Some(at) = act.iter().position(|&m| m == ma) else { continue };
+            let mark = s.mark();
+            for &m in &act[..at] {
+                s.apply_move::<true>(m);
+            }
+            let others = s.mark();
+            let mut set = IntegerSet::singleton(pt[y]);
+            let mut diff: Bitboard = 0;
+            for e in u[y].iter() {
+                let Entry::Physical { m, b, victim, .. } = info.entry(y, e) else { continue };
+                if e == pt[y] || *victim == KING_W || *victim == ROYAL_QUEEN_W {
+                    continue;
+                }
+                let (m, b) = (*m, *b);
+                s.apply_move::<true>(m);
+                for &m in &act[at + 1..] {
+                    s.apply_move::<true>(m);
+                }
+                s.submit::<true>();
+                let holds = match escape {
+                    None => !s.has_phantom_check(),
+                    Some(d) => Self::is_legal(s, d),
+                };
+                s.unmake(others);
+                if holds {
+                    set.insert(e);
+                    diff |= board_diff(&b, &ba);
+                }
+            }
+            s.unmake(mark);
+            if set.len() > 1 {
+                cands.push((y, set, diff, ma.from.l(), 2 * ma.from.t() + player as i32 + 1));
+            }
+        }
+        if cands.is_empty() {
+            return None;
+        }
+        // Two candidates interact when a changed square of each lies on one ray that also holds
+        // an origin (a royal of the side to move after `act` and `escape`, or a source of an
+        // escape move) beyond them. Rays step -1, 0 or 1 along x, y, l and t (whole turns,
+        // so a ray keeps its boards' color); candidates are on different lines, so two of their
+        // squares share a ray only when every nonzero offset is the line distance k. Each
+        // candidate's changed squares sit on its new board (half-turn v) and on the board
+        // played after it, or its phantom copy (v + 1).
+        let mark = s.mark();
+        for &m in act {
+            s.apply_move::<true>(m);
+        }
+        s.submit::<true>();
+        if let Some(d) = escape {
+            for &m in d {
+                s.apply_move::<true>(m);
+            }
+            s.submit::<true>();
+        }
+        let defender = !player;
+        let (size_x, size_y) = s.get_board_size();
+        let (lo, hi) = s.get_lines_range();
+        let sources: Vec<(i32, i32, i32, i32)> = escape
+            .map(|d| d.iter().map(|m| (m.from.x(), m.from.y(), m.from.l(), 2 * m.from.t() + defender as i32)).collect())
+            .unwrap_or_default();
+        // Whether the board at (l, w) exists (or is the phantom copy of a line's last board),
+        // and whether an origin stands on (x, y) of it.
+        let origin_at = |s: &State, x: i32, y: i32, l: i32, w: i32| -> Option<bool> {
+            if l < lo || l > hi {
+                return None;
+            }
+            let b = s.get_board_ptr(l, w >> 1, w & 1 != 0).or_else(|| {
+                let p = w - 1;
+                let end = s.get_timeline_end(l);
+                (2 * end.0 + end.1 as i32 == p).then(|| s.get_board_ptr(l, p >> 1, p & 1 != 0)).flatten()
+            })?;
+            let royal = b.royal() & if defender { b.black() } else { b.white() } & !b.wall() & pmask(y * 8 + x) != 0;
+            Some(royal || sources.contains(&(x, y, l, w)))
+        };
+        // An origin on the line through (x, y, l, w) with step (sx, sy, sl, st) (st in whole
+        // turns), past the point (walking `dir` = -1 from it backwards, or +1 forwards).
+        let origin_on = |s: &State, (x, y, l, w): (i32, i32, i32, i32), (sx, sy, sl, st): (i32, i32, i32, i32), dir: i32| -> bool {
+            let (mut x, mut y, mut l, mut w) = (x, y, l, w);
+            loop {
+                x += dir * sx;
+                y += dir * sy;
+                l += dir * sl;
+                w += dir * 2 * st;
+                if x < 0 || y < 0 || x >= size_x || y >= size_y {
+                    return false;
+                }
+                match origin_at(s, x, y, l, w) {
+                    None => return false,
+                    Some(true) => return true,
+                    Some(false) => {}
+                }
+            }
+        };
+        let mut conflicts = vec![0u64; cands.len()];
+        for i in 0..cands.len() {
+            for j in i + 1..cands.len() {
+                let (ci, cj) = (&cands[i], &cands[j]);
+                let k = (cj.3 - ci.3).abs();
+                let sl = (cj.3 - ci.3).signum();
+                let mut hit = false;
+                'pairs: for wi in [ci.4, ci.4 + 1] {
+                    for wj in [cj.4, cj.4 + 1] {
+                        if (wj - wi) % 2 != 0 {
+                            continue;
+                        }
+                        let dt = (wj - wi) / 2;
+                        if dt != 0 && dt.abs() != k {
+                            continue;
+                        }
+                        let st = dt.signum();
+                        for p in marked_pos(ci.2) {
+                            let (x1, y1) = (p & 7, p >> 3);
+                            for sx in -1..=1 {
+                                for sy in -1..=1 {
+                                    let (x2, y2) = (x1 + sx * k, y1 + sy * k);
+                                    if x2 < 0 || y2 < 0 || x2 >= 8 || y2 >= 8 || cj.2 & pmask(y2 * 8 + x2) == 0 {
+                                        continue;
+                                    }
+                                    let step = (sx, sy, sl, st);
+                                    if origin_on(s, (x1, y1, ci.3, wi), step, -1) || origin_on(s, (x2, y2, cj.3, wj), step, 1) {
+                                        hit = true;
+                                        break 'pairs;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if hit {
+                    conflicts[i] |= 1 << j;
+                    conflicts[j] |= 1 << i;
+                }
+            }
+        }
+        s.unmake(mark);
+        let mut order: Vec<usize> = (0..cands.len()).collect();
+        order.sort_by_key(|&j| std::cmp::Reverse(cands[j].1.len()));
+        let mut chosen = 0u64;
+        for j in order {
+            if conflicts[j] & chosen == 0 {
+                chosen |= 1 << j;
+            }
+        }
+        if chosen == 0 {
+            return None;
+        }
+        let mut region = Slice::new();
+        for (n, &c) in pt.iter().enumerate() {
+            region.fix_axis(n, IntegerSet::singleton(c));
+        }
+        for (j, c) in cands.into_iter().enumerate() {
+            if chosen >> j & 1 != 0 {
+                region.fix_axis(c.0, c.1);
+            }
+        }
+        if REGION_VERIFY.load(Ordering::Relaxed) {
+            Self::verify_region(s, info, &region, escape);
+        }
+        Some(region)
+    }
+
+    /// Diagnostics: the fact of `region` (see `no_mate_region`) tested on its legal actions.
+    fn verify_region(s: &mut State, info: &HcInfo, region: &Slice, escape: Option<&MoveSeq>) {
+        let hc = Hc::new(region.fixed.iter().map(|(_, c)| c.clone()).collect());
+        let mut cursor = HcCursor::new(SearchSpace::from_vec(vec![hc]), HcOrdering::Natural);
+        REGION_STATS[0].fetch_add(1, Ordering::Relaxed);
+        for _ in 0..REGION_VERIFY_POINTS {
+            let Some(a) = cursor.next(info, s) else { break };
+            let mark = Self::make(s, &a);
+            let holds = match escape {
+                None => !s.has_phantom_check(),
+                Some(d) => Self::is_legal(s, d),
+            };
+            s.unmake(mark);
+            REGION_STATS[1].fetch_add(1, Ordering::Relaxed);
+            if !holds {
+                REGION_STATS[2].fetch_add(1, Ordering::Relaxed);
+                eprintln!("region broken: {} ({})", Action::from_moveseq(&a, s), if escape.is_some() { "escape" } else { "no check" });
+            }
+        }
     }
 
     /// The end of a scan whose space is exhausted: the checks whose escape search ran out
