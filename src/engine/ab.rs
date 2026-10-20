@@ -2897,12 +2897,10 @@ impl AlphaBeta {
     }
 
     fn on_cutoff(&mut self, s: &State, act: &MoveSeq, depth: i32, ply: usize) {
-        let tactical = Self::is_tactical(s, act);
+        if Self::is_tactical(s, act) {
+            return;
+        }
         for m in act {
-            // A tactical action still rewards its quiet semimoves (killers it never takes).
-            if tactical && mover_victim(s, m).1 != NO_PIECE {
-                continue;
-            }
             let h = &mut self.history[history_index(s, m)];
             *h += depth * depth;
             if *h > 20000 {
@@ -2911,7 +2909,7 @@ impl AlphaBeta {
                 }
             }
         }
-        if !tactical && ply <= MAX_PLY && self.killers[ply][0].as_ref() != Some(act) {
+        if ply <= MAX_PLY && self.killers[ply][0].as_ref() != Some(act) {
             self.killers[ply][1] = self.killers[ply][0].take();
             self.killers[ply][0] = Some(act.clone());
         }
