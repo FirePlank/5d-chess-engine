@@ -2465,7 +2465,7 @@ impl AlphaBeta {
     fn sac_child(&self, s: &State, act: &MoveSeq, depth: i32, ply: usize) -> (i32, Option<bool>) {
         let _ = ply;
         if depth > NMP_MIN_DEPTH && act.iter().any(|m| super::sac::is_sac_travel(s, m)) {
-            let ext = if depth >= 6 && self.sac_line.is_none() { SAC_ROOT_EXT } else { 0 };
+            let ext = if depth >= 4 && self.sac_line.is_none() { SAC_ROOT_EXT } else { 0 };
             (ext, Some(!s.player()))
         } else {
             (0, self.sac_line)
