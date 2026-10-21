@@ -1,1 +1,1 @@
-{"name": "pilot2", "shards": 20, "nodes": 2000000, "max_seconds": 1500}
+{"name": "hard105k", "shards": 40, "nodes": 2000000, "max_seconds": 19800}
