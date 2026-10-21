@@ -145,12 +145,6 @@ const SAC_HINT_BONUS: i32 = 25_000;
 /// it beats beta by RFP_MARGIN per ply.
 const RFP_DEPTH: i32 = 2;
 const RFP_MARGIN: i32 = 250;
-/// ProbCut (non-PV nodes from this depth, with the TT action): the margin over beta, how far
-/// below it the static evaluation may be to try, and the extra reduction.
-const PROBCUT_DEPTH: i32 = 6;
-const PROBCUT_MARGIN: i32 = 600;
-const PROBCUT_EVAL: i32 = 300;
-const PROBCUT_R: i32 = 3;
 /// Null move (a pass, i.e. a phantom turn): at non-PV nodes from this depth, when the static
 /// eval is at least beta, search the pass with depth reduced by NMP_R + depth / NMP_DIV.
 const NMP_MIN_DEPTH: i32 = 3;
@@ -2535,24 +2529,6 @@ impl AlphaBeta {
                     return if v > MATE - 1000 { beta } else { v };
                 }
             }
-            // ProbCut with the remembered action: if it beats beta by a margin in a shallower
-            // search, the node fails high.
-            if depth >= PROBCUT_DEPTH && self.excluded.is_none()
-                && let Some(ta) = tt_action.as_ref() {
-                    let pcb = beta + PROBCUT_MARGIN;
-                    if self.static_eval(s) + PROBCUT_EVAL >= pcb
-                        && let Some(mark) = Self::make_checked(s, ta) {
-                            let v = -self.negamax(s, depth - 1 - PROBCUT_R, ply + 1, -pcb, -pcb + 1, false);
-                            s.unmake(mark);
-                            if self.aborted {
-                                return 0;
-                            }
-                            self.proven = false;
-                            if v >= pcb && v < MATE - 1000 {
-                                return v - PROBCUT_MARGIN;
-                            }
-                        }
-                }
         }
 
         let mut best = -INF;
