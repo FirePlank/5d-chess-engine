@@ -156,6 +156,10 @@ pub enum MateVerify {
     /// 100 ms). An analysis (no clock): `ROOT_SCAN_ANALYSIS_MS`.
     #[default]
     Auto,
+    /// Deterministic diagnostics: `ROOT_SCAN_ACTIONS` actions, `ROOT_SCAN_MORE_STEPS`
+    /// hypercuboids per enumeration, and `MATE_RECHECK_STEPS` per escape recheck.
+    /// No local wall-clock deadline; the search's stop flag and overall deadline still apply.
+    Counted,
     /// That many milliseconds past the counted part (in a game at most a quarter of the optimum).
     Millis(u64),
     /// Every legal action, however long it takes (in a game: a quarter of the optimum).
@@ -168,6 +172,7 @@ impl MateVerify {
     pub fn from_option(v: &OptionValue) -> Option<MateVerify> {
         match v {
             OptionValue::Str(s) if s.eq_ignore_ascii_case("auto") => Some(MateVerify::Auto),
+            OptionValue::Str(s) if s.eq_ignore_ascii_case("counted") => Some(MateVerify::Counted),
             OptionValue::Str(s) if s.eq_ignore_ascii_case("exhaustive") => Some(MateVerify::Exhaustive),
             OptionValue::Str(s) => s.trim().parse::<i64>().ok().map(Self::from_int),
             OptionValue::Int(n) => Some(Self::from_int(*n)),
@@ -2048,6 +2053,7 @@ impl AlphaBeta {
         let game_cap = plan.map(|p| Duration::from_millis(p.optimum / 4));
         let ms = |n: u64| Duration::from_millis(n);
         match self.mate_verify {
+            MateVerify::Counted => b.actions = ROOT_SCAN_ACTIONS,
             MateVerify::Auto if clock => {
                 let p = plan.expect("clock plan");
                 b.deadline = Some(now + ms((p.optimum / ROOT_SCAN_MORE_DIV).min(ROOT_SCAN_MORE_CAP_MS)));
@@ -4276,6 +4282,7 @@ mod tests {
     fn mate_verify_option_values() {
         use crate::engine::OptionValue as V;
         assert_eq!(MateVerify::from_option(&V::Str("auto".into())), Some(MateVerify::Auto));
+        assert_eq!(MateVerify::from_option(&V::Str("Counted".into())), Some(MateVerify::Counted));
         assert_eq!(MateVerify::from_option(&V::Str("Exhaustive".into())), Some(MateVerify::Exhaustive));
         assert_eq!(MateVerify::from_option(&V::Str("2500".into())), Some(MateVerify::Millis(2500)));
         assert_eq!(MateVerify::from_option(&V::Int(0)), Some(MateVerify::Auto));
@@ -4285,6 +4292,20 @@ mod tests {
         let mut e = AlphaBeta::new();
         assert!(e.set_option("MateVerify", &V::Str("exhaustive".into())));
         assert!(!e.set_option("MateVerify", &V::Str("soon".into())));
+    }
+
+    #[test]
+    fn counted_mate_budget_has_no_local_deadline() {
+        let mut e = AlphaBeta::new();
+        // The production default still has the analysis deadline.
+        assert_eq!(e.mate_verify, MateVerify::Auto);
+        assert!(e.root_mate_budget(None).0.deadline.is_some());
+        assert!(e.set_option("MateVerify", &OptionValue::Str("counted".into())));
+        let (budget, recheck) = e.root_mate_budget(None);
+        assert_eq!(budget.actions, ROOT_SCAN_ACTIONS);
+        assert_eq!(budget.steps, ROOT_SCAN_MORE_STEPS);
+        assert_eq!(recheck, MATE_RECHECK_STEPS);
+        assert!(budget.deadline.is_none());
     }
 
     /// An analysis is told when the scan of every action found no mate in one (the start
