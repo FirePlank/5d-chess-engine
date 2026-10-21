@@ -2712,6 +2712,9 @@ impl AlphaBeta {
                         skipped = true;
                         break;
                     }
+                    // Our second move of the line: an f7 / f2 sacrifice travel is searched deeper
+                    // as at the root.
+                    let ext = if ply == 2 && depth >= 6 && act.iter().any(|m| m.to.t() < m.from.t() && (m.to.xy() & 7) == 5 && matches!(m.to.xy() >> 3, 1 | 6) && matches!(mover_victim(s, m), (BISHOP_W | QUEEN_W, v) if v != NO_PIECE)) { SAC_ROOT_EXT } else { 0 };
                     let mark = Self::make(s, &act);
                     let quiet = sc < 10_000;
                     let mut r = 0;
@@ -2725,7 +2728,7 @@ impl AlphaBeta {
                         }
                     }
                     let mut v;
-                    let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act);
+                    let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act) + ext;
                     self.known_check = child_check;
                     if searched == 0 {
                         v = -self.negamax(s, child_depth - 1, ply + 1, -beta, -alpha, pv);
