@@ -134,7 +134,7 @@ const CHECK_BONUS: i32 = 30_000;
 const ROOT_EFFORT_HIGH: f64 = 0.9;
 const ROOT_EFFORT_SCALE: f64 = 0.75;
 /// Extra depth of a checking sacrifice by time travel (`sac::is_sac_travel`).
-const SAC_ROOT_EXT: i32 = 2;
+const SAC_ROOT_EXT: i32 = 3;
 /// Local nodes the f7 sac probes may solve before a search: none, since solving cost more than it
 /// found at every budget tried (50000 down to 5000); the precomputed table is only read.
 const SAC_PREP_NODES: u64 = 0;
