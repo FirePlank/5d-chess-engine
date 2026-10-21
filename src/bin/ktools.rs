@@ -1951,9 +1951,10 @@ fn tactics(path: &str, ms: u64, threads: usize, out: &mut impl Write) {
 }
 
 /// Replay one harness game record (`sprt` JSONL), calling `f` with each position an engine
-/// played from and that engine's reported score of it (internal units, None when unscored).
-/// Returns the result for white (1, 0.5, 0), or None for a game without a usable result or
-/// that does not replay (engine failures, missing fields, illegal moves).
+/// played from and that engine's reported score of it (internal units, None when unscored, or
+/// when the record says the score's line did not begin with the action played). Returns the
+/// result for white (1, 0.5, 0), or None for a game without a usable result or that does not
+/// replay (engine failures, missing fields, illegal moves).
 fn replay_game(line: &str, mut f: impl FnMut(&State, Option<i32>)) -> Option<f32> {
     use kairos::core::variants::{apply_uci_moves, position_from_uci};
     // A game lost to an engine failure has no real result.
@@ -1975,10 +1976,19 @@ fn replay_game(line: &str, mut f: impl FnMut(&State, Option<i32>)) -> Option<f32
     // Scores on the reported scale ("eval_scale": internal * 100 / scale) back to internal
     // units; older records hold internal units. (Mates, +-20000 on either scale, still land
     // outside the kept range.)
-    let evs: Vec<Option<i32>> = match json_field(line, "eval_scale").and_then(|x| x.parse::<f64>().ok()) {
+    let mut evs: Vec<Option<i32>> = match json_field(line, "eval_scale").and_then(|x| x.parse::<f64>().ok()) {
         Some(scale) => evs.into_iter().map(|e| e.map(|v| (v as f64 * scale / 100.0).round() as i32)).collect(),
         None => evs,
     };
+    // A score of another action (the clock cut a change of mind short) is no label for this one.
+    if let Some(e) = line.find("\"pv_played\":[") {
+        let t = &line[e + 13..];
+        for (ev, played) in evs.iter_mut().zip(t[..t.find(']').unwrap_or(0)].split(',')) {
+            if played.trim() == "0" {
+                *ev = None;
+            }
+        }
+    }
     let acts: Vec<&str> = moves.split(" submit").map(|x| x.trim()).filter(|x| !x.is_empty()).collect();
     let n_eng = evs.len();
     if n_eng == 0 || acts.len() < n_eng {
@@ -2005,7 +2015,8 @@ fn replay_game(line: &str, mut f: impl FnMut(&State, Option<i32>)) -> Option<f32
 /// `nnuedata out games.jsonl...`: NNUE training records (`engine::nnue`, read by
 /// scripts/nnue/train.py), in four files next to `out`:
 /// - `out.rec`: per record, f32 teacher score (internal units, side to move's view; NaN when
-///   none or a mate), result for the side to move, game number and ply, then the `nnue::ND`
+///   none or a mate), result for the side to move (NaN for an action-limit game), game number
+///   and ply, then the `nnue::ND`
 ///   dense inputs as i16 (they are counts);
 /// - `out.idx`: per record, u64 index of its first row in `out.brd` (its rows follow) and u64
 ///   index of its first relation feature in `out.rel`;
@@ -2074,10 +2085,12 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
                     }) else {
                         continue;
                     };
+                    // An action-limit draw is a game cut off, not a result: scores only.
+                    let censored = json_field(line, "reason").is_some_and(|r| r.starts_with("action limit"));
                     let done: Vec<Sample> = samples
                         .into_iter()
                         .map(|(mut x, black)| {
-                            x.head[1] = if black { 1.0 - white } else { white };
+                            x.head[1] = if censored { f32::NAN } else if black { 1.0 - white } else { white };
                             x
                         })
                         .collect();

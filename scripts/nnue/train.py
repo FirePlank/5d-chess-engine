@@ -13,6 +13,8 @@ evaluation of the first records of `prefix`, for comparison with `ktools nnuerec
 import argparse
 import math
 import struct
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import torch
@@ -26,18 +28,11 @@ REC = np.dtype([('h', '<f4', 4), ('d', '<i2', ND)])
 BRD = np.dtype([('rec', '<u4'), ('role', '<u2'), ('n', '<u2'), ('off', '<u8')])
 
 
-class Data:
-    """One `nnuedata` export, memory-mapped."""
+IDX = np.dtype([('b', '<u8'), ('r', '<u8')])
 
-    def __init__(self, spec):
-        prefix, _, w = spec.partition('@')
-        self.weight = float(w or 1)
-        self.rec = np.memmap(prefix + '.rec', dtype=REC, mode='r')
-        self.idx = np.memmap(prefix + '.idx', dtype=[('b', '<u8'), ('r', '<u8')], mode='r')
-        self.rel = np.memmap(prefix + '.rel', dtype='<u2', mode='r')
-        self.brd = np.memmap(prefix + '.brd', dtype=BRD, mode='r')
-        self.ftr = np.memmap(prefix + '.ftr', dtype='<u2', mode='r')
-        self.n = len(self.rec)
+
+class Records:
+    """Records with their boards, board features and relation features (`ktools nnuedata`)."""
 
     def batch(self, rows):
         """Tensors of records `rows` (sorted): head, dense, and the boards' features."""
@@ -68,6 +63,44 @@ class Data:
             'board_rec': torch.from_numpy(local), 'role': torch.from_numpy(brd['role'].astype(np.int64)),
             'rel': torch.from_numpy(rel), 'rel_offsets': torch.from_numpy(rel_offsets),
         }
+
+
+class Data(Records):
+    """One `nnuedata` export, memory-mapped."""
+
+    def __init__(self, spec):
+        prefix, _, w = spec.partition('@')
+        self.weight = float(w or 1)
+        self.rec = np.memmap(prefix + '.rec', dtype=REC, mode='r')
+        self.idx = np.memmap(prefix + '.idx', dtype=IDX, mode='r')
+        self.rel = np.memmap(prefix + '.rel', dtype='<u2', mode='r')
+        self.brd = np.memmap(prefix + '.brd', dtype=BRD, mode='r')
+        self.ftr = np.memmap(prefix + '.ftr', dtype='<u2', mode='r')
+        self.n = len(self.rec)
+
+    def block(self, a, b):
+        """Records a..b read into memory (one sequential read of each file), as `Records`."""
+        return Block(self, a, b)
+
+
+class Block(Records):
+    def __init__(self, d, a, b):
+        self.weight = d.weight
+        self.rec = np.array(d.rec[a:b])
+        idx = np.array(d.idx[a:b])
+        b0, r0 = int(idx[0]['b']), int(idx[0]['r'])
+        b1 = int(d.idx[b]['b']) if b < d.n else len(d.brd)
+        r1 = int(d.idx[b]['r']) if b < d.n else len(d.rel)
+        self.brd = np.array(d.brd[b0:b1])
+        f0 = int(self.brd[0]['off']) if len(self.brd) else 0
+        f1 = int(self.brd[-1]['off']) + 2 * int(self.brd[-1]['n']) if len(self.brd) else 0
+        self.ftr = np.array(d.ftr[f0:f1])
+        self.rel = np.array(d.rel[r0:r1])
+        self.brd['off'] -= f0
+        self.idx = np.empty(len(idx), dtype=IDX)
+        self.idx['b'] = idx['b'] - b0
+        self.idx['r'] = idx['r'] - r0
+        self.n = b - a
 
 
 def ranges(starts, counts):
@@ -225,55 +258,87 @@ def to(b, dev):
 
 
 def target(head, k, lam):
+    """The training target and which records have one: the teacher's expected score mixed with
+    the result; either alone where the other is missing (NaN: no score, or a game cut off by
+    the action limit); none where both are."""
     teacher, result = head[:, 0], head[:, 1]
     q = torch.sigmoid(teacher / k)
-    return torch.where(torch.isnan(teacher), result, lam * q + (1 - lam) * result)
+    no_t, no_r = torch.isnan(teacher), torch.isnan(result)
+    y = torch.where(no_t, result, torch.where(no_r, q, lam * q + (1 - lam) * result))
+    return torch.nan_to_num(y), ~(no_t & no_r)
 
 
-def split(data, val_mod):
-    """Record rows of each dataset for training and validation, by game number."""
-    out = []
-    for d in data:
-        game = np.asarray(d.rec['h'][:, 2]).astype(np.int64)
-        val = (game % val_mod) == 0
-        out.append((np.nonzero(~val)[0], np.nonzero(val)[0]))
-    return out
+BLOCK = 1 << 20  # records read at once (and shuffled among)
 
 
-def dense_scale(data, rows, n=200000):
-    """1 / spread of each dense input over a sample of the training records."""
-    xs = []
-    for d, (tr, _) in zip(data, rows):
-        if len(tr):
-            pick = np.sort(np.random.default_rng(0).choice(tr, min(n, len(tr)), replace=False))
-            xs.append(np.asarray(d.rec['d'][pick], dtype=np.float32))
-    x = np.concatenate(xs)
+def blocks_of(d):
+    return [(a, min(a + BLOCK, d.n)) for a in range(0, d.n, BLOCK)]
+
+
+def is_val(rec, val_mod):
+    return (rec['h'][:, 2].astype(np.int64) % val_mod) == 0
+
+
+def dense_scale(data, n=200000):
+    """1 / spread of each dense input over the first block's records of each dataset."""
+    x = np.concatenate([np.asarray(d.rec['d'][:min(n, d.n)], dtype=np.float32) for d in data])
     return 1.0 / np.maximum(x.std(0), 1.0)
 
 
-def batches(data, rows, size, rng):
-    """Shuffled batches over every dataset, each drawn from one dataset (with its weight)."""
-    plan = []
-    for i, r in enumerate(rows):
-        perm = rng.permutation(r)
-        plan += [(i, np.sort(perm[j:j + size])) for j in range(0, len(perm), size)]
-    rng.shuffle(plan)
-    for i, b in plan:
-        yield data[i], b
+def prefetched(plan, load):
+    """`load(item)` for each item of `plan`, the next one read in the background meanwhile."""
+    with ThreadPoolExecutor(1) as ex:
+        nxt = ex.submit(load, plan[0]) if plan else None
+        for k in range(len(plan)):
+            cur = nxt.result()
+            nxt = ex.submit(load, plan[k + 1]) if k + 1 < len(plan) else None
+            yield cur
 
 
-def evaluate(net, data, rows, size, k, lam, dev):
+def held_out(data, val_mod, limit):
+    """The validation records (whole games) of every dataset, at most `limit`, as in-memory
+    batches."""
+    out, n = [], 0
+    plan = [(d, a, b) for d in data for a, b in blocks_of(d)]
+    for blk in prefetched(plan, lambda x: x[0].block(x[1], x[2])):
+        rows = np.nonzero(is_val(blk.rec, val_mod))[0]
+        for j in range(0, len(rows), 16384):
+            if n >= limit:
+                return out
+            out.append(blk.batch(rows[j:j + 16384]))
+            n += len(rows[j:j + 16384])
+    return out
+
+
+def whole(d, size=16384):
+    """Every record of `d` as in-memory batches."""
+    out = []
+    for a, b in blocks_of(d):
+        blk = d.block(a, b)
+        out += [blk.batch(np.arange(j, min(j + size, blk.n))) for j in range(0, blk.n, size)]
+    return out
+
+
+def measure(net, batches, k, lam, dev):
+    """The training loss (mixed target) and, against game results alone, the log loss and
+    squared error: those do not depend on the mix, so they compare recipes."""
     net.eval()
-    tot, w = 0.0, 0
+    tot, w, ll, se, nr = 0.0, 0, 0.0, 0.0, 0
     with torch.no_grad():
-        for d, r in zip(data, rows):
-            for j in range(0, len(r), size):
-                b = to(d.batch(r[j:j + size]), dev)
-                p = torch.sigmoid(net(b) / k)
-                tot += float(((p - target(b['head'], k, lam)) ** 2).sum())
-                w += len(b['head'])
+        for b in batches:
+            b = to(b, dev)
+            p = torch.sigmoid(net(b) / k)
+            y, ok = target(b['head'], k, lam)
+            tot += float((((p - y) ** 2) * ok).sum())
+            w += int(ok.sum())
+            r = b['head'][:, 1]
+            has = ~torch.isnan(r)
+            pr, rr = p[has].clamp(1e-6, 1 - 1e-6), r[has]
+            ll += float(-(rr * torch.log(pr) + (1 - rr) * torch.log(1 - pr)).sum())
+            se += float(((pr - rr) ** 2).sum())
+            nr += int(has.sum())
     net.train()
-    return tot / max(w, 1)
+    return tot / max(w, 1), ll / max(nr, 1), se / max(nr, 1)
 
 
 def main():
@@ -292,6 +357,8 @@ def main():
     ap.add_argument('--batch', type=int, default=4096)
     ap.add_argument('--lr', type=float, default=1e-3)
     ap.add_argument('--val-mod', type=int, default=20)
+    ap.add_argument('--val-limit', type=int, default=500000, help='most validation records')
+    ap.add_argument('--test', help='a held-out export (prefix) measured each epoch against game results')
     ap.add_argument('--out-scale', type=float, default=1000.0)
     ap.add_argument('--seed', type=int, default=1)
     ap.add_argument('--device', help='cuda or cpu (default: cuda when available)')
@@ -307,41 +374,57 @@ def main():
         return
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
-    data = [Data(s) for s in args.data]
-    rows = split(data, args.val_mod)
-    print('records', sum(d.n for d in data), 'train', sum(len(t) for t, _ in rows), 'val', sum(len(v) for _, v in rows), flush=True)
+    data = [Data(x) for x in args.data]
+    val = held_out(data, args.val_mod, args.val_limit)
+    test = whole(Data(args.test)) if args.test else []
+    print('records', sum(d.n for d in data), 'validation', sum(len(b['head']) for b in val), 'test', sum(len(b['head']) for b in test), flush=True)
     if args.init:
         net = load(args.init)
     else:
-        net = Net(args.acc, args.emb, args.hidden, args.racc, not args.no_dense, dense_scale(data, rows), args.out_scale)
+        net = Net(args.acc, args.emb, args.hidden, args.racc, not args.no_dense, dense_scale(data), args.out_scale)
     net.to(dev)
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=1e-5)
-    steps = args.epochs * sum(math.ceil(len(t) / args.batch) for t, _ in rows)
+    steps = args.epochs * sum(math.ceil(d.n / args.batch) for d in data)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, total_steps=max(steps, 1), pct_start=0.05)
-    val_rows = [v for _, v in rows]
-    best = evaluate(net, data, val_rows, 16384, args.k, args.lam, dev)
-    print(f'epoch 0 val {best:.6f}', flush=True)
+
+    def report(ep, extra=''):
+        v = measure(net, val, args.k, args.lam, dev)
+        line = f'epoch {ep}{extra} val {v[0]:.6f} val_result_ll {v[1]:.5f}'
+        if test:
+            t = measure(net, test, args.k, args.lam, dev)
+            line += f' test_result_ll {t[1]:.5f} test_result_mse {t[2]:.5f}'
+        return v[0], line
+
+    best, line = report(0)
+    print(line, flush=True)
     save(net, args.out)
     for ep in range(1, args.epochs + 1):
-        tot, n = 0.0, 0
-        for d, r in batches(data, [t for t, _ in rows], args.batch, rng):
-            b = to(d.batch(r), dev)
-            p = torch.sigmoid(net(b) / args.k)
-            loss = d.weight * ((p - target(b['head'], args.k, args.lam)) ** 2).mean()
-            opt.zero_grad(set_to_none=True)
-            loss.backward()
-            opt.step()
-            net.clip()
-            sched.step()
-            tot += float(loss.detach()) * len(r)
-            n += len(r)
-        val = evaluate(net, data, val_rows, 16384, args.k, args.lam, dev)
-        mark = ''
-        if val < best:
-            best = val
+        tot, n, t0 = 0.0, 0, time.time()
+        plan = [(d, a, b) for d in data for a, b in blocks_of(d)]
+        rng.shuffle(plan)
+        for blk in prefetched(plan, lambda x: x[0].block(x[1], x[2])):
+            rows = rng.permutation(np.nonzero(~is_val(blk.rec, args.val_mod))[0])
+            for j in range(0, len(rows), args.batch):
+                r = np.sort(rows[j:j + args.batch])
+                b = to(blk.batch(r), dev)
+                p = torch.sigmoid(net(b) / args.k)
+                y, ok = target(b['head'], args.k, args.lam)
+                loss = blk.weight * (((p - y) ** 2) * ok).sum() / ok.sum().clamp(min=1)
+                opt.zero_grad(set_to_none=True)
+                loss.backward()
+                opt.step()
+                net.clip()
+                if sched.last_epoch + 1 < steps:
+                    sched.step()
+                tot += float(loss.detach()) * len(r)
+                n += len(r)
+        rate = n / max(time.time() - t0, 1e-9)
+        v, line = report(ep, f' train {tot / max(n, 1):.6f} ({rate:.0f}/s)')
+        if v < best:
+            best = v
             save(net, args.out)
-            mark = ' saved'
-        print(f'epoch {ep} train {tot / max(n, 1):.6f} val {val:.6f}{mark}', flush=True)
+            line += ' saved'
+        print(line, flush=True)
 
 
 if __name__ == '__main__':
