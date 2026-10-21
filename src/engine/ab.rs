@@ -9,7 +9,7 @@ use crate::core::action::{Action, FullMove, MoveSeq};
 use crate::core::bitboard::{marked_pos, pmask, Bitboard};
 use crate::core::board::Board;
 use crate::core::check_position::{BoardOverlay, CheckBuf, CheckKind, CheckPosition, SpReach};
-use crate::core::hypercuboid::{has_physical_check, interrupt_on, interrupted, plays_wasted_move, BestFirstCursor, Entry, HcCursor, HcInfo, NeedBranch};
+use crate::core::hypercuboid::{has_physical_check, interrupt_off, interrupt_on, interrupted, plays_wasted_move, BestFirstCursor, Entry, HcCursor, HcInfo, NeedBranch};
 use crate::misc::geometry::{Hc, Point, Slice};
 use crate::core::multiverse::{active_range_for, next_turn};
 use crate::core::piece::*;
@@ -3503,6 +3503,9 @@ impl AlphaBeta {
         // when told to.
         let mut gen_bounded = false;
         let mut complete = false;
+        // Out of time before any action: the enumeration goes on without the clock until it has
+        // one (a legal action is always played; many timelines can spend the time on the probes).
+        let mut unclocked = None;
         while roots.len() < ROOT_CAP {
             if !roots.is_empty() && stop.load(Ordering::Relaxed) {
                 break;
@@ -3518,6 +3521,7 @@ impl AlphaBeta {
             let next = agen.next(&hc, root);
             match next {
                 Some(a) => {
+                    unclocked = None;
                     if full.is_some() && Self::travel_class(&mut agen, travels) {
                         travel_acts.push(a.clone());
                         roots.push((self.action_score(root, &a, 0), a));
@@ -3525,7 +3529,7 @@ impl AlphaBeta {
                         roots.push((self.action_score(root, &a, 0), a));
                     }
                 }
-                // Out of time: with no action found yet, none can be played.
+                None if interrupted() && roots.is_empty() && unclocked.is_none() => unclocked = Some(interrupt_off()),
                 None if interrupted() => break,
                 None if roots.is_empty() && full.is_some() => agen.restart(&hc, full.take().unwrap()),
                 // Out of steps with actions found: the root searches those.
