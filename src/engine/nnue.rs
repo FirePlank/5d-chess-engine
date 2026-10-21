@@ -94,6 +94,15 @@ pub fn board_features(b: &Board, h: i32, view: bool, out: &mut [u16; MAX_BOARD_F
     n
 }
 
+/// Board feature `f` seen from the other colour's side, on a board of height `h`: own and enemy
+/// swap and ranks count from the other back rank (`board_features` for the other view, feature
+/// by feature).
+#[inline]
+pub fn other_view(f: u16, h: i32) -> u16 {
+    let s = (f & 63) as i32;
+    ((((f >> 6) ^ 1) << 6) as i32 + (s & 7) + 8 * (h - 1 - (s >> 3))) as u16
+}
+
 /// One latest board of a position, as the network sees it.
 pub struct BoardInput<'a> {
     pub board: &'a Board,
@@ -803,6 +812,27 @@ mod tests {
         let m2 = Model::from_bytes(&b).unwrap();
         assert_eq!(m2.to_bytes(), b);
         assert!(Model::from_bytes(&b[..b.len() - 4]).is_err());
+    }
+
+    #[test]
+    fn other_view_is_the_other_colours_features() {
+        let mut s = start();
+        let line = "(0T1)e2e3 (0T1)g8f6 (0T2)g1f3 (0T2)e7e6 (0T3)c2c3 (0T3)b8c6 (0T4)d1b3 (0T4)f6g4 (0T5)b3(0T1)f7 (1T1)e8f7";
+        for mv in line.split(' ') {
+            apply_uci_moves(&mut s, &format!("{} submit", mv)).unwrap();
+            let h = s.get_board_size().1;
+            for bi in boards(&s) {
+                for view in [false, true] {
+                    let (mut a, mut b) = ([0u16; MAX_BOARD_FEATURES], [0u16; MAX_BOARD_FEATURES]);
+                    let (n, m) = (board_features(bi.board, h, view, &mut a), board_features(bi.board, h, !view, &mut b));
+                    let mut mapped: Vec<u16> = a[..n].iter().map(|&f| other_view(f, h)).collect();
+                    let mut direct = b[..m].to_vec();
+                    mapped.sort();
+                    direct.sort();
+                    assert_eq!(mapped, direct, "after {}", mv);
+                }
+            }
+        }
     }
 
     #[test]

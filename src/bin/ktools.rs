@@ -2027,9 +2027,11 @@ fn replay_game(line: &str, mut f: impl FnMut(&State, Option<i32>, &str)) -> Opti
 ///   dense inputs as i16 (they are counts);
 /// - `out.idx`: per record, u64 index of its first row in `out.brd` (its rows follow) and u64
 ///   index of its first relation feature in `out.rel`;
-/// - `out.brd`: per latest board, u32 record, u16 role, u16 feature count n, u64 offset in
-///   `out.ftr` (u16 units) of n features from the side to move's view, then n from the other;
-/// - `out.ftr`: u16 board features; `out.rel`: u16 relation features (`nnue::relation_features`).
+/// - `out.brd`: per latest board, u32 record, u16 role (low byte) and board height (high byte),
+///   u16 feature count n, u64 offset in `out.ft1` (u16 units) of its n features from the side to
+///   move's view (the other view is `nnue::other_view` of each);
+/// - `out.ft1`: u16 board features; `out.rel`: u16 relation features (`nnue::relation_features`).
+///   (Older exports have `out.ftr` instead, with both views stored, and no height.)
 ///
 /// NETDATA_NO_CHECK=1 leaves out positions with the side to move in check (test sets).
 /// NNUE_QUIET=1 keeps only quiet positions, as the search evaluates them statically: the side to
@@ -2044,7 +2046,7 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
     struct Sample {
         head: [f32; 4],
         dense: [i16; nnue::ND],
-        boards: Vec<(u8, Vec<u16>, Vec<u16>)>,
+        boards: Vec<(u8, i32, Vec<u16>)>,
         rel: Vec<u16>,
     }
     let base = &args[0];
@@ -2073,7 +2075,7 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
             .collect()
     });
     let open = |ext: &str| BufWriter::with_capacity(1 << 20, std::fs::File::create(format!("{}.{}", base, ext)).expect("create output"));
-    let (mut rec, mut idx, mut brd, mut ftr, mut relf) = (open("rec"), open("idx"), open("brd"), open("ftr"), open("rel"));
+    let (mut rec, mut idx, mut brd, mut ftr, mut relf) = (open("rec"), open("idx"), open("brd"), open("ft1"), open("rel"));
     let (mut n_rec, mut n_brd, mut n_ftr, mut n_rel) = (0u64, 0u64, 0u64, 0u64);
     let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<Sample>>(256);
     std::thread::scope(|sc| {
@@ -2124,9 +2126,7 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
                         let boards = nnue::boards(s)
                             .map(|bi| {
                                 let n = nnue::board_features(bi.board, h, stm, &mut fb);
-                                let own = fb[..n].to_vec();
-                                let n = nnue::board_features(bi.board, h, !stm, &mut fb);
-                                (bi.role, own, fb[..n].to_vec())
+                                (bi.role, h, fb[..n].to_vec())
                             })
                             .collect();
                         let mut rel = Vec::new();
@@ -2165,15 +2165,15 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
                     relf.write_all(&f.to_le_bytes()).unwrap();
                 }
                 n_rel += x.rel.len() as u64;
-                for (role, own, other) in &x.boards {
+                for (role, h, own) in &x.boards {
                     brd.write_all(&(n_rec as u32).to_le_bytes()).unwrap();
-                    brd.write_all(&(*role as u16).to_le_bytes()).unwrap();
+                    brd.write_all(&(*role as u16 | (*h as u16) << 8).to_le_bytes()).unwrap();
                     brd.write_all(&(own.len() as u16).to_le_bytes()).unwrap();
                     brd.write_all(&n_ftr.to_le_bytes()).unwrap();
-                    for f in own.iter().chain(other) {
+                    for f in own {
                         ftr.write_all(&f.to_le_bytes()).unwrap();
                     }
-                    n_ftr += (own.len() + other.len()) as u64;
+                    n_ftr += own.len() as u64;
                     n_brd += 1;
                 }
                 n_rec += 1;
@@ -2220,7 +2220,9 @@ fn nnuerecs(args: &[String], out: &mut impl Write) {
     use kairos::engine::nnue::{Model, ND};
     let m = Model::from_bytes(&std::fs::read(&args[0]).expect("model")).expect("model");
     let read = |ext: &str| std::fs::read(format!("{}.{}", args[1], ext)).expect("records");
-    let (rec, idx, brd, ftr, rel) = (read("rec"), read("idx"), read("brd"), read("ftr"), read("rel"));
+    // One view stored (`.ft1`), or both (older exports, `.ftr`).
+    let one_view = std::path::Path::new(&format!("{}.ft1", args[1])).exists();
+    let (rec, idx, brd, ftr, rel) = (read("rec"), read("idx"), read("brd"), read(if one_view { "ft1" } else { "ftr" }), read("rel"));
     let u = |b: &[u8], at: usize, n: usize| b[at..at + n].iter().rev().fold(0u64, |a, &x| a << 8 | x as u64);
     let rec_len = 16 + 2 * ND;
     let total = rec.len() / rec_len;
@@ -2239,8 +2241,10 @@ fn nnuerecs(args: &[String], out: &mut impl Write) {
         let relations: Vec<u16> = (r0..r1).map(|i| u(&rel, 2 * i, 2) as u16).collect();
         let mut feats: Vec<(u8, Vec<u16>, Vec<u16>)> = Vec::new();
         for b in first..end {
-            let (role, k, off) = (u(&brd, 16 * b + 4, 2) as u8, u(&brd, 16 * b + 6, 2), u(&brd, 16 * b + 8, 8));
-            feats.push((role, (0..k).map(|j| feat(off + j)).collect(), (0..k).map(|j| feat(off + k + j)).collect()));
+            let (rh, k, off) = (u(&brd, 16 * b + 4, 2), u(&brd, 16 * b + 6, 2), u(&brd, 16 * b + 8, 8));
+            let own: Vec<u16> = (0..k).map(|j| feat(off + j)).collect();
+            let other = if one_view { own.iter().map(|&f| kairos::engine::nnue::other_view(f, (rh >> 8) as i32)).collect() } else { (0..k).map(|j| feat(off + k + j)).collect() };
+            feats.push(((rh & 0xff) as u8, own, other));
         }
         let refs: Vec<(u8, &[u16], &[u16])> = feats.iter().map(|(r, o, t)| (*r, &o[..], &t[..])).collect();
         writeln!(out, "{}", m.evaluate_features(&refs, &relations, &d)).unwrap();
