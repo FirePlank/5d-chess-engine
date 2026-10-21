@@ -903,7 +903,7 @@ impl AlphaBeta {
             known_check: None,
             sac_line: None,
             known: KnownCache::new(),
-            nnue: super::nnue::embedded(),
+            nnue: None,
             nnue_cache: Box::default(),
             last_score: 0,
             last_proven: false,
