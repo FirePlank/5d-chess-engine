@@ -129,10 +129,6 @@ fn lmr(depth: i32, index: usize) -> i32 {
 }
 /// Ordering bonus of a checking semimove (above every capture).
 const CHECK_BONUS: i32 = 30_000;
-/// A search whose chosen root action took more than this share of an iteration's nodes, with
-/// the best action stable, starts no next depth past this share of the usual time.
-const ROOT_EFFORT_HIGH: f64 = 0.9;
-const ROOT_EFFORT_SCALE: f64 = 0.75;
 /// Extra depth of a root action that is an f7-style sacrifice travel (`sac::signature_travels`).
 const SAC_ROOT_EXT: i32 = 2;
 /// Local nodes the f7 sac table's probes may use before every search, whatever the clock (the
@@ -3629,8 +3625,6 @@ impl AlphaBeta {
             let mut all_proven;
             let mut scores: Vec<i32>;
             let mut depth_lines: Vec<PvLine> = Vec::new();
-            // Share of the iteration's nodes the chosen action took (see the clock below).
-            let mut effort = 0.0f64;
             if multi {
                 let pass = self.multipv_pass(&mut work, &roots, depth, lo, hi, roots_complete);
                 // Its scores are exact: no fail high is a bound to keep.
@@ -3649,9 +3643,7 @@ impl AlphaBeta {
                     all_proven = roots_complete;
                     scores = Vec::with_capacity(roots.len());
                     let mut top = -INF;
-                    let (iter_nodes0, mut best_nodes) = (self.nodes, 0u64);
                     for (k, (_, act)) in roots.iter().enumerate() {
-                        let act_nodes0 = self.nodes;
                         let mark = Self::make(&mut work, act);
                         // A sacrifice of the f7 kind is searched deeper (its point is far away).
                         let ext = if act.iter().any(|m| sig.contains(m)) { SAC_ROOT_EXT } else { 0 };
@@ -3682,7 +3674,6 @@ impl AlphaBeta {
                         top = top.max(v);
                         if v > alpha {
                             alpha = v;
-                            best_nodes = self.nodes - act_nodes0;
                             iter_best = Some((v, act.clone(), self.proven));
                             iter_pv = self.root_pv(act);
                             if v >= beta {
@@ -3690,7 +3681,6 @@ impl AlphaBeta {
                             }
                         }
                     }
-                    effort = best_nodes as f64 / (self.nodes - iter_nodes0).max(1) as f64;
                     tries += 1;
                     if self.aborted || (lo == -INF && hi == INF) {
                         break;
@@ -3805,9 +3795,7 @@ impl AlphaBeta {
                 let instability = (0.8 + 0.6 * changes).min(2.0);
                 // The next depth costs about as much as all before it together: none is
                 // started past half the target.
-                // One action taking nearly all the nodes of a stable search is settled.
-                let settled = if effort > ROOT_EFFORT_HIGH && changes < 0.5 { ROOT_EFFORT_SCALE } else { 1.0 };
-                if elapsed * 1000.0 > p.target(falling, instability) * 0.5 * settled {
+                if elapsed * 1000.0 > p.target(falling, instability) * 0.5 {
                     if elapsed * 1000.0 >= p.free as f64 {
                         break;
                     }
