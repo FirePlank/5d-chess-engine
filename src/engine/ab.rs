@@ -101,8 +101,6 @@ const ROOT_WIDEN_CAP: usize = 256;
 /// Interior nodes up to this ply (the root is 0) look for a checkmate in one by a checking
 /// travel the node would search late or never (`travel_mate`).
 const TRAVEL_MATE_PLY: usize = 2;
-/// Interior nodes up to this ply search the travels onto optional boards (`optional_travels`).
-const OPTIONAL_TRAVEL_PLY: usize = 2;
 /// Hypercuboids the search for an evasion of such a check may look at (an evasion is usually
 /// found in a few; past this the check counts as no mate).
 const TRAVEL_MATE_STEPS: u32 = 64;
@@ -2674,7 +2672,7 @@ impl AlphaBeta {
         }
         let mut first = Self::without_future(s, &nb.info, &ss);
         // Capturing travels first: the first classes of the cursor (see `travel_class`).
-        let travels = if ply <= OPTIONAL_TRAVEL_PLY { self.optional_travels(s, &nb.info, &ss, &mut first) } else { 0 };
+        let travels = self.optional_travels(s, &nb.info, &ss, &mut first);
         let mut full = Some(ss);
         {
             let NodeBufs { info, cursor, order, .. } = &mut *nb;
