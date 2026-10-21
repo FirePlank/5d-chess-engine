@@ -912,7 +912,7 @@ pub fn sides_with(s: &State, src: &mut impl TermSource) -> Sides {
         }
     }
     royal_5d(s, &mut sd, src, &atts);
-    if super::sac::active() {
+    if SAC_EVAL_TERMS && super::sac::active() {
         sac_terms(s, &mut sd, src);
     }
     let (l0_min, l0_max) = s.get_initial_lines_range();
@@ -922,6 +922,9 @@ pub fn sides_with(s: &State, src: &mut impl TermSource) -> Sides {
     sd.side[1][si::SLOTS] = (1 + white_created - black_created).clamp(0, 4);
     sd
 }
+
+/// Whether the sac table's terms enter the evaluation (its local wins ignore time-travel defences).
+const SAC_EVAL_TERMS: bool = false;
 
 /// The f7 sac table's terms (`ex::SAC_LINE` ..): created timelines whose latest board is a
 /// local mate, and the root's winning travels still on hand.
