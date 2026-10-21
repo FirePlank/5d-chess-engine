@@ -1,1 +1,1 @@
-{"name": "hard105k", "shards": 40, "nodes": 2000000, "max_seconds": 19800}
+{"name": "quiet210k", "shards": 40, "nodes": 1000000, "max_seconds": 19800}
