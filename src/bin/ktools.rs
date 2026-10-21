@@ -1474,6 +1474,10 @@ fn abbench(path: &str, depth: u32, out: &mut impl Write) {
         if let Ok(f) = std::env::var("NNUE_FILE") {
             assert!(e.set_option("EvalFile", &kairos::engine::OptionValue::Str(f)), "NNUE_FILE");
         }
+        // NNUE_BLEND: the network's share in percent (`EvalBlend`).
+        if let Some(b) = std::env::var("NNUE_BLEND").ok().and_then(|b| b.parse::<i64>().ok()) {
+            assert!(e.set_option("EvalBlend", &kairos::engine::OptionValue::Int(b)), "NNUE_BLEND");
+        }
         let node_cap = std::env::var("AB_NODES").ok().and_then(|v| v.parse().ok());
         let limits = Limits { depth: Some(depth), nodes: node_cap, ..Default::default() };
         let mut last = String::new();
@@ -1953,11 +1957,12 @@ fn tactics(path: &str, ms: u64, threads: usize, out: &mut impl Write) {
 }
 
 /// Replay one harness game record (`sprt` JSONL), calling `f` with each position an engine
-/// played from and that engine's reported score of it (internal units, None when unscored, or
-/// when the record says the score's line did not begin with the action played). Returns the
+/// played from, that engine's reported score of it (internal units, None when unscored, or
+/// when the record says the score's line did not begin with the action played) and the action
+/// it played (5DUCI moves, without `submit`). Returns the
 /// result for white (1, 0.5, 0), or None for a game without a usable result or that does not
 /// replay (engine failures, missing fields, illegal moves).
-fn replay_game(line: &str, mut f: impl FnMut(&State, Option<i32>)) -> Option<f32> {
+fn replay_game(line: &str, mut f: impl FnMut(&State, Option<i32>, &str)) -> Option<f32> {
     use kairos::core::variants::{apply_uci_moves, position_from_uci};
     // A game lost to an engine failure has no real result.
     if json_field(line, "reason").is_some_and(|r| r.starts_with("protocol")) {
@@ -2004,7 +2009,7 @@ fn replay_game(line: &str, mut f: impl FnMut(&State, Option<i32>)) -> Option<f32
             first_player = Some(s.get_present().1);
         }
         if i >= opening {
-            f(&s, evs[i - opening]);
+            f(&s, evs[i - opening], a);
         }
         apply_uci_moves(&mut s, &format!("{} submit", a)).ok()?;
     }
@@ -2022,11 +2027,17 @@ fn replay_game(line: &str, mut f: impl FnMut(&State, Option<i32>)) -> Option<f32
 ///   dense inputs as i16 (they are counts);
 /// - `out.idx`: per record, u64 index of its first row in `out.brd` (its rows follow) and u64
 ///   index of its first relation feature in `out.rel`;
-/// - `out.brd`: per latest board, u32 record, u16 role, u16 feature count n, u64 offset in
-///   `out.ftr` (u16 units) of n features from the side to move's view, then n from the other;
-/// - `out.ftr`: u16 board features; `out.rel`: u16 relation features (`nnue::relation_features`).
+/// - `out.brd`: per latest board, u32 record, u16 role (low byte) and board height (high byte),
+///   u16 feature count n, u64 offset in `out.ft1` (u16 units) of its n features from the side to
+///   move's view (the other view is `nnue::other_view` of each);
+/// - `out.ft1`: u16 board features; `out.rel`: u16 relation features (`nnue::relation_features`).
+///   (Older exports have `out.ftr` instead, with both views stored, and no height.)
 ///
 /// NETDATA_NO_CHECK=1 leaves out positions with the side to move in check (test sets).
+/// NNUE_QUIET=1 keeps only quiet positions, as the search evaluates them statically: the side to
+/// move not in check, with no capture quiescence would credit (`local::capture_gain` on its
+/// boards of the present), and its played action neither capturing nor checking; the teacher's
+/// score of the others includes tactics the search resolves itself.
 /// NNUE_LABELS=file (`labelrun` output, for the same games file): only the relabelled positions,
 /// with their new scores (or, with NNUE_LABELS_KEEP=1, their old ones, for comparison).
 fn nnuedata(args: &[String], out: &mut impl Write) {
@@ -2035,7 +2046,7 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
     struct Sample {
         head: [f32; 4],
         dense: [i16; nnue::ND],
-        boards: Vec<(u8, Vec<u16>, Vec<u16>)>,
+        boards: Vec<(u8, i32, Vec<u16>)>,
         rel: Vec<u16>,
     }
     let base = &args[0];
@@ -2047,6 +2058,8 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
     let threads = 14;
     let no_check = std::env::var_os("NETDATA_NO_CHECK").is_some();
     let keep_teacher = std::env::var_os("NNUE_LABELS_KEEP").is_some();
+    let quiet = std::env::var_os("NNUE_QUIET").is_some();
+    let local_vals = kairos::engine::local::values_from(&hce::tuned_weights()[hce::fi::MAT_A..hce::fi::MAT_A + 10]);
     let labels: Option<std::collections::HashMap<(usize, usize), f32>> = std::env::var("NNUE_LABELS").ok().map(|p| {
         std::fs::read_to_string(p)
             .expect("labels")
@@ -2062,12 +2075,12 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
             .collect()
     });
     let open = |ext: &str| BufWriter::with_capacity(1 << 20, std::fs::File::create(format!("{}.{}", base, ext)).expect("create output"));
-    let (mut rec, mut idx, mut brd, mut ftr, mut relf) = (open("rec"), open("idx"), open("brd"), open("ftr"), open("rel"));
+    let (mut rec, mut idx, mut brd, mut ftr, mut relf) = (open("rec"), open("idx"), open("brd"), open("ft1"), open("rel"));
     let (mut n_rec, mut n_brd, mut n_ftr, mut n_rel) = (0u64, 0u64, 0u64, 0u64);
     let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<Sample>>(256);
     std::thread::scope(|sc| {
         for tid in 0..threads {
-            let (lines, tx, labels) = (&lines, tx.clone(), &labels);
+            let (lines, tx, labels, local_vals) = (&lines, tx.clone(), &labels, &local_vals);
             sc.spawn(move || {
                 let mut g = tid;
                 while g < lines.len() {
@@ -2076,10 +2089,22 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
                     g += threads;
                     let mut samples: Vec<(Sample, bool)> = Vec::new();
                     let mut ply = 0;
-                    let Some(white) = replay_game(line, |s, t| {
+                    let Some(white) = replay_game(line, |s, t, played| {
                         ply += 1;
-                        if no_check && s.has_phantom_check() {
+                        if (no_check || quiet) && s.has_phantom_check() {
                             return;
+                        }
+                        if quiet {
+                            let present = s.get_present();
+                            let (amin, amax) = s.get_active_range();
+                            let h = s.get_board_size().1;
+                            let gain: i32 = (amin..=amax)
+                                .filter(|&l| s.get_timeline_end(l) == present)
+                                .map(|l| kairos::engine::local::capture_gain(s.board(l, present.0, present.1), present.1, h, local_vals))
+                                .sum();
+                            if gain > 0 || tactical(s, played) {
+                                return;
+                            }
                         }
                         let relabelled = match labels {
                             Some(m) => match m.get(&(game, ply)) {
@@ -2101,9 +2126,7 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
                         let boards = nnue::boards(s)
                             .map(|bi| {
                                 let n = nnue::board_features(bi.board, h, stm, &mut fb);
-                                let own = fb[..n].to_vec();
-                                let n = nnue::board_features(bi.board, h, !stm, &mut fb);
-                                (bi.role, own, fb[..n].to_vec())
+                                (bi.role, h, fb[..n].to_vec())
                             })
                             .collect();
                         let mut rel = Vec::new();
@@ -2142,15 +2165,15 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
                     relf.write_all(&f.to_le_bytes()).unwrap();
                 }
                 n_rel += x.rel.len() as u64;
-                for (role, own, other) in &x.boards {
+                for (role, h, own) in &x.boards {
                     brd.write_all(&(n_rec as u32).to_le_bytes()).unwrap();
-                    brd.write_all(&(*role as u16).to_le_bytes()).unwrap();
+                    brd.write_all(&(*role as u16 | (*h as u16) << 8).to_le_bytes()).unwrap();
                     brd.write_all(&(own.len() as u16).to_le_bytes()).unwrap();
                     brd.write_all(&n_ftr.to_le_bytes()).unwrap();
-                    for f in own.iter().chain(other) {
+                    for f in own {
                         ftr.write_all(&f.to_le_bytes()).unwrap();
                     }
-                    n_ftr += (own.len() + other.len()) as u64;
+                    n_ftr += own.len() as u64;
                     n_brd += 1;
                 }
                 n_rec += 1;
@@ -2161,6 +2184,21 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
         w.flush().expect("write records");
     }
     writeln!(out, "{} records, {} boards, {} board features, {} relation features ({} dense inputs) from {} games -> {}.*", n_rec, n_brd, n_ftr, n_rel, nnue::ND, lines.len(), base).unwrap();
+}
+
+/// Whether action `played` (5DUCI moves) of the side to move in `s` captures or gives check.
+fn tactical(s: &State, played: &str) -> bool {
+    use kairos::core::action::ExtMove;
+    let c = s.get_present().1;
+    let captures = played.split_whitespace().filter_map(|t| ExtMove::parse(t).ok()).any(|m| {
+        let to = m.fm.to;
+        s.get_board_ptr(to.l(), to.t(), c).is_some_and(|b| b.hostile(c) & kairos::core::bitboard::pmask(to.xy()) != 0)
+    });
+    if captures {
+        return true;
+    }
+    let mut after = s.clone();
+    kairos::core::variants::apply_uci_moves(&mut after, &format!("{} submit", played)).is_ok() && after.has_phantom_check()
 }
 
 /// `nnueeval model.nnue file.g`: the NNUE evaluation of each position (internal units, side to
@@ -2182,7 +2220,9 @@ fn nnuerecs(args: &[String], out: &mut impl Write) {
     use kairos::engine::nnue::{Model, ND};
     let m = Model::from_bytes(&std::fs::read(&args[0]).expect("model")).expect("model");
     let read = |ext: &str| std::fs::read(format!("{}.{}", args[1], ext)).expect("records");
-    let (rec, idx, brd, ftr, rel) = (read("rec"), read("idx"), read("brd"), read("ftr"), read("rel"));
+    // One view stored (`.ft1`), or both (older exports, `.ftr`).
+    let one_view = std::path::Path::new(&format!("{}.ft1", args[1])).exists();
+    let (rec, idx, brd, ftr, rel) = (read("rec"), read("idx"), read("brd"), read(if one_view { "ft1" } else { "ftr" }), read("rel"));
     let u = |b: &[u8], at: usize, n: usize| b[at..at + n].iter().rev().fold(0u64, |a, &x| a << 8 | x as u64);
     let rec_len = 16 + 2 * ND;
     let total = rec.len() / rec_len;
@@ -2201,8 +2241,10 @@ fn nnuerecs(args: &[String], out: &mut impl Write) {
         let relations: Vec<u16> = (r0..r1).map(|i| u(&rel, 2 * i, 2) as u16).collect();
         let mut feats: Vec<(u8, Vec<u16>, Vec<u16>)> = Vec::new();
         for b in first..end {
-            let (role, k, off) = (u(&brd, 16 * b + 4, 2) as u8, u(&brd, 16 * b + 6, 2), u(&brd, 16 * b + 8, 8));
-            feats.push((role, (0..k).map(|j| feat(off + j)).collect(), (0..k).map(|j| feat(off + k + j)).collect()));
+            let (rh, k, off) = (u(&brd, 16 * b + 4, 2), u(&brd, 16 * b + 6, 2), u(&brd, 16 * b + 8, 8));
+            let own: Vec<u16> = (0..k).map(|j| feat(off + j)).collect();
+            let other = if one_view { own.iter().map(|&f| kairos::engine::nnue::other_view(f, (rh >> 8) as i32)).collect() } else { (0..k).map(|j| feat(off + k + j)).collect() };
+            feats.push(((rh & 0xff) as u8, own, other));
         }
         let refs: Vec<(u8, &[u16], &[u16])> = feats.iter().map(|(r, o, t)| (*r, &o[..], &t[..])).collect();
         writeln!(out, "{}", m.evaluate_features(&refs, &relations, &d)).unwrap();
@@ -2288,7 +2330,7 @@ fn labelpick(args: &[String], out: &mut impl Write) {
                         // (weight, ply) of each engine position.
                         let mut cands: Vec<(f64, usize)> = Vec::new();
                         let mut rel = Vec::new();
-                        if replay_game(line, |s, _| {
+                        if replay_game(line, |s, _, _| {
                             rel.clear();
                             nnue::relation_features(s, &mut rel);
                             let active = { let (a, b) = s.get_active_range(); (b - a + 1) as f64 };
@@ -2379,7 +2421,7 @@ fn labelrun(args: &[String], out: &mut impl Write) {
                         e.set_option("Hash", &OptionValue::Int(16));
                         let mut ply = 0;
                         let mut states = Vec::new();
-                        let _ = replay_game(line, |s, _| {
+                        let _ = replay_game(line, |s, _, _| {
                             ply += 1;
                             if plies.contains(&ply) {
                                 states.push((ply, s.clone()));
@@ -2449,7 +2491,7 @@ fn netdata(args: &[String], out: &mut impl Write) {
                         let line = &lines[g];
                         g += threads;
                         let mut pending: Vec<(String, Vec<f32>, bool)> = Vec::new();
-                        let Some(white) = replay_game(line, |s, t| {
+                        let Some(white) = replay_game(line, |s, t, _| {
                             if no_check && s.has_phantom_check() {
                                 return;
                             }
