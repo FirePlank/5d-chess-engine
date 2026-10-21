@@ -2492,7 +2492,10 @@ impl AlphaBeta {
             if depth >= NMP_MIN_DEPTH && Self::has_null_material(s) && self.static_eval(s) >= beta {
                 let r = NMP_R + depth / NMP_DIV;
                 let mark = s.make_null();
-                let v = -self.negamax(s, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
+                // A checking sacrifice by time travel is the threat a reduced search misses
+                // (`sac::has_sac_travel`): no null move against one.
+                let threat = super::sac::has_sac_travel(s);
+                let v = if threat { -INF } else { -self.negamax(s, depth - 1 - r, ply + 1, -beta, -beta + 1, false) };
                 s.unmake(mark);
                 if self.aborted {
                     return 0;

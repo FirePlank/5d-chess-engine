@@ -1007,6 +1007,41 @@ pub fn is_sac_travel(s: &State, m: &FullMove) -> bool {
     back != 0 && back & !b.royal() == 0
 }
 
+/// Whether the side to move has a checking sacrifice by time travel (`is_sac_travel`). Only
+/// landings next to an enemy royal are tried: elsewhere the royal can't be the one recapturer.
+pub fn has_sac_travel(s: &State) -> bool {
+    let m = s.multiverse();
+    let c = s.get_present().1;
+    let (lo, hi) = m.get_lines_range();
+    let mut ml = MoveList::new();
+    for l in lo..=hi {
+        let (t, col) = m.get_timeline_end(l);
+        if col != c {
+            continue;
+        }
+        let b = m.board(l, t, c);
+        for sq in marked_pos(b.hostile(!c) & !b.royal()) {
+            let p = Vec4::from_xy(sq, Vec4::new(0, 0, t, l));
+            ml.clear();
+            m.gen_superphysical_moves(p, c, &mut ml);
+            for &(q0, bb) in &ml {
+                if m.get_timeline_end(q0.l()) == (q0.t(), c) {
+                    continue;
+                }
+                let Some(tb) = m.get_board_ptr(q0.l(), q0.t(), c) else { continue };
+                let mut zone = 0;
+                for r in marked_pos(tb.royal() & tb.hostile(c)) {
+                    zone |= king_attack(r);
+                }
+                if marked_pos(bb & zone).any(|dst| is_sac_travel(s, &FullMove::new(p, Vec4::from_xy(dst, q0)))) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 // ------------------------------------------------------------------ the search's use
 
 /// Known winning travels, by `travel_key` (small enough to ask at every move and evaluation).
