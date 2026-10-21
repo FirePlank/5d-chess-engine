@@ -539,7 +539,7 @@ impl State {
     }
 
     fn get_mate_type_impl(&self, legal_action_witness: bool) -> MateType {
-        crate::misc::prof::scope(10);
+        let _prof = crate::misc::prof::scope(10);
         // An interrupted enumeration finds no action: under a search's stop guard that would
         // read as checkmate. The answer must be exact, so nothing interrupts it.
         let _uninterrupted = super::hypercuboid::interrupt_off();

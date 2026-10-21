@@ -80,6 +80,7 @@ pub fn run(engine: AlphaBeta) {
                 out("option name OwnBook type check default false");
                 out("option name MateVerify type string default auto");
                 out("option name Skill Level type spin default 8 min 1 max 8");
+                out("option name EvalFile type string default <empty>");
                 out("5duciok");
             }
             "isready" => out("readyok"),
