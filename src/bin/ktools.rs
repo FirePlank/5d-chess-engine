@@ -1953,11 +1953,12 @@ fn tactics(path: &str, ms: u64, threads: usize, out: &mut impl Write) {
 }
 
 /// Replay one harness game record (`sprt` JSONL), calling `f` with each position an engine
-/// played from and that engine's reported score of it (internal units, None when unscored, or
-/// when the record says the score's line did not begin with the action played). Returns the
+/// played from, that engine's reported score of it (internal units, None when unscored, or
+/// when the record says the score's line did not begin with the action played) and the action
+/// it played (5DUCI moves, without `submit`). Returns the
 /// result for white (1, 0.5, 0), or None for a game without a usable result or that does not
 /// replay (engine failures, missing fields, illegal moves).
-fn replay_game(line: &str, mut f: impl FnMut(&State, Option<i32>)) -> Option<f32> {
+fn replay_game(line: &str, mut f: impl FnMut(&State, Option<i32>, &str)) -> Option<f32> {
     use kairos::core::variants::{apply_uci_moves, position_from_uci};
     // A game lost to an engine failure has no real result.
     if json_field(line, "reason").is_some_and(|r| r.starts_with("protocol")) {
@@ -2004,7 +2005,7 @@ fn replay_game(line: &str, mut f: impl FnMut(&State, Option<i32>)) -> Option<f32
             first_player = Some(s.get_present().1);
         }
         if i >= opening {
-            f(&s, evs[i - opening]);
+            f(&s, evs[i - opening], a);
         }
         apply_uci_moves(&mut s, &format!("{} submit", a)).ok()?;
     }
@@ -2027,6 +2028,10 @@ fn replay_game(line: &str, mut f: impl FnMut(&State, Option<i32>)) -> Option<f32
 /// - `out.ftr`: u16 board features; `out.rel`: u16 relation features (`nnue::relation_features`).
 ///
 /// NETDATA_NO_CHECK=1 leaves out positions with the side to move in check (test sets).
+/// NNUE_QUIET=1 keeps only quiet positions, as the search evaluates them statically: the side to
+/// move not in check, with no capture quiescence would credit (`local::capture_gain` on its
+/// boards of the present), and its played action neither capturing nor checking; the teacher's
+/// score of the others includes tactics the search resolves itself.
 /// NNUE_LABELS=file (`labelrun` output, for the same games file): only the relabelled positions,
 /// with their new scores (or, with NNUE_LABELS_KEEP=1, their old ones, for comparison).
 fn nnuedata(args: &[String], out: &mut impl Write) {
@@ -2047,6 +2052,8 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
     let threads = 14;
     let no_check = std::env::var_os("NETDATA_NO_CHECK").is_some();
     let keep_teacher = std::env::var_os("NNUE_LABELS_KEEP").is_some();
+    let quiet = std::env::var_os("NNUE_QUIET").is_some();
+    let local_vals = kairos::engine::local::values_from(&hce::tuned_weights()[hce::fi::MAT_A..hce::fi::MAT_A + 10]);
     let labels: Option<std::collections::HashMap<(usize, usize), f32>> = std::env::var("NNUE_LABELS").ok().map(|p| {
         std::fs::read_to_string(p)
             .expect("labels")
@@ -2067,7 +2074,7 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
     let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<Sample>>(256);
     std::thread::scope(|sc| {
         for tid in 0..threads {
-            let (lines, tx, labels) = (&lines, tx.clone(), &labels);
+            let (lines, tx, labels, local_vals) = (&lines, tx.clone(), &labels, &local_vals);
             sc.spawn(move || {
                 let mut g = tid;
                 while g < lines.len() {
@@ -2076,10 +2083,22 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
                     g += threads;
                     let mut samples: Vec<(Sample, bool)> = Vec::new();
                     let mut ply = 0;
-                    let Some(white) = replay_game(line, |s, t| {
+                    let Some(white) = replay_game(line, |s, t, played| {
                         ply += 1;
-                        if no_check && s.has_phantom_check() {
+                        if (no_check || quiet) && s.has_phantom_check() {
                             return;
+                        }
+                        if quiet {
+                            let present = s.get_present();
+                            let (amin, amax) = s.get_active_range();
+                            let h = s.get_board_size().1;
+                            let gain: i32 = (amin..=amax)
+                                .filter(|&l| s.get_timeline_end(l) == present)
+                                .map(|l| kairos::engine::local::capture_gain(s.board(l, present.0, present.1), present.1, h, local_vals))
+                                .sum();
+                            if gain > 0 || tactical(s, played) {
+                                return;
+                            }
                         }
                         let relabelled = match labels {
                             Some(m) => match m.get(&(game, ply)) {
@@ -2161,6 +2180,21 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
         w.flush().expect("write records");
     }
     writeln!(out, "{} records, {} boards, {} board features, {} relation features ({} dense inputs) from {} games -> {}.*", n_rec, n_brd, n_ftr, n_rel, nnue::ND, lines.len(), base).unwrap();
+}
+
+/// Whether action `played` (5DUCI moves) of the side to move in `s` captures or gives check.
+fn tactical(s: &State, played: &str) -> bool {
+    use kairos::core::action::ExtMove;
+    let c = s.get_present().1;
+    let captures = played.split_whitespace().filter_map(|t| ExtMove::parse(t).ok()).any(|m| {
+        let to = m.fm.to;
+        s.get_board_ptr(to.l(), to.t(), c).is_some_and(|b| b.hostile(c) & kairos::core::bitboard::pmask(to.xy()) != 0)
+    });
+    if captures {
+        return true;
+    }
+    let mut after = s.clone();
+    kairos::core::variants::apply_uci_moves(&mut after, &format!("{} submit", played)).is_ok() && after.has_phantom_check()
 }
 
 /// `nnueeval model.nnue file.g`: the NNUE evaluation of each position (internal units, side to
@@ -2288,7 +2322,7 @@ fn labelpick(args: &[String], out: &mut impl Write) {
                         // (weight, ply) of each engine position.
                         let mut cands: Vec<(f64, usize)> = Vec::new();
                         let mut rel = Vec::new();
-                        if replay_game(line, |s, _| {
+                        if replay_game(line, |s, _, _| {
                             rel.clear();
                             nnue::relation_features(s, &mut rel);
                             let active = { let (a, b) = s.get_active_range(); (b - a + 1) as f64 };
@@ -2379,7 +2413,7 @@ fn labelrun(args: &[String], out: &mut impl Write) {
                         e.set_option("Hash", &OptionValue::Int(16));
                         let mut ply = 0;
                         let mut states = Vec::new();
-                        let _ = replay_game(line, |s, _| {
+                        let _ = replay_game(line, |s, _, _| {
                             ply += 1;
                             if plies.contains(&ply) {
                                 states.push((ply, s.clone()));
@@ -2449,7 +2483,7 @@ fn netdata(args: &[String], out: &mut impl Write) {
                         let line = &lines[g];
                         g += threads;
                         let mut pending: Vec<(String, Vec<f32>, bool)> = Vec::new();
-                        let Some(white) = replay_game(line, |s, t| {
+                        let Some(white) = replay_game(line, |s, t, _| {
                             if no_check && s.has_phantom_check() {
                                 return;
                             }
