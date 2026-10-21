@@ -558,6 +558,10 @@ pub struct AlphaBeta {
     sac_line: Option<bool>,
     /// Static evaluations and in-check status of recently seen positions.
     known: KnownCache,
+    /// The board NNUE that replaces the handcrafted evaluation at full strength (`EvalFile`),
+    /// and its board embeddings.
+    nnue: Option<Arc<super::nnue::Model>>,
+    nnue_cache: Box<super::nnue::Cache>,
     /// The score (internal units, side to move) of the last `find_best_move`.
     last_score: i32,
     /// Whether that score, a mate score, is proven (see `proven`).
@@ -899,6 +903,8 @@ impl AlphaBeta {
             known_check: None,
             sac_line: None,
             known: KnownCache::new(),
+            nnue: None,
+            nnue_cache: Box::default(),
             last_score: 0,
             last_proven: false,
             resume: None,
@@ -923,13 +929,24 @@ impl AlphaBeta {
 
     #[inline]
     fn static_eval(&mut self, s: &State) -> i32 {
-        crate::misc::prof::scope(9);
+        let _prof = crate::misc::prof::scope(9);
         let key = s.hash();
         let i = self.known.slot(key);
         let e = self.known.slots[i];
         if e.key == key && e.flags & KNOWN_EVAL != 0 {
             return e.eval;
         }
+        if self.skill_level == 8
+            && let Some(m) = &self.nnue {
+                // The handcrafted counts only for a model that reads them.
+                let sd = m.use_dense.then(|| hce::sides_with(s, &mut *self.terms));
+                let v = m.evaluate(s, sd.as_ref(), &mut self.nnue_cache).clamp(-EVAL_MAX, EVAL_MAX);
+                self.known.store(i, key, |e| {
+                    e.eval = v;
+                    e.flags |= KNOWN_EVAL;
+                });
+                return v;
+            }
         let sd = hce::sides_with(s, &mut *self.terms);
         let mut f = hce::features_from(&sd, s, hce::needs_checks(&self.hce));
         let spatial = if self.skill_level < 8 { Some(super::skill::spatial_score(&f, &self.hce, s.get_present().1)) } else { None };
@@ -953,7 +970,7 @@ impl AlphaBeta {
 
     /// Whether the side to move is in check (royal captures threatened if it passed).
     fn in_check(&mut self, s: &State) -> bool {
-        crate::misc::prof::scope(10);
+        let _prof = crate::misc::prof::scope(10);
         let key = s.hash();
         let i = self.known.slot(key);
         let e = self.known.slots[i];
@@ -1057,7 +1074,7 @@ impl AlphaBeta {
         axes: std::ops::Range<usize>,
         branch: BranchOrder,
     ) {
-        crate::misc::prof::scope(6);
+        let _prof = crate::misc::prof::scope(6);
         let u = info.get_universe();
         // Branch axes share entries: they are scored once and share the first one's lists.
         let fba = info.first_branch_axis();
@@ -1505,7 +1522,7 @@ impl AlphaBeta {
     /// an exact refutation of the check, without building the escape search. The replies to
     /// the checks of one scan are mostly the same few actions.
     fn replay_escape(&mut self, s: &mut State) -> bool {
-        crate::misc::prof::scope(11);
+        let _prof = crate::misc::prof::scope(11);
         for i in 0..self.escapes.len() {
             if Self::is_legal(s, &self.escapes[i]) {
                 let e = self.escapes.remove(i);
@@ -2164,7 +2181,7 @@ impl AlphaBeta {
 
     /// Play an action generated as legal for `s`; undo with `s.unmake(mark)`.
     fn make(s: &mut State, act: &MoveSeq) -> Mark {
-        crate::misc::prof::scope(7);
+        let _prof = crate::misc::prof::scope(7);
         let mark = s.mark();
         for &m in act {
             s.apply_move::<true>(m);
@@ -2175,7 +2192,7 @@ impl AlphaBeta {
 
     /// Play a remembered action (TT/killer) only if it is legal in `s`.
     fn make_checked(s: &mut State, act: &MoveSeq) -> Option<Mark> {
-        crate::misc::prof::scope(11);
+        let _prof = crate::misc::prof::scope(11);
         let player = s.get_present().1;
         let mark = s.mark();
         let mut ok = true;
@@ -3082,6 +3099,8 @@ struct HelperJob {
     resumed_depth: i32,
     /// The main thread's `MultiPV` (helpers search the same lines, as in Apeiron).
     multipv: usize,
+    /// The main thread's evaluation network (`EvalFile`).
+    nnue: Option<Arc<super::nnue::Model>>,
     start: Instant,
     tt: Arc<TtTable>,
     stop: Arc<AtomicBool>,
@@ -3133,12 +3152,21 @@ impl Helper {
                     match msg {
                         HelperMsg::NewGame => e.history.iter_mut().for_each(|h| *h = 0),
                         HelperMsg::Search(job) => {
-                            let HelperJob { root, roots, roots_complete, max_depth, resumed_depth, multipv, start, tt, stop, counters, done } = *job;
+                            let HelperJob { root, roots, roots_complete, max_depth, resumed_depth, multipv, nnue, start, tt, stop, counters, done } = *job;
                             if stop.load(Ordering::Relaxed) {
                                 continue; // That search is over already.
                             }
                             e.tt = tt;
                             e.multipv = multipv;
+                            if !match (&e.nnue, &nnue) {
+                                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                                (None, None) => true,
+                                _ => false,
+                            } {
+                                e.nnue = nnue;
+                                e.known.clear();
+                                e.nnue_cache.clear();
+                            }
                             e.begin_search(&stop, None, None);
                             e.nodes_out = &counters[thread_id - 1].0;
                             let interrupt = interrupt_on(&stop, None);
@@ -3171,6 +3199,16 @@ impl AlphaBeta {
         }
     }
 
+    /// Evaluate with `model` (None: the handcrafted evaluation): every remembered evaluation and
+    /// search result came from the other one, so they go.
+    fn set_nnue(&mut self, model: Option<Arc<super::nnue::Model>>) {
+        self.nnue = model;
+        self.known.clear();
+        self.nnue_cache.clear();
+        self.new_game();
+        self.resume = None;
+    }
+
     /// Replace the (shared) transposition table, freeing the old one first.
     fn set_tt(&mut self, make: impl FnOnce() -> TtTable) {
         self.tt = Arc::new(TtTable::with_len(1));
@@ -3196,6 +3234,25 @@ impl AlphaBeta {
                 }
                 None => false,
             };
+        }
+        if key == "EvalFile" {
+            let path = match value {
+                OptionValue::Str(p) => p.trim().to_string(),
+                _ => String::new(),
+            };
+            let model = if path.is_empty() || path.eq_ignore_ascii_case("<empty>") || path.eq_ignore_ascii_case("none") {
+                None
+            } else {
+                match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| super::nnue::Model::from_bytes(&b)) {
+                    Ok(m) => Some(Arc::new(m)),
+                    Err(e) => {
+                        eprintln!("EvalFile {}: {}", path, e);
+                        return false;
+                    }
+                }
+            };
+            self.set_nnue(model);
+            return true;
         }
         if key == "OwnBook" {
             self.own_book = match value {
@@ -3533,6 +3590,7 @@ impl AlphaBeta {
                 max_depth,
                 resumed_depth,
                 multipv: self.multipv,
+                nnue: self.nnue.clone(),
                 start,
                 tt: self.tt.clone(),
                 stop: helper_stop.clone(),

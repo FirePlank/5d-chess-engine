@@ -1,0 +1,91 @@
+# Relabel positions of SPRT games by deeper search on GitHub-hosted runners (ktools labelrun).
+# Every job is a `relabel: <name>` commit on the `relabel` branch carrying .github/relabel.json
+# and its input split into shards (relabel/<name>/shard_<k>.jsonl.gz, from ktools labelpick);
+# each shard uploads its labels as the artifact label-<k>. Driver: scripts/relabel_run.sh.
+name: Relabel
+
+on:
+  push:
+    branches: [relabel]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relabel
+  cancel-in-progress: false
+
+env:
+  RUSTFLAGS: -C target-cpu=x86-64-v3
+
+jobs:
+  setup:
+    if: "startsWith(github.event.head_commit.message, 'relabel: ')"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    outputs:
+      shards: ${{ steps.cfg.outputs.shards }}
+      name: ${{ steps.cfg.outputs.name }}
+      nodes: ${{ steps.cfg.outputs.nodes }}
+      max_seconds: ${{ steps.cfg.outputs.max_seconds }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read config
+        id: cfg
+        run: |
+          c=.github/relabel.json
+          {
+            echo "shards=$(jq -nc --argjson n "$(jq -r '.shards' $c)" '[range(1; $n + 1)]')"
+            echo "name=$(jq -r '.name' $c)"
+            echo "nodes=$(jq -r '.nodes' $c)"
+            echo "max_seconds=$(jq -r '.max_seconds // 19800' $c)"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: relabel-bin
+
+      - name: Build
+        run: |
+          cargo build --release --bin ktools
+          mkdir -p bins && cp target/release/ktools bins/ktools
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ktools
+          path: bins/
+          retention-days: 1
+
+  label:
+    needs: setup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.setup.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: relabel/${{ needs.setup.outputs.name }}/shard_${{ matrix.shard }}.jsonl.gz
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ktools
+          path: bins
+
+      - name: Label shard
+        run: |
+          chmod +x bins/ktools
+          gunzip -c "relabel/${{ needs.setup.outputs.name }}/shard_${{ matrix.shard }}.jsonl.gz" > picks.jsonl
+          ./bins/ktools labelrun picks.jsonl "label_${{ matrix.shard }}.tsv" "${{ needs.setup.outputs.nodes }}" \
+            0 1 "$(nproc)" "${{ needs.setup.outputs.max_seconds }}"
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: label-${{ matrix.shard }}
+          path: label_${{ matrix.shard }}.tsv
+          retention-days: 7

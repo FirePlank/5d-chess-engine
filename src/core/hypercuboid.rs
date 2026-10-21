@@ -692,8 +692,8 @@ impl HcInfo {
     /// Rebuild the search context for `s` in place and return the initial search space.
     /// With `defer_branch`, branch-axis arrival entries wait for `materialize_branch`.
     pub fn rebuild(&mut self, s: &State, defer_branch: bool) -> SearchSpace {
-        crate::misc::prof::scope(0);
-        crate::misc::prof::scope(15);
+        let _prof = crate::misc::prof::scope(0);
+        let _prof = crate::misc::prof::scope(15);
         let HcInfo {
             player: info_player,
             line_axes,
@@ -780,7 +780,7 @@ impl HcInfo {
         let mut facts = FACTS_CACHE.with(|c| std::mem::take(&mut *c.borrow_mut()));
         let mut memo = SafetyMemo { s, player, lines_lo, nt, stamp, tab: &mut safety.1, facts: &mut facts };
         drop(());
-        crate::misc::prof::scope(1);
+        let _prof = crate::misc::prof::scope(1);
         // Every piece's moves: the physical ones become entries (those that leave no royal of
         // the mover attacked; a board played before reuses its entries), the jumps are
         // collected.
@@ -801,7 +801,7 @@ impl HcInfo {
             let locs = &mut axis_coords[axis];
             locs.clear();
             locs.push(Entry::Null);
-            crate::misc::prof::scope(18);
+            let _prof = crate::misc::prof::scope(18);
             let key = s.multiverse().key_of(l, t, player);
             let slot = &mut cache.slots[key as usize % PHYS_SLOTS];
             match slot {
@@ -820,7 +820,7 @@ impl HcInfo {
                 }
             }
             drop(());
-            crate::misc::prof::scope(19);
+            let _prof = crate::misc::prof::scope(19);
             for pos in marked_pos(source.friendly(player) & !source.wall()) {
                 let from = Vec4::from_xy(pos, p0);
                 ml.clear();
@@ -848,7 +848,7 @@ impl HcInfo {
             let i = jt[axis_of_line(axis_of, from.l())][from.xy() as usize];
             if i == INVALID { None } else { Some(i) }
         };
-        crate::misc::prof::scope(12);
+        let _prof = crate::misc::prof::scope(12);
         if axis_coords.len() < np {
             axis_coords.resize_with(np, Vec::new);
         }
@@ -893,7 +893,7 @@ impl HcInfo {
         }
 
         drop(());
-        crate::misc::prof::scope(13);
+        let _prof = crate::misc::prof::scope(13);
         // The branch arrivals: only the ones whose result needs a check test get their board
         // here; the entries are built by `materialize_branch`.
         branch_moves.clear();
@@ -908,7 +908,7 @@ impl HcInfo {
         branch_entries.push(Entry::Null);
         *branch_ready = false;
         drop(());
-        crate::misc::prof::scope(14);
+        let _prof = crate::misc::prof::scope(14);
         let new_l = s.new_line();
         let sign = signum(new_l);
         line_axes.clear();
@@ -1005,7 +1005,7 @@ impl HcInfo {
     /// Pick a point in `hc` whose departures and arrivals pair up (into `sc.point`). Prunes
     /// arrivals whose departure is no longer available.
     pub fn take_point(&self, hc: &mut Hc, order: &HcOrdering, sc: &mut PointScratch) -> bool {
-        crate::misc::prof::scope(2);
+        let _prof = crate::misc::prof::scope(2);
         let dim = self.dimension();
         let PointScratch { g, must_include, edge_refs, want, point: result } = sc;
         g.reset(dim);
@@ -1130,7 +1130,7 @@ impl HcInfo {
 
 
     pub fn find_problem(&self, s: &State, p: &Point, hc: &Hc, buf: &mut CheckBuf) -> Option<Slice> {
-        crate::misc::prof::scope(3);
+        let _prof = crate::misc::prof::scope(3);
         let r = self.jump_order_consistent(s, p, hc).or_else(|| {
             let pa = self.present_after(s, p)?;
             self.present_problem(s, p, &pa).or_else(|| self.wasted_problem(s, p, &pa))
@@ -1139,7 +1139,7 @@ impl HcInfo {
         if r.is_some() {
             return r;
         }
-        crate::misc::prof::scope(4);
+        let _prof = crate::misc::prof::scope(4);
         self.find_checks(s, p, hc, buf)
     }
 
@@ -1955,7 +1955,7 @@ impl HcCursor {
                 continue;
             }
             if let Some(problem) = memo.then(|| self.memo.holding(pt)).flatten() {
-                crate::misc::prof::scope(5);
+                let _prof = crate::misc::prof::scope(5);
                 self.ss.push_back(hc);
                 self.ss.remove_slice_backwards(problem, true, 10, 1);
                 continue;
@@ -1968,7 +1968,7 @@ impl HcCursor {
                     return Ok(Some(act));
                 }
                 Some(problem) => {
-                    crate::misc::prof::scope(5);
+                    let _prof = crate::misc::prof::scope(5);
                     if memo {
                         self.memo.add(&problem);
                     }
@@ -2060,7 +2060,7 @@ impl BfHeap {
     }
 
     fn push(&mut self, hc: Hc, class: i32, fill: &mut BranchFill) {
-        crate::misc::prof::scope(11);
+        let _prof = crate::misc::prof::scope(11);
         self.need_branch(&hc, false, fill);
         let mut bound = 0i64;
         let shared = match &self.order {
@@ -2319,7 +2319,7 @@ impl BestFirstCursor {
                 continue;
             }
             if let Some(problem) = memo.then(|| self.memo.holding(pt)).flatten() {
-                crate::misc::prof::scope(5);
+                let _prof = crate::misc::prof::scope(5);
                 hc.remove_slice_with(problem, |h| heap.push(h, class, fill));
                 continue;
             }
@@ -2332,7 +2332,7 @@ impl BestFirstCursor {
                     return Ok(Some(act));
                 }
                 Some(problem) => {
-                    crate::misc::prof::scope(5);
+                    let _prof = crate::misc::prof::scope(5);
                     if memo {
                         self.memo.add(&problem);
                     }
