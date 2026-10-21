@@ -28,7 +28,7 @@ git merge -q --no-edit -m "merge main into relabel" "$(git -C "$R" rev-parse HEA
 mkdir -p .github "relabel/$NAME"
 cp "$R/.github/workflows/relabel.yml" .github/workflows/relabel.yml
 # Line i of the picks goes to shard (i % SHARDS) + 1.
-python3 - "$PICKS" "relabel/$NAME" "$SHARDS" <<'EOF'
+python - "$PICKS" "relabel/$NAME" "$SHARDS" <<'EOF'
 import gzip, sys
 picks, out, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
 fs = [gzip.open(f'{out}/shard_{k + 1}.jsonl.gz', 'wt', encoding='utf8') for k in range(n)]
@@ -58,7 +58,7 @@ D="$R/games/nnue/relabel_$NAME"
 rm -rf "$D"; mkdir -p "$D"
 until ghr gh run download "$ID" -R "$REPO" -D "$D" -p 'label-*'; do sleep 30; done
 # Shard k's line j is line j * SHARDS + k - 1 of the picks.
-python3 - "$D" "$SHARDS" "$R/games/nnue/labels_$NAME.tsv" <<'EOF'
+python - "$D" "$SHARDS" "$R/games/nnue/labels_$NAME.tsv" <<'EOF'
 import glob, os, sys
 d, n, out = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 rows = 0
