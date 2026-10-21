@@ -6,7 +6,7 @@ use kairos::core::hypercuboid::HcInfo;
 use kairos::core::perft::{parse_g_line, perft};
 use kairos::core::state::{MateType, State};
 use std::io::{BufRead, Write};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 fn seq_string(mv: &MoveSeq) -> String {
     mv.iter().map(|m| m.to_string()).collect::<Vec<_>>().join(" ")
@@ -1424,7 +1424,7 @@ fn main() {
                  perft <depth> [cap] | dump [cap] | naive | validate [limit] | ordercheck [cap] | slicecheck | explain <moves>\n  \
                  \x20 (positions as G lines on stdin)\n  \
                  bench [file]            perft oracle\n  \
-                 abbench [file] [depth]  alpha-beta node oracle (AB_NODES caps nodes per position)\n  \
+                 abbench [file] [depth]  deterministic search oracle (AB_NODES caps nodes per position)\n  \
                  puzzles [file] [ms]     time to find each mate in data/puzzles.g
                    matecheck <cases> [nodes] [max] [threads] [records_out]   mate consistency along played lines
                    mrank <file.g> [cap]   ranks of the mating actions in the interior node order
@@ -1457,43 +1457,152 @@ fn bench(path: &str, out: &mut impl Write) {
     write!(out, "{}", kairos::misc::prof::report()).unwrap();
 }
 
-/// Alpha-beta node oracle: fixed-depth searches; checksum covers node counts and best moves.
+/// A search report with only clock-derived fields removed. Keep PV tokens verbatim.
+fn bench_report(line: &str) -> String {
+    if line.starts_with("depth ") {
+        let mut words = line.split_whitespace();
+        let mut kept = Vec::new();
+        while let Some(word) = words.next() {
+            match word {
+                "time" | "nps" => { words.next(); }
+                "pv" => {
+                    kept.push(word);
+                    kept.extend(words);
+                    break;
+                }
+                _ => kept.push(word),
+            }
+        }
+        return kept.join(" ");
+    }
+    if line.starts_with("string mate1 partial (")
+        && let Some((status, elapsed)) = line.rsplit_once(", ")
+        && elapsed.strip_suffix(" ms)").is_some_and(|n| n.parse::<u128>().is_ok())
+    {
+        return format!("{})", status);
+    }
+    line.to_string()
+}
+
+/// Every search result field relevant to the benchmark's equivalence signature.
+#[derive(Hash)]
+struct BenchResult {
+    reports: Vec<String>,
+    best: Option<String>,
+    nodes: u64,
+    score: i32,
+    proven: bool,
+}
+
+impl BenchResult {
+    fn oracle(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.hash(&mut h);
+        h.finish()
+    }
+
+    fn completed_depth(&self) -> u32 {
+        self.reports.iter().rev().find_map(|r| r.strip_prefix("depth ")?.split_whitespace().next()?.parse().ok()).unwrap_or(0)
+    }
+}
+
+/// Alpha-beta oracle: one thread, counted root mate scan, no wall-clock limit. V2 hashes
+/// actual nodes, final score/proof/action, and reports including every completed-depth PV.
+/// NPS includes root preparation inside find_best_move, but excludes engine setup.
 fn abbench(path: &str, depth: u32, out: &mut impl Write) {
     use kairos::engine::ab::AlphaBeta;
-    use kairos::engine::Limits;
+    use kairos::engine::{Limits, OptionValue};
     use std::hash::{Hash, Hasher};
+    let node_cap = std::env::var("AB_NODES").ok().map(|v| v.parse::<u64>().expect("AB_NODES must be an unsigned integer"));
+    let nnue_file = std::env::var("NNUE_FILE").ok();
+    let nnue_blend = std::env::var("NNUE_BLEND").ok().map(|v| v.parse::<i64>().expect("NNUE_BLEND must be an integer from 0 to 100"));
+    let verbose = std::env::var_os("BENCH_VERBOSE").is_some();
     let text = std::fs::read_to_string(path).expect("bench positions");
     let positions: Vec<State> = text.lines().filter(|l| l.starts_with("G ")).map(|l| parse_g_line(l).unwrap()).collect();
+    assert!(!positions.is_empty(), "benchmark file has no G positions");
     let mut h = std::collections::hash_map::DefaultHasher::new();
+    // A new signature version: the old checksum used stale completed-depth node totals.
+    (2u32, depth, node_cap, positions.len()).hash(&mut h);
     let stop = std::sync::atomic::AtomicBool::new(false);
     let t0 = Instant::now();
     let mut total_nodes = 0u64;
+    let mut search_time = Duration::ZERO;
     for (k, s) in positions.iter().enumerate() {
         let mut e = AlphaBeta::new();
+        assert!(e.set_option("MateVerify", &OptionValue::Str("counted".into())));
         // NNUE_FILE: search with that network's evaluation (`EvalFile`).
-        if let Ok(f) = std::env::var("NNUE_FILE") {
-            assert!(e.set_option("EvalFile", &kairos::engine::OptionValue::Str(f)), "NNUE_FILE");
+        if let Some(f) = &nnue_file {
+            assert!(e.set_option("EvalFile", &OptionValue::Str(f.clone())), "NNUE_FILE");
         }
         // NNUE_BLEND: the network's share in percent (`EvalBlend`).
-        if let Some(b) = std::env::var("NNUE_BLEND").ok().and_then(|b| b.parse::<i64>().ok()) {
-            assert!(e.set_option("EvalBlend", &kairos::engine::OptionValue::Int(b)), "NNUE_BLEND");
+        if let Some(b) = nnue_blend {
+            assert!(e.set_option("EvalBlend", &OptionValue::Int(b)), "NNUE_BLEND must be from 0 to 100");
         }
-        let node_cap = std::env::var("AB_NODES").ok().and_then(|v| v.parse().ok());
         let limits = Limits { depth: Some(depth), nodes: node_cap, ..Default::default() };
-        let mut last = String::new();
+        let mut reports = Vec::new();
         let t = Instant::now();
-        let best = e.find_best_move(s, &limits, &stop, &mut |m| last = m);
-        best.map(|a| a.to_string()).hash(&mut h);
-        let nodes: u64 = last.split_whitespace().skip_while(|w| *w != "nodes").nth(1).and_then(|x| x.parse().ok()).unwrap_or(0);
-        nodes.hash(&mut h);
-        total_nodes += nodes;
-        if std::env::var("BENCH_VERBOSE").is_ok() {
-            eprintln!("pos {} nodes {} {:.2}s", k, nodes, t.elapsed().as_secs_f64());
+        let best = e.find_best_move(s, &limits, &stop, &mut |m| reports.push(bench_report(&m)));
+        let elapsed = t.elapsed();
+        search_time += elapsed;
+        let result = BenchResult { reports, best: best.map(|a| a.to_string()), nodes: e.last_search_nodes(), score: e.last_score(), proven: e.last_proven() };
+        result.hash(&mut h);
+        total_nodes += result.nodes;
+        if verbose {
+            for report in &result.reports {
+                eprintln!("pos {} {}", k, report);
+            }
+            eprintln!("pos {} oracle {:016x} depth {} nodes {} score {} proven {} time {:.6}s best {}",
+                k, result.oracle(), result.completed_depth(), result.nodes, result.score, result.proven, elapsed.as_secs_f64(), result.best.as_deref().unwrap_or("none"));
         }
     }
-    let secs = t0.elapsed().as_secs_f64();
-    writeln!(out, "aboracle {:016x} | depth {} | nodes {} in {:.3}s ({:.0} nps)", h.finish(), depth, total_nodes, secs, total_nodes as f64 / secs).unwrap();
+    let wall = t0.elapsed().as_secs_f64();
+    let secs = search_time.as_secs_f64();
+    writeln!(out, "aboracle {:016x} | v2 depth {} | nodes {} in {:.6}s ({:.0} nps) | wall {:.6}s | mate counted | node-cap {}",
+        h.finish(), depth, total_nodes, secs, total_nodes as f64 / secs.max(f64::MIN_POSITIVE), wall,
+        node_cap.map_or_else(|| "none".into(), |n| n.to_string())).unwrap();
     write!(out, "{}", kairos::misc::prof::report()).unwrap();
+}
+
+#[cfg(test)]
+mod bench_tests {
+    use super::{bench_report, BenchResult};
+
+    #[test]
+    fn signature_ignores_elapsed_fields_but_keeps_search_fields() {
+        let a = "depth 3 score cp 17 wdl 501 0 499 nodes 120 nps 60000 time 2 roots 20 pv (0T1)e2e4 submit";
+        let b = a.replace("nps 60000 time 2", "nps 12000 time 10");
+        assert_eq!(bench_report(a), bench_report(&b));
+        for (before, after) in [("cp 17", "cp 18"), ("nodes 120", "nodes 121"), ("e2e4", "d2d4")] {
+            assert_ne!(bench_report(a), bench_report(&a.replace(before, after)));
+        }
+        assert_eq!(bench_report("string mate1 partial (1024 actions, 3 unresolved, 81 ms)"),
+            "string mate1 partial (1024 actions, 3 unresolved)");
+        assert_ne!(bench_report("string mate1 partial (1024 actions, 3 unresolved, 81 ms)"),
+            bench_report("string mate1 partial (1024 actions, 4 unresolved, 82 ms)"));
+    }
+
+    #[test]
+    fn signature_covers_partial_iteration_and_final_result() {
+        let result = || BenchResult { reports: vec!["depth 1 score cp 0 nodes 20 pv (0T1)e2e4".into()],
+            best: Some("(0T1)e2e4".into()), nodes: 25, score: 7, proven: false };
+        let original = result().oracle();
+        let mut r = result();
+        r.nodes += 1;
+        assert_ne!(original, r.oracle());
+        r = result();
+        r.score += 1;
+        assert_ne!(original, r.oracle());
+        r = result();
+        r.proven = true;
+        assert_ne!(original, r.oracle());
+        r = result();
+        r.best = None;
+        assert_ne!(original, r.oracle());
+        r = result();
+        r.reports[0].push_str(" submit");
+        assert_ne!(original, r.oracle());
+    }
 }
 
 /// Lazy SMP scaling: per thread count, total nodes/s and mean depth reached in `ms` per
