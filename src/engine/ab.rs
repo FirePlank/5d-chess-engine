@@ -135,6 +135,14 @@ const ROOT_EFFORT_HIGH: f64 = 0.9;
 const ROOT_EFFORT_SCALE: f64 = 0.75;
 /// Extra depth of a root action that is an f7-style sacrifice travel (`sac::signature_travels`).
 const SAC_ROOT_EXT: i32 = 2;
+/// Root actions of the f7 kind probed before the search (`sac_child_probe`), the local nodes
+/// they share in a game (a clock) and in an analysis (none), and the deepest probe.
+const SAC_PROBE_ROOTS: usize = 2;
+const SAC_PROBE_NODES: u64 = 20_000;
+const SAC_PROBE_NODES_ANALYSIS: u64 = 600_000;
+const SAC_PROBE_DEPTH: i32 = 24;
+/// The share of the time left the probe may take.
+const SAC_PROBE_TIME_SHARE: f64 = 0.15;
 /// Local nodes the f7 sac probes may solve before a search: none, since solving cost more than it
 /// found at every budget tried (50000 down to 5000); the precomputed table is only read.
 const SAC_PREP_NODES: u64 = 0;
@@ -2411,6 +2419,56 @@ impl AlphaBeta {
         best
     }
 
+    /// The depth a root action is searched to (both root paths, single-line and MultiPV, use it):
+    /// the iteration's, less the skill level's travel reduction, plus the f7 / f2 sacrifices' extension.
+    fn root_child_depth(&self, act: &MoveSeq, depth: i32, sig: &[FullMove]) -> i32 {
+        let ext = if act.iter().any(|m| sig.contains(m)) { SAC_ROOT_EXT } else { 0 };
+        depth - super::skill::travel_reduction(self.skill_level, act) + ext
+    }
+
+    /// Plays each f7 / f2 sacrifice root action and deepens a search of the position it leaves, up
+    /// to a node budget: that child has few replies, so it gets deep cheaply, and its table
+    /// entries are there when the root searches the action (as when a sacrifice is played and
+    /// analysed, then taken back).
+    fn sac_child_probe(&mut self, work: &mut State, roots: &[(i32, MoveSeq)], sig: &[FullMove], clock: bool) {
+        if sig.is_empty() {
+            return;
+        }
+        let acts: Vec<&MoveSeq> = roots.iter().map(|r| &r.1).filter(|a| a.iter().any(|m| sig.contains(m))).take(SAC_PROBE_ROOTS).collect();
+        if acts.is_empty() {
+            return;
+        }
+        let share = (if clock { SAC_PROBE_NODES } else { SAC_PROBE_NODES_ANALYSIS }) / acts.len() as u64;
+        let limit = self.node_limit;
+        // Never more than a share of the time left (a short analysis keeps its search).
+        let deadline = self.deadline;
+        let probe_end = deadline.map(|d| Instant::now() + d.saturating_duration_since(Instant::now()).mul_f64(SAC_PROBE_TIME_SHARE));
+        for act in acts {
+            let mark = Self::make(work, act);
+            self.node_limit = Some(self.nodes + share);
+            self.deadline = probe_end.or(deadline);
+            for d in 1..=SAC_PROBE_DEPTH {
+                self.known_check = None;
+                self.negamax(work, d, 1, -INF, INF, true);
+                if self.aborted {
+                    break;
+                }
+            }
+            work.unmake(mark);
+            self.node_limit = limit;
+            self.deadline = deadline;
+            // Only the probe's own limits end it; a stop or the search's deadline stands.
+            // SAFETY: `stop_ptr` points at the caller's flag for the whole search.
+            let stopped = unsafe { &*self.stop_ptr }.load(Ordering::Relaxed) || deadline.is_some_and(|d| Instant::now() >= d) || limit.is_some_and(|n| self.nodes >= n);
+            if self.aborted && !stopped {
+                self.aborted = false;
+            }
+            if self.aborted {
+                return;
+            }
+        }
+    }
+
     /// Search one remembered action (TT move or killer) with PVS; returns its score.
     #[allow(clippy::too_many_arguments)]
     fn search_child(&mut self, s: &mut State, mark: Mark, first: bool, depth: i32, ply: usize, alpha: i32, beta: i32, pv: bool) -> i32 {
@@ -3588,6 +3646,9 @@ impl AlphaBeta {
         let sig: Vec<_> = super::sac::signature_travels(root).into_iter().filter(|m| (m.to.xy() & 7) == 5 && matches!(m.to.xy() >> 3, 1 | 6)).collect();
         let mut work = root.clone();
         work.enable_undo();
+        if main && resume.is_none() {
+            self.sac_child_probe(&mut work, &roots, &sig, plan.is_some_and(|p| p.clock));
+        }
         let mut best: MoveSeq = resume.map_or_else(|| roots[0].1.clone(), |r| r.best.clone());
         let mut best_score: i32 = resume.map_or(0, |r| r.score);
         // `best_score` is a proven mate (see `proven`): only then is it reported as a mate.
@@ -3632,7 +3693,7 @@ impl AlphaBeta {
             // Share of the iteration's nodes the chosen action took (see the clock below).
             let mut effort = 0.0f64;
             if multi {
-                let pass = self.multipv_pass(&mut work, &roots, depth, lo, hi, roots_complete);
+                let pass = self.multipv_pass(&mut work, &roots, &sig, depth, lo, hi, roots_complete);
                 // Its scores are exact: no fail high is a bound to keep.
                 hi = INF;
                 iter_best = pass.best;
@@ -3653,23 +3714,22 @@ impl AlphaBeta {
                     for (k, (_, act)) in roots.iter().enumerate() {
                         let act_nodes0 = self.nodes;
                         let mark = Self::make(&mut work, act);
-                        // A sacrifice of the f7 kind is searched deeper (its point is far away).
-                        let ext = if act.iter().any(|m| sig.contains(m)) { SAC_ROOT_EXT } else { 0 };
+                        let child_depth = self.root_child_depth(act, depth, &sig);
                         let v = if k == 0 {
-                            -self.negamax(&mut work, depth - 1 + ext, 1, -beta, -alpha, true)
+                            -self.negamax(&mut work, child_depth - 1, 1, -beta, -alpha, true)
                         } else {
                             // Late root actions are reduced, never pruned.
                             let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(self.in_check(&work)) } else { None };
                             let r = if child_check == Some(false) { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
                             self.known_check = child_check;
-                            let mut v = -self.negamax(&mut work, depth - 1 + ext - r, 1, -alpha - 1, -alpha, false);
+                            let mut v = -self.negamax(&mut work, child_depth - 1 - r, 1, -alpha - 1, -alpha, false);
                             if !self.aborted && v > alpha && r > 0 {
                                 self.known_check = child_check;
-                                v = -self.negamax(&mut work, depth - 1 + ext, 1, -alpha - 1, -alpha, false);
+                                v = -self.negamax(&mut work, child_depth - 1, 1, -alpha - 1, -alpha, false);
                             }
                             if !self.aborted && v > alpha {
                                 self.known_check = child_check;
-                                v = -self.negamax(&mut work, depth - 1 + ext, 1, -beta, -alpha, true);
+                                v = -self.negamax(&mut work, child_depth - 1, 1, -beta, -alpha, true);
                             }
                             v
                         };
@@ -3863,7 +3923,8 @@ impl AlphaBeta {
     /// One depth of MultiPV root search: the first action uses the window `lo..hi`, the next
     /// get full windows until `MultiPV` are exact, then each is scouted at the `MultiPV`-th best
     /// score and re-searched only if it beats it.
-    fn multipv_pass(&mut self, work: &mut State, roots: &[(i32, MoveSeq)], depth: i32, lo: i32, hi: i32, roots_complete: bool) -> MultiPass {
+    #[allow(clippy::too_many_arguments)]
+    fn multipv_pass(&mut self, work: &mut State, roots: &[(i32, MoveSeq)], sig: &[FullMove], depth: i32, lo: i32, hi: i32, roots_complete: bool) -> MultiPass {
         let want = self.multipv;
         let mut pass = MultiPass { best: None, best_pv: Vec::new(), all_proven: roots_complete, scores: Vec::with_capacity(roots.len()), lines: Vec::new() };
         // The best exact scores so far, best first, at most `want` of them.
@@ -3871,7 +3932,7 @@ impl AlphaBeta {
         for (k, (_, act)) in roots.iter().enumerate() {
             let bar = if top.len() >= want { top[want - 1] } else { -INF };
             let mark = Self::make(work, act);
-            let child_depth = depth - super::skill::travel_reduction(self.skill_level, act);
+            let child_depth = self.root_child_depth(act, depth, sig);
             let mut exact = true;
             let v = if k == 0 {
                 let mut v = -self.negamax(work, child_depth - 1, 1, -hi, -lo, true);
