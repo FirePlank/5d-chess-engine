@@ -101,12 +101,6 @@ impl State {
     pub fn hash(&self) -> u64 {
         self.m.hash() ^ (self.player as u64).wrapping_mul(0x9e3779b97f4a7c15) ^ (self.present as u64).wrapping_mul(0xd6e8feb86659fd93)
     }
-    /// `hash` without the history of the inactive timelines (see `Multiverse::live_hash`):
-    /// the transposition table's key.
-    #[inline]
-    pub fn live_hash(&self) -> u64 {
-        self.m.live_hash() ^ (self.player as u64).wrapping_mul(0x9e3779b97f4a7c15) ^ (self.present as u64).wrapping_mul(0xd6e8feb86659fd93)
-    }
     /// Hash of the position in play: every timeline's last board, side to move and stored
     /// present, but none of the earlier boards. Positions reached by different move orders
     /// share it (the opening book's key: theory is move-order independent).
