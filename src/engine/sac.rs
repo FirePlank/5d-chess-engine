@@ -73,6 +73,12 @@ pub fn is_sac_travel(s: &State, m: &FullMove) -> bool {
     if piece == NO_PIECE || matches!(piece, KING_W | ROYAL_QUEEN_W) || matches!(victim, KING_W | ROYAL_QUEEN_W) {
         return false;
     }
+    // Only a royal next to the landing square can be the one piece to take back (a royal queen
+    // reaches further): most travels end here, before the board is built and checks are found.
+    let royals = target.royal() & target.hostile(c);
+    if royals & target.royal_queen() == 0 && marked_pos(royals).all(|r| king_attack(r) & pmask(dst) == 0) {
+        return false;
+    }
     // The board the travel creates: the piece stands on the captured piece's square.
     let mut b = *target;
     b.set_piece(dst, if c { to_black(piece) } else { piece });
