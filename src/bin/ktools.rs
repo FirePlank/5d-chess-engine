@@ -586,6 +586,8 @@ fn main() {
         "nnuerandom" => nnuerandom(&args[2..], &mut out),
         "nnuerecs" => nnuerecs(&args[2..], &mut out),
         "nnuerel" => nnuerel(&args[2..], &mut out),
+        "labelpick" => labelpick(&args[2..], &mut out),
+        "labelrun" => labelrun(&args[2..], &mut out),
         "netcheck" => {
             // Residuals of the first records of a netdata file under a net blob.
             use kairos::engine::evalnet::{Net, NI};
@@ -2025,6 +2027,8 @@ fn replay_game(line: &str, mut f: impl FnMut(&State, Option<i32>)) -> Option<f32
 /// - `out.ftr`: u16 board features; `out.rel`: u16 relation features (`nnue::relation_features`).
 ///
 /// NETDATA_NO_CHECK=1 leaves out positions with the side to move in check (test sets).
+/// NNUE_LABELS=file (`labelrun` output, for the same games file): only the relabelled positions,
+/// with their new scores (or, with NNUE_LABELS_KEEP=1, their old ones, for comparison).
 fn nnuedata(args: &[String], out: &mut impl Write) {
     use kairos::engine::{hce, nnue};
     use std::io::BufWriter;
@@ -2042,13 +2046,28 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
     }
     let threads = 14;
     let no_check = std::env::var_os("NETDATA_NO_CHECK").is_some();
+    let keep_teacher = std::env::var_os("NNUE_LABELS_KEEP").is_some();
+    let labels: Option<std::collections::HashMap<(usize, usize), f32>> = std::env::var("NNUE_LABELS").ok().map(|p| {
+        std::fs::read_to_string(p)
+            .expect("labels")
+            .lines()
+            .filter_map(|l| {
+                let f: Vec<&str> = l.split('\t').collect();
+                let line: usize = f.first()?.parse().ok()?;
+                let ply: usize = f.get(1)?.parse().ok()?;
+                let score: i32 = f.get(2)?.parse().ok()?;
+                let mate = f.get(4) == Some(&"1");
+                Some(((line, ply), if mate || score.abs() >= 20000 { f32::NAN } else { score as f32 }))
+            })
+            .collect()
+    });
     let open = |ext: &str| BufWriter::with_capacity(1 << 20, std::fs::File::create(format!("{}.{}", base, ext)).expect("create output"));
     let (mut rec, mut idx, mut brd, mut ftr, mut relf) = (open("rec"), open("idx"), open("brd"), open("ftr"), open("rel"));
     let (mut n_rec, mut n_brd, mut n_ftr, mut n_rel) = (0u64, 0u64, 0u64, 0u64);
     let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<Sample>>(256);
     std::thread::scope(|sc| {
         for tid in 0..threads {
-            let (lines, tx) = (&lines, tx.clone());
+            let (lines, tx, labels) = (&lines, tx.clone(), &labels);
             sc.spawn(move || {
                 let mut g = tid;
                 while g < lines.len() {
@@ -2062,11 +2081,19 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
                         if no_check && s.has_phantom_check() {
                             return;
                         }
+                        let relabelled = match labels {
+                            Some(m) => match m.get(&(game, ply)) {
+                                Some(&v) => Some(v),
+                                None => return,
+                            },
+                            None => None,
+                        };
                         let stm = s.get_present().1;
                         let h = s.get_board_size().1;
                         let sd = hce::sides(s);
-                        let teacher = match t {
-                            Some(v) if v.abs() < 20000 => v as f32,
+                        let teacher = match (relabelled, t) {
+                            (Some(v), _) if !keep_teacher => v,
+                            (_, Some(v)) if v.abs() < 20000 => v as f32,
                             _ => f32::NAN,
                         };
                         let (head, dense) = ([teacher, 0.0, game as f32, ply as f32], nnue::dense(&sd, s));
@@ -2230,6 +2257,151 @@ fn nnuerel(args: &[String], out: &mut impl Write) {
     let calls = (reps * states.len()) as f64;
     writeln!(out, "move generation alone {:.2} us", movegen * 1e6 / calls).unwrap();
     writeln!(out, "{} positions: relations {:.2} us ({:.1} features, most {}), hce sides {:.2} us ({})", states.len(), rel * 1e6 / calls, n as f64 / calls, most, sides * 1e6 / calls, sink % 2).unwrap();
+}
+
+/// `labelpick out.jsonl per_game min_weight games.jsonl...`: positions to relabel by deeper
+/// search, a few per game (`per_game`), favouring positions with more active timelines and more
+/// moves through time onto royals and pieces (`nnue::relation_features`): weight 1, plus the
+/// active timelines past the first (up to 4), plus half the relations (up to 8); only positions
+/// of weight `min_weight` or more. Writes each game with any picked
+/// positions as its record plus `"label_plies":[..]` (1-based engine positions, as `nnuedata`'s
+/// ply).
+fn labelpick(args: &[String], out: &mut impl Write) {
+    use kairos::engine::nnue;
+    let per_game: usize = args[1].parse().expect("per_game");
+    let min_weight: f64 = args[2].parse().expect("min_weight");
+    let mut lines: Vec<String> = Vec::new();
+    for f in &args[3..] {
+        lines.extend(std::fs::read_to_string(f).expect("games").lines().filter(|l| !l.trim().is_empty()).map(String::from));
+    }
+    let threads = 14;
+    let picked: Vec<Vec<(usize, Vec<usize>)>> = std::thread::scope(|sc| {
+        let hs: Vec<_> = (0..threads)
+            .map(|tid| {
+                let lines = &lines;
+                sc.spawn(move || {
+                    let mut res = Vec::new();
+                    let mut g = tid;
+                    while g < lines.len() {
+                        let (line, game) = (&lines[g], g);
+                        g += threads;
+                        // (weight, ply) of each engine position.
+                        let mut cands: Vec<(f64, usize)> = Vec::new();
+                        let mut rel = Vec::new();
+                        if replay_game(line, |s, _| {
+                            rel.clear();
+                            nnue::relation_features(s, &mut rel);
+                            let active = { let (a, b) = s.get_active_range(); (b - a + 1) as f64 };
+                            let ply = cands.len() + 1;
+                            cands.push((1.0 + (active - 1.0).min(4.0) + (rel.len() as f64).min(8.0) / 2.0, ply));
+                        })
+                        .is_none()
+                        {
+                            continue;
+                        }
+                        // Weighted sampling without replacement (exponential keys), seeded by game.
+                        let mut z = (game as u64 + 1).wrapping_mul(0x9e3779b97f4a7c15);
+                        let mut keyed: Vec<(f64, usize)> = cands
+                            .iter()
+                            .filter(|c| c.0 >= min_weight)
+                            .map(|&(w, ply)| {
+                                z ^= z >> 31;
+                                z = z.wrapping_mul(0xbf58476d1ce4e5b9).wrapping_add(0x94d049bb133111eb);
+                                let u = ((z >> 11) as f64 + 0.5) / (1u64 << 53) as f64;
+                                (u.ln() / w, ply)
+                            })
+                            .collect();
+                        keyed.sort_by(|a, b| b.0.total_cmp(&a.0));
+                        let mut plies: Vec<usize> = keyed.iter().take(per_game).map(|x| x.1).collect();
+                        plies.sort();
+                        if !plies.is_empty() {
+                            res.push((game, plies));
+                        }
+                    }
+                    res
+                })
+            })
+            .collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let mut all: Vec<(usize, Vec<usize>)> = picked.into_iter().flatten().collect();
+    all.sort();
+    let mut text = String::new();
+    let mut n = 0;
+    for (g, plies) in &all {
+        let line = lines[*g].trim_end();
+        let line = line.strip_suffix('}').expect("a JSON object");
+        n += plies.len();
+        text.push_str(&format!("{},\"label_plies\":[{}]}}\n", line, plies.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(",")));
+    }
+    std::fs::write(&args[0], text).expect("write");
+    writeln!(out, "{} positions from {} games -> {}", n, all.len(), args[0]).unwrap();
+}
+
+/// `labelrun picks.jsonl out.tsv nodes [shard shards threads max_seconds]`: search each picked
+/// position of `labelpick`'s games (those with line % shards == shard) to `nodes` nodes, one
+/// search per thread, a fresh small table per game; no game is started after `max_seconds`. Writes per position: line, ply, score (internal units,
+/// side to move's view), depth, 1 for a proven mate.
+fn labelrun(args: &[String], out: &mut impl Write) {
+    use kairos::engine::ab::AlphaBeta;
+    use kairos::engine::{Limits, OptionValue};
+    use std::sync::atomic::AtomicBool;
+    let text = std::fs::read_to_string(&args[0]).expect("picks");
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    let nodes: u64 = args[2].parse().expect("nodes");
+    let n = |i: usize, d: usize| args.get(i).and_then(|x| x.parse().ok()).unwrap_or(d);
+    let (shard, shards) = (n(3, 0), n(4, 1));
+    let threads = n(5, std::thread::available_parallelism().map_or(1, |x| x.get()));
+    let max_seconds = n(6, 0) as f64;
+    let mine: Vec<usize> = (0..lines.len()).filter(|i| i % shards == shard).collect();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let t0 = Instant::now();
+    let results: Vec<String> = std::thread::scope(|sc| {
+        let hs: Vec<_> = (0..threads)
+            .map(|_| {
+                let (lines, mine, next) = (&lines, &mine, &next);
+                sc.spawn(move || {
+                    let mut res = Vec::new();
+                    let stop = AtomicBool::new(false);
+                    loop {
+                        if max_seconds > 0.0 && t0.elapsed().as_secs_f64() > max_seconds {
+                            break;
+                        }
+                        let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(&li) = mine.get(k) else { break };
+                        let line = lines[li];
+                        let Some(e) = line.find("\"label_plies\":[") else { continue };
+                        let t = &line[e + 15..];
+                        let plies: Vec<usize> = t[..t.find(']').unwrap_or(0)].split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                        let mut e = AlphaBeta::new();
+                        e.set_option("Hash", &OptionValue::Int(16));
+                        let mut ply = 0;
+                        let mut states = Vec::new();
+                        let _ = replay_game(line, |s, _| {
+                            ply += 1;
+                            if plies.contains(&ply) {
+                                states.push((ply, s.clone()));
+                            }
+                        });
+                        for (ply, s) in states {
+                            let mut last = String::new();
+                            let limits = Limits { nodes: Some(nodes), ..Default::default() };
+                            if e.find_best_move(&s, &limits, &stop, &mut |m| last = m).is_none() {
+                                continue;
+                            }
+                            let depth: i32 = last.split_whitespace().skip_while(|w| *w != "depth").nth(1).and_then(|d| d.parse().ok()).unwrap_or(0);
+                            res.push(format!("{}\t{}\t{}\t{}\t{}", li, ply, e.last_score(), depth, e.last_proven() as u8));
+                        }
+                    }
+                    res
+                })
+            })
+            .collect();
+        hs.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    });
+    std::fs::write(&args[1], results.join("\n") + "\n").expect("write");
+    let secs = t0.elapsed().as_secs_f64();
+    writeln!(out, "{} positions of {} games in {:.1}s ({:.2} s per position per thread, {} threads)", results.len(), mine.len(), secs, secs * threads as f64 / results.len().max(1) as f64, threads).unwrap();
 }
 
 /// `nnuerandom out.nnue [acc emb hidden racc dense]`: a model with random weights, to measure
