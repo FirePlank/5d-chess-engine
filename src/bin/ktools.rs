@@ -2094,17 +2094,8 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
                         if (no_check || quiet) && s.has_phantom_check() {
                             return;
                         }
-                        if quiet {
-                            let present = s.get_present();
-                            let (amin, amax) = s.get_active_range();
-                            let h = s.get_board_size().1;
-                            let gain: i32 = (amin..=amax)
-                                .filter(|&l| s.get_timeline_end(l) == present)
-                                .map(|l| kairos::engine::local::capture_gain(s.board(l, present.0, present.1), present.1, h, local_vals))
-                                .sum();
-                            if gain > 0 || tactical(s, played) {
-                                return;
-                            }
+                        if quiet && !is_quiet(s, played, local_vals) {
+                            return;
                         }
                         let relabelled = match labels {
                             Some(m) => match m.get(&(game, ply)) {
@@ -2184,6 +2175,23 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
         w.flush().expect("write records");
     }
     writeln!(out, "{} records, {} boards, {} board features, {} relation features ({} dense inputs) from {} games -> {}.*", n_rec, n_brd, n_ftr, n_rel, nnue::ND, lines.len(), base).unwrap();
+}
+
+/// Whether `s` is quiet, as the search evaluates positions statically (`nnuedata` NNUE_QUIET):
+/// the side to move not in check, no capture quiescence would credit it (`local::capture_gain`
+/// on its boards of the present), and the action it played neither capturing nor checking.
+fn is_quiet(s: &State, played: &str, local_vals: &kairos::engine::local::Values) -> bool {
+    if s.has_phantom_check() {
+        return false;
+    }
+    let present = s.get_present();
+    let (amin, amax) = s.get_active_range();
+    let h = s.get_board_size().1;
+    let gain: i32 = (amin..=amax)
+        .filter(|&l| s.get_timeline_end(l) == present)
+        .map(|l| kairos::engine::local::capture_gain(s.board(l, present.0, present.1), present.1, h, local_vals))
+        .sum();
+    gain <= 0 && !tactical(s, played)
 }
 
 /// Whether action `played` (5DUCI moves) of the side to move in `s` captures or gives check.
@@ -2305,13 +2313,16 @@ fn nnuerel(args: &[String], out: &mut impl Write) {
 /// search, a few per game (`per_game`), favouring positions with more active timelines and more
 /// moves through time onto royals and pieces (`nnue::relation_features`): weight 1, plus the
 /// active timelines past the first (up to 4), plus half the relations (up to 8); only positions
-/// of weight `min_weight` or more. Writes each game with any picked
+/// of weight `min_weight` or more. LABEL_QUIET=1: quiet positions only (`is_quiet`), the ones
+/// an NNUE trains on. Writes each game with any picked
 /// positions as its record plus `"label_plies":[..]` (1-based engine positions, as `nnuedata`'s
 /// ply).
 fn labelpick(args: &[String], out: &mut impl Write) {
     use kairos::engine::nnue;
     let per_game: usize = args[1].parse().expect("per_game");
     let min_weight: f64 = args[2].parse().expect("min_weight");
+    let quiet = std::env::var_os("LABEL_QUIET").is_some();
+    let local_vals = kairos::engine::local::values_from(&kairos::engine::hce::tuned_weights()[kairos::engine::hce::fi::MAT_A..kairos::engine::hce::fi::MAT_A + 10]);
     let mut lines: Vec<String> = Vec::new();
     for f in &args[3..] {
         lines.extend(std::fs::read_to_string(f).expect("games").lines().filter(|l| !l.trim().is_empty()).map(String::from));
@@ -2320,7 +2331,7 @@ fn labelpick(args: &[String], out: &mut impl Write) {
     let picked: Vec<Vec<(usize, Vec<usize>)>> = std::thread::scope(|sc| {
         let hs: Vec<_> = (0..threads)
             .map(|tid| {
-                let lines = &lines;
+                let (lines, local_vals) = (&lines, &local_vals);
                 sc.spawn(move || {
                     let mut res = Vec::new();
                     let mut g = tid;
@@ -2330,11 +2341,15 @@ fn labelpick(args: &[String], out: &mut impl Write) {
                         // (weight, ply) of each engine position.
                         let mut cands: Vec<(f64, usize)> = Vec::new();
                         let mut rel = Vec::new();
-                        if replay_game(line, |s, _, _| {
+                        if replay_game(line, |s, _, played| {
+                            let ply = cands.len() + 1;
+                            if quiet && !is_quiet(s, played, local_vals) {
+                                cands.push((0.0, ply));
+                                return;
+                            }
                             rel.clear();
                             nnue::relation_features(s, &mut rel);
                             let active = { let (a, b) = s.get_active_range(); (b - a + 1) as f64 };
-                            let ply = cands.len() + 1;
                             cands.push((1.0 + (active - 1.0).min(4.0) + (rel.len() as f64).min(8.0) / 2.0, ply));
                         })
                         .is_none()
