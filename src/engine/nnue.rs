@@ -516,7 +516,8 @@ impl Model {
         };
         let mut rel = std::mem::take(&mut cache.rel);
         rel.clear();
-        {
+        // (A model without a relation accumulator never pays for them.)
+        if self.racc > 0 {
             let _prof = crate::misc::prof::scope(23);
             relation_features(s, &mut rel);
         }

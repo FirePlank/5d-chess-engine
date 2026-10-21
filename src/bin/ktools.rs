@@ -2340,7 +2340,8 @@ fn labelpick(args: &[String], out: &mut impl Write) {
 
 /// `labelrun picks.jsonl out.tsv nodes [shard shards threads max_seconds]`: search each picked
 /// position of `labelpick`'s games (those with line % shards == shard) to `nodes` nodes, one
-/// search per thread, a fresh small table per game; no game is started after `max_seconds`. Writes per position: line, ply, score (internal units,
+/// search per thread, a fresh small table per game; no game is started after `max_seconds`.
+/// Each label is written (and flushed) as soon as its search ends, so a job cut short keeps them. Writes per position: line, ply, score (internal units,
 /// side to move's view), depth, 1 for a proven mate.
 fn labelrun(args: &[String], out: &mut impl Write) {
     use kairos::engine::ab::AlphaBeta;
@@ -2356,12 +2357,13 @@ fn labelrun(args: &[String], out: &mut impl Write) {
     let mine: Vec<usize> = (0..lines.len()).filter(|i| i % shards == shard).collect();
     let next = std::sync::atomic::AtomicUsize::new(0);
     let t0 = Instant::now();
-    let results: Vec<String> = std::thread::scope(|sc| {
+    let sink = std::sync::Mutex::new(std::fs::File::create(&args[1]).expect("create labels"));
+    let done = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|sc| {
         let hs: Vec<_> = (0..threads)
             .map(|_| {
-                let (lines, mine, next) = (&lines, &mine, &next);
+                let (lines, mine, next, sink, done) = (&lines, &mine, &next, &sink, &done);
                 sc.spawn(move || {
-                    let mut res = Vec::new();
                     let stop = AtomicBool::new(false);
                     loop {
                         if max_seconds > 0.0 && t0.elapsed().as_secs_f64() > max_seconds {
@@ -2390,18 +2392,22 @@ fn labelrun(args: &[String], out: &mut impl Write) {
                                 continue;
                             }
                             let depth: i32 = last.split_whitespace().skip_while(|w| *w != "depth").nth(1).and_then(|d| d.parse().ok()).unwrap_or(0);
-                            res.push(format!("{}\t{}\t{}\t{}\t{}", li, ply, e.last_score(), depth, e.last_proven() as u8));
+                            let row = format!("{}\t{}\t{}\t{}\t{}\n", li, ply, e.last_score(), depth, e.last_proven() as u8);
+                            let mut f = sink.lock().unwrap();
+                            f.write_all(row.as_bytes()).expect("write labels");
+                            f.flush().expect("write labels");
+                            done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         }
                     }
-                    res
                 })
             })
             .collect();
-        hs.into_iter().flat_map(|h| h.join().unwrap()).collect()
+        for h in hs {
+            h.join().unwrap();
+        }
     });
-    std::fs::write(&args[1], results.join("\n") + "\n").expect("write");
-    let secs = t0.elapsed().as_secs_f64();
-    writeln!(out, "{} positions of {} games in {:.1}s ({:.2} s per position per thread, {} threads)", results.len(), mine.len(), secs, secs * threads as f64 / results.len().max(1) as f64, threads).unwrap();
+    let (secs, n) = (t0.elapsed().as_secs_f64(), done.into_inner());
+    writeln!(out, "{} positions of {} games in {:.1}s ({:.2} s per position per thread, {} threads)", n, mine.len(), secs, secs * threads as f64 / n.max(1) as f64, threads).unwrap();
 }
 
 /// `nnuerandom out.nnue [acc emb hidden racc dense]`: a model with random weights, to measure
