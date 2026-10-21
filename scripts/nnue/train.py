@@ -12,6 +12,7 @@ evaluation of the first records of `prefix`, for comparison with `ktools nnuerec
 """
 import argparse
 import math
+import os
 import struct
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -44,6 +45,8 @@ class Records:
         nxt = np.where(last, len(self.brd), nidx['b'].astype(np.int64))
         r0 = idx['r'].astype(np.int64)
         rn = np.where(last, len(self.rel), nidx['r'].astype(np.int64)) - r0
+        if len(self.rel) == 0:
+            r0, rn = np.zeros_like(r0), np.zeros_like(r0)
         rel = self.rel[ranges(r0, rn)].astype(np.int64)
         rel_offsets = np.concatenate([[0], np.cumsum(rn)[:-1]]).astype(np.int64)
         counts = nxt - first
@@ -53,14 +56,20 @@ class Records:
         n = brd['n'].astype(np.int64)
         off = brd['off'].astype(np.int64)
         own = self.ftr[ranges(off, n)].astype(np.int64)
-        other = self.ftr[ranges(off + n, n)].astype(np.int64)
+        if self.one_view:
+            # The other colour's view (nnue::other_view): own/enemy swapped, ranks mirrored.
+            h = np.repeat((brd['role'] >> 8).astype(np.int64), n)
+            s = own & 63
+            other = (((own >> 6) ^ 1) << 6) + (s & 7) + 8 * (h - 1 - (s >> 3))
+        else:
+            other = self.ftr[ranges(off + n, n)].astype(np.int64)
         offsets = np.concatenate([[0], np.cumsum(n)[:-1]]).astype(np.int64)
         return {
             'head': torch.from_numpy(np.ascontiguousarray(rec['h'])),
             'dense': torch.from_numpy(rec['d'].astype(np.float32)),
             'own': torch.from_numpy(own), 'other': torch.from_numpy(other),
             'offsets': torch.from_numpy(offsets),
-            'board_rec': torch.from_numpy(local), 'role': torch.from_numpy(brd['role'].astype(np.int64)),
+            'board_rec': torch.from_numpy(local), 'role': torch.from_numpy((brd['role'] & 0xff).astype(np.int64)),
             'rel': torch.from_numpy(rel), 'rel_offsets': torch.from_numpy(rel_offsets),
         }
 
@@ -68,14 +77,17 @@ class Records:
 class Data(Records):
     """One `nnuedata` export, memory-mapped."""
 
-    def __init__(self, spec):
+    def __init__(self, spec, relations=True):
         prefix, _, w = spec.partition('@')
         self.weight = float(w or 1)
         self.rec = np.memmap(prefix + '.rec', dtype=REC, mode='r')
         self.idx = np.memmap(prefix + '.idx', dtype=IDX, mode='r')
-        self.rel = np.memmap(prefix + '.rel', dtype='<u2', mode='r')
+        # A network without relations never reads them (an empty file stands in).
+        self.rel = np.memmap(prefix + '.rel', dtype='<u2', mode='r') if relations else np.zeros(0, dtype='<u2')
         self.brd = np.memmap(prefix + '.brd', dtype=BRD, mode='r')
-        self.ftr = np.memmap(prefix + '.ftr', dtype='<u2', mode='r')
+        # One view stored (.ft1, the other computed) or, in older exports, both (.ftr).
+        self.one_view = os.path.exists(prefix + '.ft1')
+        self.ftr = np.memmap(prefix + ('.ft1' if self.one_view else '.ftr'), dtype='<u2', mode='r')
         self.n = len(self.rec)
 
     def block(self, a, b):
@@ -85,21 +97,23 @@ class Data(Records):
 
 class Block(Records):
     def __init__(self, d, a, b):
-        self.weight = d.weight
+        self.weight, self.one_view = d.weight, d.one_view
         self.rec = np.array(d.rec[a:b])
         idx = np.array(d.idx[a:b])
         b0, r0 = int(idx[0]['b']), int(idx[0]['r'])
         b1 = int(d.idx[b]['b']) if b < d.n else len(d.brd)
         r1 = int(d.idx[b]['r']) if b < d.n else len(d.rel)
+        if len(d.rel) == 0:
+            r0 = r1 = 0
         self.brd = np.array(d.brd[b0:b1])
         f0 = int(self.brd[0]['off']) if len(self.brd) else 0
-        f1 = int(self.brd[-1]['off']) + 2 * int(self.brd[-1]['n']) if len(self.brd) else 0
+        f1 = int(self.brd[-1]['off']) + (1 if d.one_view else 2) * int(self.brd[-1]['n']) if len(self.brd) else 0
         self.ftr = np.array(d.ftr[f0:f1])
         self.rel = np.array(d.rel[r0:r1])
         self.brd['off'] -= f0
         self.idx = np.empty(len(idx), dtype=IDX)
         self.idx['b'] = idx['b'] - b0
-        self.idx['r'] = idx['r'] - r0
+        self.idx['r'] = idx['r'] - r0 if len(d.rel) else 0
         self.n = b - a
 
 
@@ -374,9 +388,9 @@ def main():
         return
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
-    data = [Data(x) for x in args.data]
+    data = [Data(x, relations=args.racc > 0) for x in args.data]
     val = held_out(data, args.val_mod, args.val_limit)
-    test = whole(Data(args.test)) if args.test else []
+    test = whole(Data(args.test, relations=args.racc > 0)) if args.test else []
     print('records', sum(d.n for d in data), 'validation', sum(len(b['head']) for b in val), 'test', sum(len(b['head']) for b in test), flush=True)
     if args.init:
         net = load(args.init)
