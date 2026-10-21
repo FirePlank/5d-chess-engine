@@ -991,6 +991,9 @@ pub fn is_sac_travel(s: &State, m: &FullMove) -> bool {
     }
     let (Some(src), Some(target)) = (s.get_board_ptr(m.from.l(), m.from.t(), c), s.get_board_ptr(m.to.l(), m.to.t(), c)) else { return false };
     let piece = src.kind(m.from.xy());
+    if !matches!(piece, QUEEN_W | BISHOP_W) {
+        return false;
+    }
     let dst = m.to.xy();
     let victim = target.kind(dst);
     if piece == NO_PIECE || matches!(piece, KING_W | ROYAL_QUEEN_W) || matches!(victim, KING_W | ROYAL_QUEEN_W) {
