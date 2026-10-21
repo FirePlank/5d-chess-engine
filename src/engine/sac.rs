@@ -993,7 +993,7 @@ pub fn is_sac_travel(s: &State, m: &FullMove) -> bool {
     let piece = src.kind(m.from.xy());
     let dst = m.to.xy();
     let victim = target.kind(dst);
-    if piece == NO_PIECE || matches!(piece, KING_W | ROYAL_QUEEN_W) || matches!(victim, KING_W | ROYAL_QUEEN_W) {
+    if piece == NO_PIECE || victim == NO_PIECE || matches!(piece, KING_W | ROYAL_QUEEN_W) || matches!(victim, KING_W | ROYAL_QUEEN_W) {
         return false;
     }
     // The board the travel creates: the piece stands on the captured piece's square.
