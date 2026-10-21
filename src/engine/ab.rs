@@ -71,7 +71,7 @@ const ROOT_PROBE_STEPS: u32 = 2048;
 const ROOT_SCAN_ACTIONS: usize = 1024;
 const ROOT_SCAN_MORE_STEPS: u32 = 1 << 18;
 const ROOT_SCAN_MORE_ACTIONS: usize = 1 << 15;
-const ROOT_SCAN_MORE_DIV: u64 = 24;
+const ROOT_SCAN_MORE_DIV: u64 = 12;
 const ROOT_SCAN_MORE_CAP_MS: u64 = 100;
 const ROOT_SCAN_ANALYSIS_MS: u64 = 1000;
 /// Hypercuboids an escape search that ran out of its quick budget (`TRAVEL_MATE_STEPS`) may go
