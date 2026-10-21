@@ -4,7 +4,7 @@ pub const NAMES: [&str; 26] = [
     "build_hc", "hc_movegen", "take_point", "jump+present", "find_checks", "space_ops",
     "ordering", "state_clone", "qsearch", "eval", "in_check", "tt_validate",
     "hc_entries", "hc_branch", "hc_finish", "hc_status", "local_captures", "null_move",
-    "hc_physical", "hc_jumps", "nnue_boards", "nnue_embed", "nnue_head", "nnue_sides",
+    "hc_physical", "hc_jumps", "nnue_boards", "nnue_embed", "nnue_head", "nnue_relations",
     "nnue_ft", "nnue_l2",
 ];
 

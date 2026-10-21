@@ -18,8 +18,10 @@
 use super::hce::{self, Sides};
 use crate::core::bitboard::*;
 use crate::core::board::Board;
+use crate::core::multiverse::MoveList;
 use crate::core::piece::*;
 use crate::core::state::State;
+use crate::core::vec4::Vec4;
 
 /// Piece kinds with their own features (white-normalized `Piece`s, in index order).
 const KINDS: [Piece; 12] = [KING_W, QUEEN_W, BISHOP_W, KNIGHT_W, ROOK_W, PAWN_W, UNICORN_W, DRAGON_W, BRAWN_W, PRINCESS_W, ROYAL_QUEEN_W, COMMON_KING_W];
@@ -43,6 +45,8 @@ pub const MAX_BOARD_FEATURES: usize = 128;
 const MAX_ACC: usize = 512;
 const MAX_EMB: usize = 64;
 const MAX_HIDDEN: usize = 64;
+const MAX_RACC: usize = 128;
+const MAX_INPUTS: usize = ROLES * MAX_EMB + ROLES + MAX_RACC + ND;
 /// Activation of 1.0, and the weight scale after the first layer (a shift of `SHIFT`).
 pub const ONE: i32 = 127;
 pub const SHIFT: u32 = 6;
@@ -138,20 +142,92 @@ pub fn dense(sd: &Sides, s: &State) -> [i16; ND] {
     x.map(|v| v.clamp(-32767, 32767) as i16)
 }
 
-const MAGIC: &[u8; 8] = b"KNNUE002";
+/// Relation features, from the moves through time or across timelines of the pieces on every
+/// latest board (by the side whose turn it is there):
+/// - reaching an enemy royal's square or one next to it: (side to move's / opponent's piece,
+///   kind, direction from the royal (0: onto it), landing board (latest of its timeline, or
+///   past by 0, 1, 2, 3+ turns), captures, square defended by a non-royal);
+/// - capturing a piece: (side, kind, victim kind, landing board, defended).
+pub const NR_ROYAL: usize = 2 * 12 * 9 * 5 * 2 * 2;
+pub const NR: usize = NR_ROYAL + 2 * 12 * 12 * 5 * 2;
+/// Most relation features of a position (more are left out).
+pub const MAX_RELATIONS: usize = 4096;
+
+/// The relation features of `s` (see `NR`), appended to `out`.
+pub fn relation_features(s: &State, out: &mut Vec<u16>) {
+    let m = s.multiverse();
+    let stm = s.get_present().1;
+    let (lo, hi) = s.get_lines_range();
+    let mut ml = MoveList::new();
+    for l in lo..=hi {
+        let (t, c) = s.get_timeline_end(l);
+        // The pieces of the side whose turn it is on this board.
+        let b = s.board(l, t, c);
+        let side = (c != stm) as usize;
+        for sq in marked_pos(b.hostile(!c) & !b.wall()) {
+            let Some(k) = kind_index(b.kind(sq)) else { continue };
+            ml.clear();
+            m.gen_superphysical_moves(Vec4::from_xy(sq, Vec4::new(0, 0, t, l)), c, &mut ml);
+            for &(q, bb) in &ml {
+                let Some(tb) = s.get_board_ptr(q.l(), q.t(), c) else { continue };
+                let royals = tb.royal() & tb.hostile(c);
+                let mut zone = royals;
+                for r in marked_pos(royals) {
+                    zone |= king_attack(r);
+                }
+                let defenders = tb.hostile(c) & !tb.royal();
+                let (hits, caps) = (bb & zone, bb & defenders);
+                if hits | caps == 0 {
+                    continue;
+                }
+                let class = if (q.t(), c) == s.get_timeline_end(q.l()) { 0 } else { 1 + (t - q.t()).clamp(0, 3) as usize };
+                for dst in marked_pos(caps) {
+                    let Some(v) = kind_index(tb.kind(dst)) else { continue };
+                    let def = (tb.attacks_to(dst) & defenders != 0) as usize;
+                    if out.len() < MAX_RELATIONS {
+                        out.push((NR_ROYAL + (((side * 12 + k) * 12 + v) * 5 + class) * 2 + def) as u16);
+                    }
+                }
+                for dst in marked_pos(hits) {
+                    let cap = (tb.hostile(c) & !tb.royal() & pmask(dst) != 0) as usize;
+                    let def = (tb.attacks_to(dst) & defenders != 0) as usize;
+                    for r in marked_pos(royals & (king_attack(dst) | pmask(dst))) {
+                        let (dx, mut dy) = ((dst & 7) - (r & 7), (dst >> 3) - (r >> 3));
+                        if c {
+                            dy = -dy;
+                        }
+                        let dir = if (dx, dy) == (0, 0) { 0 } else { 1 + [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)].iter().position(|&d| d == (dx, dy)).unwrap() };
+                        if out.len() < MAX_RELATIONS {
+                            out.push(((((side * 12 + k) * 9 + dir) * 5 + class) * 4 + cap * 2 + def) as u16);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+const MAGIC: &[u8; 8] = b"KNNUE003";
 
 /// A trained, quantized network (`scripts/nnue/train.py --out`).
 pub struct Model {
-    /// Accumulator and board embedding widths, head width.
+    /// Accumulator and board embedding widths, head width, relation accumulator width.
     pub acc: usize,
     pub emb: usize,
     pub hidden: usize,
+    pub racc: usize,
+    /// Whether the head reads the dense bridge inputs (else they are 0 and never computed).
+    pub use_dense: bool,
     /// [NB][acc] at scale `ONE`, and its bias.
     ft_w: Vec<i16>,
     ft_b: Vec<i16>,
     /// [2 * acc][emb] (input-major) at scale 64; bias at `ONE` * 64.
     l2_w: Vec<i8>,
     l2_b: Vec<i32>,
+    /// [NR][racc] at scale `ONE`, and its bias (an i32 accumulator: a position has up to
+    /// `MAX_RELATIONS` relations).
+    rel_w: Vec<i16>,
+    rel_b: Vec<i32>,
     /// Dense input i's activation is (d * dense_m[i]) >> FIX (rounded), at scale `ONE`.
     dense_m: Vec<i32>,
     /// [head inputs][hidden] (input-major) at scale 64; bias at `ONE` * 64.
@@ -174,24 +250,24 @@ fn shr_round(x: i64, bits: u32) -> i64 {
 }
 
 impl Model {
-    /// Head inputs: pooled embeddings per role, role counts, dense inputs.
+    /// Head inputs: pooled embeddings per role, role counts, relation activations, dense inputs.
     pub fn head_inputs(&self) -> usize {
-        ROLES * self.emb + ROLES + ND
+        ROLES * self.emb + ROLES + self.racc + ND
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Model, String> {
-        if bytes.len() < 32 || &bytes[..8] != MAGIC {
-            return Err("not a kairos NNUE file (KNNUE002)".into());
+        if bytes.len() < 44 || &bytes[..8] != MAGIC {
+            return Err("not a kairos NNUE file (KNNUE003)".into());
         }
         let u = |i: usize| u32::from_le_bytes(bytes[8 + 4 * i..12 + 4 * i].try_into().unwrap()) as usize;
-        let (nb, acc, emb, roles, nd, hidden) = (u(0), u(1), u(2), u(3), u(4), u(5));
-        if nb != NB || roles != ROLES || nd != ND {
-            return Err(format!("feature layout {}x{}x{} differs from the engine's {}x{}x{}", nb, roles, nd, NB, ROLES, ND));
+        let (nb, acc, emb, roles, nd, hidden, nr, racc, use_dense) = (u(0), u(1), u(2), u(3), u(4), u(5), u(6), u(7), u(8) != 0);
+        if nb != NB || roles != ROLES || nd != ND || nr != NR {
+            return Err(format!("feature layout {}x{}x{}x{} differs from the engine's {}x{}x{}x{}", nb, roles, nd, nr, NB, ROLES, ND, NR));
         }
-        if acc > MAX_ACC || emb > MAX_EMB || hidden > MAX_HIDDEN || acc % 2 != 0 || emb % 8 != 0 || hidden % 8 != 0 || acc * emb * hidden == 0 {
-            return Err(format!("layers {}x{}x{}: need even, multiples of 8, at most {}x{}x{}", acc, emb, hidden, MAX_ACC, MAX_EMB, MAX_HIDDEN));
+        if acc > MAX_ACC || emb > MAX_EMB || hidden > MAX_HIDDEN || racc > MAX_RACC || acc % 2 != 0 || emb % 8 != 0 || hidden % 8 != 0 || racc % 2 != 0 || acc * emb * hidden == 0 {
+            return Err(format!("layers {}x{}x{}x{}: need even, multiples of 8, at most {}x{}x{}x{}", acc, emb, hidden, racc, MAX_ACC, MAX_EMB, MAX_HIDDEN, MAX_RACC));
         }
-        let mut at = 32;
+        let mut at = 44;
         let mut take = |n: usize| -> Result<&[u8], String> {
             let r = bytes.get(at..at + n).ok_or("truncated NNUE file")?;
             at += n;
@@ -200,11 +276,13 @@ impl Model {
         let i16s = |b: &[u8]| b.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect::<Vec<_>>();
         let i32s = |b: &[u8]| b.chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().unwrap())).collect::<Vec<_>>();
         let i8s = |b: &[u8]| b.iter().map(|&x| x as i8).collect::<Vec<_>>();
-        let inputs = ROLES * emb + ROLES + ND;
+        let inputs = ROLES * emb + ROLES + racc + ND;
         let ft_w = i16s(take(2 * NB * acc)?);
         let ft_b = i16s(take(2 * acc)?);
         let l2_w = i8s(take(2 * acc * emb)?);
         let l2_b = i32s(take(4 * emb)?);
+        let rel_w = i16s(take(2 * NR * racc)?);
+        let rel_b = i32s(take(4 * racc)?);
         let dense_m = i32s(take(4 * ND)?);
         let head_w = i8s(take(inputs * hidden)?);
         let head_b = i32s(take(4 * hidden)?);
@@ -222,24 +300,26 @@ impl Model {
                 return Err(format!("accumulator {} can reach {}, past i16", j, bound));
             }
         }
-        Ok(Model { acc, emb, hidden, ft_w, ft_b, l2_w, l2_b, dense_m, head_w, head_b, out_w, out_b: tail[0], out_q: tail[1], l2_c: Vec::new(), head_p: Vec::new() }.with_layouts())
+        Ok(Model { acc, emb, hidden, racc, use_dense, ft_w, ft_b, l2_w, l2_b, rel_w, rel_b, dense_m, head_w, head_b, out_w, out_b: tail[0], out_q: tail[1], l2_c: Vec::new(), head_p: Vec::new() }.with_layouts())
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut b = MAGIC.to_vec();
-        for v in [NB, self.acc, self.emb, ROLES, ND, self.hidden] {
+        for v in [NB, self.acc, self.emb, ROLES, ND, self.hidden, NR, self.racc, self.use_dense as usize] {
             b.extend_from_slice(&(v as u32).to_le_bytes());
         }
         self.ft_w.iter().chain(&self.ft_b).for_each(|x| b.extend_from_slice(&x.to_le_bytes()));
         self.l2_w.iter().for_each(|x| b.push(*x as u8));
-        self.l2_b.iter().chain(&self.dense_m).for_each(|x| b.extend_from_slice(&x.to_le_bytes()));
+        self.l2_b.iter().for_each(|x| b.extend_from_slice(&x.to_le_bytes()));
+        self.rel_w.iter().for_each(|x| b.extend_from_slice(&x.to_le_bytes()));
+        self.rel_b.iter().chain(&self.dense_m).for_each(|x| b.extend_from_slice(&x.to_le_bytes()));
         self.head_w.iter().for_each(|x| b.push(*x as u8));
         self.head_b.iter().chain(&self.out_w).chain([&self.out_b, &self.out_q]).for_each(|x| b.extend_from_slice(&x.to_le_bytes()));
         b
     }
 
     /// A model with pseudo-random weights (tests and the speed-cost measurement).
-    pub fn random(acc: usize, emb: usize, hidden: usize, seed: u64) -> Model {
+    pub fn random(acc: usize, emb: usize, hidden: usize, racc: usize, use_dense: bool, seed: u64) -> Model {
         let mut z = seed;
         let mut r = move |lo: i32, hi: i32| -> i32 {
             z = z.wrapping_add(0x9e3779b97f4a7c15);
@@ -248,15 +328,19 @@ impl Model {
             x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
             lo + ((x >> 33) % (hi - lo + 1) as u64) as i32
         };
-        let inputs = ROLES * emb + ROLES + ND;
+        let inputs = ROLES * emb + ROLES + racc + ND;
         Model {
             acc,
             emb,
             hidden,
+            racc,
+            use_dense,
             ft_w: (0..NB * acc).map(|_| r(-24, 24) as i16).collect(),
             ft_b: (0..acc).map(|_| r(-40, 80) as i16).collect(),
             l2_w: (0..2 * acc * emb).map(|_| r(-40, 40) as i8).collect(),
             l2_b: (0..emb).map(|_| r(-2000, 4000)).collect(),
+            rel_w: (0..NR * racc).map(|_| r(-60, 60) as i16).collect(),
+            rel_b: (0..racc).map(|_| r(-40, 80)).collect(),
             dense_m: (0..ND).map(|_| r(1000, 300000)).collect(),
             head_w: (0..inputs * hidden).map(|_| r(-30, 30) as i8).collect(),
             head_b: (0..hidden).map(|_| r(-2000, 4000)).collect(),
@@ -362,9 +446,9 @@ impl Model {
 
     /// The score from the pooled embeddings `pooled` (per role), the role counts and the dense
     /// inputs.
-    fn head(&self, pooled: &[i32], counts: &[i32; ROLES], d: &[i16; ND]) -> i32 {
+    fn head(&self, pooled: &[i32], counts: &[i32; ROLES], rel: &[u16], d: &[i16; ND]) -> i32 {
         let _prof = crate::misc::prof::scope(22);
-        let mut x = [0i16; ROLES * MAX_EMB + ROLES + ND];
+        let mut x = [0i16; MAX_INPUTS];
         let x = &mut x[..self.head_inputs()];
         for (o, &p) in x.iter_mut().zip(pooled) {
             *o = p.min(i16::MAX as i32) as i16;
@@ -373,6 +457,8 @@ impl Model {
         for (r, &n) in counts.iter().enumerate() {
             x[base + r] = (n * ONE).min(i16::MAX as i32) as i16;
         }
+        self.relations(rel, &mut x[base + ROLES..base + ROLES + self.racc]);
+        let base = base + self.racc;
         for (i, &v) in d.iter().enumerate() {
             if v != 0 {
                 x[base + ROLES + i] = shr_round(v as i64 * self.dense_m[i] as i64, FIX).clamp(-32767, 32767) as i16;
@@ -389,8 +475,25 @@ impl Model {
         shr_round(out * self.out_q as i64, FIX) as i32
     }
 
-    /// The evaluation of `s` for the side to move, in internal units (not clamped).
-    pub fn evaluate(&self, s: &State, sd: &Sides, cache: &mut Cache) -> i32 {
+    /// The relation accumulator's activations (at scale `ONE`) from relation features `rel`.
+    fn relations(&self, rel: &[u16], out: &mut [i16]) {
+        let mut acc = [0i32; MAX_RACC];
+        let acc = &mut acc[..self.racc];
+        acc.copy_from_slice(&self.rel_b);
+        for &f in rel {
+            let row = &self.rel_w[f as usize * self.racc..(f as usize + 1) * self.racc];
+            for (a, &w) in acc.iter_mut().zip(row) {
+                *a += w as i32;
+            }
+        }
+        for (o, &a) in out.iter_mut().zip(acc.iter()) {
+            *o = a.clamp(0, ONE) as i16;
+        }
+    }
+
+    /// The evaluation of `s` for the side to move, in internal units (not clamped). `sd`: the
+    /// handcrafted counts, needed only when the model reads them (`use_dense`).
+    pub fn evaluate(&self, s: &State, sd: Option<&Sides>, cache: &mut Cache) -> i32 {
         let stm = s.get_present().1;
         let h = s.get_board_size().1;
         let mut pooled = [0i32; ROLES * MAX_EMB];
@@ -407,12 +510,25 @@ impl Model {
                 counts[r] += 1;
             }
         }
-        self.head(pooled, &counts, &dense(sd, s))
+        let d = match sd {
+            Some(sd) if self.use_dense => dense(sd, s),
+            _ => [0; ND],
+        };
+        let mut rel = std::mem::take(&mut cache.rel);
+        rel.clear();
+        {
+            let _prof = crate::misc::prof::scope(23);
+            relation_features(s, &mut rel);
+        }
+        let v = self.head(pooled, &counts, &rel, &d);
+        cache.rel = rel;
+        v
     }
 
     /// The evaluation from exported features (`ktools nnuedata`): each latest board's role and
     /// features from the side to move's view and the other's, and the dense inputs.
-    pub fn evaluate_features(&self, boards: &[(u8, &[u16], &[u16])], d: &[i16; ND]) -> i32 {
+    pub fn evaluate_features(&self, boards: &[(u8, &[u16], &[u16])], rel: &[u16], d: &[i16; ND]) -> i32 {
+        let d = if self.use_dense { *d } else { [0; ND] };
         let mut pooled = vec![0i32; ROLES * self.emb];
         let mut counts = [0i32; ROLES];
         let mut acc = vec![0i16; 2 * self.acc];
@@ -428,7 +544,7 @@ impl Model {
             }
             counts[r] += 1;
         }
-        self.head(&pooled, &counts, d)
+        self.head(&pooled, &counts, rel, &d)
     }
 }
 
@@ -442,13 +558,15 @@ pub struct Cache {
     flags: Vec<u8>,
     accs: Vec<i16>,
     embs: Vec<u8>,
+    /// Scratch for a position's relation features.
+    rel: Vec<u16>,
 }
 
 impl Cache {
     const BITS: u32 = 13;
 
     pub fn new() -> Cache {
-        Cache { acc: 0, emb: 0, keys: Vec::new(), flags: Vec::new(), accs: Vec::new(), embs: Vec::new() }
+        Cache { acc: 0, emb: 0, keys: Vec::new(), flags: Vec::new(), accs: Vec::new(), embs: Vec::new(), rel: Vec::with_capacity(MAX_RELATIONS) }
     }
 
     /// Forget every entry (another model, or a new one).
@@ -671,7 +789,7 @@ mod tests {
 
     #[test]
     fn file_round_trip() {
-        let m = Model::random(16, 8, 8, 7);
+        let m = Model::random(16, 8, 8, 16, true, 7);
         let b = m.to_bytes();
         let m2 = Model::from_bytes(&b).unwrap();
         assert_eq!(m2.to_bytes(), b);
@@ -707,12 +825,14 @@ mod tests {
             })
             .collect();
         let refs: Vec<(u8, &[u16], &[u16])> = feats.iter().map(|(r, o, t)| (*r, &o[..], &t[..])).collect();
-        m.evaluate_features(&refs, &dense(sd, s))
+        let mut rel = Vec::new();
+        relation_features(s, &mut rel);
+        m.evaluate_features(&refs, &rel, &dense(sd, s))
     }
 
     #[test]
     fn kernels_match_scalar() {
-        let m = Model::random(64, 32, 32, 11);
+        let m = Model::random(64, 32, 32, 32, true, 11);
         let mut z = 5u32;
         let mut r = move || {
             z = z.wrapping_mul(1664525).wrapping_add(1013904223);
@@ -734,7 +854,7 @@ mod tests {
 
     #[test]
     fn cached_and_incremental_match_the_reference() {
-        let m = Model::random(32, 16, 8, 3);
+        let m = Model::random(32, 16, 8, 16, true, 3);
         let mut s = start();
         let mut cache = Cache::new();
         // Captures, a travel that creates a timeline (5.Qb3>>x(0T1)f7+) and moves on both lines.
@@ -742,8 +862,8 @@ mod tests {
         for mv in line.split(' ') {
             apply_uci_moves(&mut s, &format!("{} submit", mv)).unwrap();
             let sd = hce::sides(&s);
-            let a = m.evaluate(&s, &sd, &mut cache);
-            assert_eq!(a, m.evaluate(&s, &sd, &mut Cache::new()), "after {}", mv);
+            let a = m.evaluate(&s, Some(&sd), &mut cache);
+            assert_eq!(a, m.evaluate(&s, Some(&sd), &mut Cache::new()), "after {}", mv);
             assert_eq!(a, reference(&m, &s, &sd), "after {}", mv);
         }
     }

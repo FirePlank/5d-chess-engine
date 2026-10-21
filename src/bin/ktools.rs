@@ -585,6 +585,7 @@ fn main() {
         "nnueeval" => nnueeval(&args[2..], &mut out),
         "nnuerandom" => nnuerandom(&args[2..], &mut out),
         "nnuerecs" => nnuerecs(&args[2..], &mut out),
+        "nnuerel" => nnuerel(&args[2..], &mut out),
         "netcheck" => {
             // Residuals of the first records of a netdata file under a net blob.
             use kairos::engine::evalnet::{Net, NI};
@@ -2006,9 +2007,11 @@ fn replay_game(line: &str, mut f: impl FnMut(&State, Option<i32>)) -> Option<f32
 /// - `out.rec`: per record, f32 teacher score (internal units, side to move's view; NaN when
 ///   none or a mate), result for the side to move, game number and ply, then the `nnue::ND`
 ///   dense inputs as i16 (they are counts);
-/// - `out.idx`: per record, u64 index of its first row in `out.brd` (its rows follow);
+/// - `out.idx`: per record, u64 index of its first row in `out.brd` (its rows follow) and u64
+///   index of its first relation feature in `out.rel`;
 /// - `out.brd`: per latest board, u32 record, u16 role, u16 feature count n, u64 offset in
-///   `out.ftr` (u16 units) of n features from the side to move's view, then n from the other.
+///   `out.ftr` (u16 units) of n features from the side to move's view, then n from the other;
+/// - `out.ftr`: u16 board features; `out.rel`: u16 relation features (`nnue::relation_features`).
 ///
 /// NETDATA_NO_CHECK=1 leaves out positions with the side to move in check (test sets).
 fn nnuedata(args: &[String], out: &mut impl Write) {
@@ -2018,6 +2021,7 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
         head: [f32; 4],
         dense: [i16; nnue::ND],
         boards: Vec<(u8, Vec<u16>, Vec<u16>)>,
+        rel: Vec<u16>,
     }
     let base = &args[0];
     let mut lines: Vec<String> = Vec::new();
@@ -2028,8 +2032,8 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
     let threads = 14;
     let no_check = std::env::var_os("NETDATA_NO_CHECK").is_some();
     let open = |ext: &str| BufWriter::with_capacity(1 << 20, std::fs::File::create(format!("{}.{}", base, ext)).expect("create output"));
-    let (mut rec, mut idx, mut brd, mut ftr) = (open("rec"), open("idx"), open("brd"), open("ftr"));
-    let (mut n_rec, mut n_brd, mut n_ftr) = (0u64, 0u64, 0u64);
+    let (mut rec, mut idx, mut brd, mut ftr, mut relf) = (open("rec"), open("idx"), open("brd"), open("ftr"), open("rel"));
+    let (mut n_rec, mut n_brd, mut n_ftr, mut n_rel) = (0u64, 0u64, 0u64, 0u64);
     let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<Sample>>(256);
     std::thread::scope(|sc| {
         for tid in 0..threads {
@@ -2064,7 +2068,9 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
                                 (bi.role, own, fb[..n].to_vec())
                             })
                             .collect();
-                        samples.push((Sample { head, dense, boards }, stm));
+                        let mut rel = Vec::new();
+                        nnue::relation_features(s, &mut rel);
+                        samples.push((Sample { head, dense, boards, rel }, stm));
                     }) else {
                         continue;
                     };
@@ -2091,6 +2097,11 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
                     rec.write_all(&v.to_le_bytes()).unwrap();
                 }
                 idx.write_all(&n_brd.to_le_bytes()).unwrap();
+                idx.write_all(&n_rel.to_le_bytes()).unwrap();
+                for f in &x.rel {
+                    relf.write_all(&f.to_le_bytes()).unwrap();
+                }
+                n_rel += x.rel.len() as u64;
                 for (role, own, other) in &x.boards {
                     brd.write_all(&(n_rec as u32).to_le_bytes()).unwrap();
                     brd.write_all(&(*role as u16).to_le_bytes()).unwrap();
@@ -2106,10 +2117,10 @@ fn nnuedata(args: &[String], out: &mut impl Write) {
             }
         }
     });
-    for w in [&mut rec, &mut idx, &mut brd, &mut ftr] {
+    for w in [&mut rec, &mut idx, &mut brd, &mut ftr, &mut relf] {
         w.flush().expect("write records");
     }
-    writeln!(out, "{} records, {} boards, {} features ({} dense inputs) from {} games -> {}.*", n_rec, n_brd, n_ftr, nnue::ND, lines.len(), base).unwrap();
+    writeln!(out, "{} records, {} boards, {} board features, {} relation features ({} dense inputs) from {} games -> {}.*", n_rec, n_brd, n_ftr, n_rel, nnue::ND, lines.len(), base).unwrap();
 }
 
 /// `nnueeval model.nnue file.g`: the NNUE evaluation of each position (internal units, side to
@@ -2121,7 +2132,7 @@ fn nnueeval(args: &[String], out: &mut impl Write) {
     let text = std::fs::read_to_string(&args[1]).expect("positions");
     for line in text.lines().filter(|l| l.starts_with("G ")) {
         let s = parse_g_line(line).unwrap();
-        writeln!(out, "{}", m.evaluate(&s, &hce::sides(&s), &mut cache)).unwrap();
+        writeln!(out, "{}", m.evaluate(&s, Some(&hce::sides(&s)), &mut cache)).unwrap();
     }
 }
 
@@ -2131,7 +2142,7 @@ fn nnuerecs(args: &[String], out: &mut impl Write) {
     use kairos::engine::nnue::{Model, ND};
     let m = Model::from_bytes(&std::fs::read(&args[0]).expect("model")).expect("model");
     let read = |ext: &str| std::fs::read(format!("{}.{}", args[1], ext)).expect("records");
-    let (rec, idx, brd, ftr) = (read("rec"), read("idx"), read("brd"), read("ftr"));
+    let (rec, idx, brd, ftr, rel) = (read("rec"), read("idx"), read("brd"), read("ftr"), read("rel"));
     let u = |b: &[u8], at: usize, n: usize| b[at..at + n].iter().rev().fold(0u64, |a, &x| a << 8 | x as u64);
     let rec_len = 16 + 2 * ND;
     let total = rec.len() / rec_len;
@@ -2143,25 +2154,78 @@ fn nnuerecs(args: &[String], out: &mut impl Write) {
         for (i, v) in d.iter_mut().enumerate() {
             *v = u(&rec, r * rec_len + 16 + 2 * i, 2) as u16 as i16;
         }
-        let first = u(&idx, 8 * r, 8) as usize;
-        let end = if r + 1 < total { u(&idx, 8 * (r + 1), 8) as usize } else { boards_total };
+        let first = u(&idx, 16 * r, 8) as usize;
+        let end = if r + 1 < total { u(&idx, 16 * (r + 1), 8) as usize } else { boards_total };
+        let r0 = u(&idx, 16 * r + 8, 8) as usize;
+        let r1 = if r + 1 < total { u(&idx, 16 * (r + 1) + 8, 8) as usize } else { rel.len() / 2 };
+        let relations: Vec<u16> = (r0..r1).map(|i| u(&rel, 2 * i, 2) as u16).collect();
         let mut feats: Vec<(u8, Vec<u16>, Vec<u16>)> = Vec::new();
         for b in first..end {
             let (role, k, off) = (u(&brd, 16 * b + 4, 2) as u8, u(&brd, 16 * b + 6, 2), u(&brd, 16 * b + 8, 8));
             feats.push((role, (0..k).map(|j| feat(off + j)).collect(), (0..k).map(|j| feat(off + k + j)).collect()));
         }
         let refs: Vec<(u8, &[u16], &[u16])> = feats.iter().map(|(r, o, t)| (*r, &o[..], &t[..])).collect();
-        writeln!(out, "{}", m.evaluate_features(&refs, &d)).unwrap();
+        writeln!(out, "{}", m.evaluate_features(&refs, &relations, &d)).unwrap();
     }
 }
 
-/// `nnuerandom out.nnue [acc emb hidden]`: a model with random weights, to measure the
-/// evaluation's cost before any training.
+/// `nnuerel file.g [reps]`: the cost of the NNUE relation features against the handcrafted
+/// evaluation's counting pass (`hce::sides`), per position, and how many features positions have.
+fn nnuerel(args: &[String], out: &mut impl Write) {
+    use kairos::engine::{hce, nnue};
+    let text = std::fs::read_to_string(&args[0]).expect("positions");
+    let reps: usize = args.get(1).and_then(|x| x.parse().ok()).unwrap_or(200);
+    let states: Vec<State> = text.lines().filter(|l| l.starts_with("G ")).filter_map(|l| parse_g_line(l).ok()).collect();
+    let mut f = Vec::new();
+    let (mut n, mut most) = (0, 0);
+    let t = Instant::now();
+    for _ in 0..reps {
+        for s in &states {
+            f.clear();
+            nnue::relation_features(s, &mut f);
+            n += f.len();
+            most = most.max(f.len());
+        }
+    }
+    let rel = t.elapsed().as_secs_f64();
+    let t = Instant::now();
+    let mut sink = 0i64;
+    for _ in 0..reps {
+        for s in &states {
+            sink += hce::sides(s).active as i64;
+        }
+    }
+    let sides = t.elapsed().as_secs_f64();
+    // The time-travel move generation alone.
+    let t = Instant::now();
+    let mut ml = kairos::core::multiverse::MoveList::new();
+    for _ in 0..reps {
+        for s in &states {
+            let (lo, hi) = s.get_lines_range();
+            for l in lo..=hi {
+                let (tt, c) = s.get_timeline_end(l);
+                let b = s.board(l, tt, c);
+                for sq in kairos::core::bitboard::marked_pos(b.hostile(!c) & !b.wall()) {
+                    ml.clear();
+                    s.multiverse().gen_superphysical_moves(kairos::core::vec4::Vec4::from_xy(sq, kairos::core::vec4::Vec4::new(0, 0, tt, l)), c, &mut ml);
+                    sink += ml.len() as i64;
+                }
+            }
+        }
+    }
+    let movegen = t.elapsed().as_secs_f64();
+    let calls = (reps * states.len()) as f64;
+    writeln!(out, "move generation alone {:.2} us", movegen * 1e6 / calls).unwrap();
+    writeln!(out, "{} positions: relations {:.2} us ({:.1} features, most {}), hce sides {:.2} us ({})", states.len(), rel * 1e6 / calls, n as f64 / calls, most, sides * 1e6 / calls, sink % 2).unwrap();
+}
+
+/// `nnuerandom out.nnue [acc emb hidden racc dense]`: a model with random weights, to measure
+/// the evaluation's cost before any training (dense 0: without the handcrafted counts).
 fn nnuerandom(args: &[String], out: &mut impl Write) {
     let n = |i: usize, d: usize| args.get(i).and_then(|x| x.parse().ok()).unwrap_or(d);
-    let m = kairos::engine::nnue::Model::random(n(1, 128), n(2, 32), n(3, 32), 1);
+    let m = kairos::engine::nnue::Model::random(n(1, 128), n(2, 32), n(3, 32), n(4, 64), n(5, 1) != 0, 1);
     std::fs::write(&args[0], m.to_bytes()).expect("write model");
-    writeln!(out, "random model {}x{}x{} -> {}", m.acc, m.emb, m.hidden, args[0]).unwrap();
+    writeln!(out, "random model {}x{}x{} relations {} dense {} -> {}", m.acc, m.emb, m.hidden, m.racc, m.use_dense, args[0]).unwrap();
 }
 
 /// `netdata out.bin games.jsonl...`: eval-net records (NI + 4 f32: inputs, base, teacher or NaN,

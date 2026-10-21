@@ -20,7 +20,8 @@ import torch
 NB = 12 * 2 * 64 + 4 * 2 * 64   # board features (nnue::NB)
 ROLES = 4                         # nnue::ROLES
 ND = 2 * 54 + 2 * 30 + 4          # dense inputs (nnue::ND)
-MAGIC = b'KNNUE002'
+NR = 2 * 12 * 9 * 5 * 2 * 2 + 2 * 12 * 12 * 5 * 2  # relation features (nnue::NR)
+MAGIC = b'KNNUE003'
 REC = np.dtype([('h', '<f4', 4), ('d', '<i2', ND)])
 BRD = np.dtype([('rec', '<u4'), ('role', '<u2'), ('n', '<u2'), ('off', '<u8')])
 
@@ -32,7 +33,8 @@ class Data:
         prefix, _, w = spec.partition('@')
         self.weight = float(w or 1)
         self.rec = np.memmap(prefix + '.rec', dtype=REC, mode='r')
-        self.idx = np.memmap(prefix + '.idx', dtype='<u8', mode='r')
+        self.idx = np.memmap(prefix + '.idx', dtype=[('b', '<u8'), ('r', '<u8')], mode='r')
+        self.rel = np.memmap(prefix + '.rel', dtype='<u2', mode='r')
         self.brd = np.memmap(prefix + '.brd', dtype=BRD, mode='r')
         self.ftr = np.memmap(prefix + '.ftr', dtype='<u2', mode='r')
         self.n = len(self.rec)
@@ -41,8 +43,14 @@ class Data:
         """Tensors of records `rows` (sorted): head, dense, and the boards' features."""
         rows = np.asarray(rows, dtype=np.int64)
         rec = self.rec[rows]
-        first = self.idx[rows].astype(np.int64)
-        nxt = np.where(rows + 1 < self.n, self.idx[np.minimum(rows + 1, self.n - 1)].astype(np.int64), len(self.brd))
+        idx, nidx = self.idx[rows], self.idx[np.minimum(rows + 1, self.n - 1)]
+        last = rows + 1 >= self.n
+        first = idx['b'].astype(np.int64)
+        nxt = np.where(last, len(self.brd), nidx['b'].astype(np.int64))
+        r0 = idx['r'].astype(np.int64)
+        rn = np.where(last, len(self.rel), nidx['r'].astype(np.int64)) - r0
+        rel = self.rel[ranges(r0, rn)].astype(np.int64)
+        rel_offsets = np.concatenate([[0], np.cumsum(rn)[:-1]]).astype(np.int64)
         counts = nxt - first
         board_rows = ranges(first, counts)
         brd = self.brd[board_rows]
@@ -58,6 +66,7 @@ class Data:
             'own': torch.from_numpy(own), 'other': torch.from_numpy(other),
             'offsets': torch.from_numpy(offsets),
             'board_rec': torch.from_numpy(local), 'role': torch.from_numpy(brd['role'].astype(np.int64)),
+            'rel': torch.from_numpy(rel), 'rel_offsets': torch.from_numpy(rel_offsets),
         }
 
 
@@ -73,18 +82,21 @@ def ranges(starts, counts):
 
 
 class Net(torch.nn.Module):
-    def __init__(self, acc, emb, hidden, dense_mul, out_scale):
+    def __init__(self, acc, emb, hidden, racc, use_dense, dense_mul, out_scale):
         super().__init__()
-        self.acc, self.emb, self.hidden = acc, emb, hidden
+        self.acc, self.emb, self.hidden, self.racc, self.use_dense = acc, emb, hidden, racc, use_dense
+        self.rel = torch.nn.EmbeddingBag(NR, racc, mode='sum')
+        self.rb = torch.nn.Parameter(torch.full((racc,), 0.1))
         self.ft = torch.nn.EmbeddingBag(NB, acc, mode='sum')
         self.b1 = torch.nn.Parameter(torch.zeros(acc))
         self.l2 = torch.nn.Linear(2 * acc, emb)
-        self.lh = torch.nn.Linear(ROLES * emb + ROLES + ND, hidden)
+        self.lh = torch.nn.Linear(ROLES * emb + ROLES + racc + ND, hidden)
         self.lo = torch.nn.Linear(hidden, 1)
         self.register_buffer('dense_mul', torch.as_tensor(dense_mul, dtype=torch.float32))
         self.out_scale = out_scale
         with torch.no_grad():
             self.ft.weight.normal_(0, 0.02)
+            self.rel.weight.normal_(0, 0.05)
             self.b1.fill_(0.1)
 
     def forward(self, b):
@@ -95,7 +107,9 @@ class Net(torch.nn.Module):
         slot = b['board_rec'] * ROLES + b['role']
         pooled = torch.zeros(n * ROLES, self.emb, device=e.device).index_add_(0, slot, e)
         counts = torch.zeros(n * ROLES, device=e.device).index_add_(0, slot, torch.ones_like(slot, dtype=torch.float32))
-        x = torch.cat([pooled.view(n, ROLES * self.emb), counts.view(n, ROLES), b['dense'] * self.dense_mul], 1)
+        r = torch.clamp(self.rel(b['rel'], b['rel_offsets']) + self.rb, 0, 1)
+        d = b['dense'] * self.dense_mul if self.use_dense else torch.zeros_like(b['dense'])
+        x = torch.cat([pooled.view(n, ROLES * self.emb), counts.view(n, ROLES), r, d], 1)
         h = torch.clamp(self.lh(x), 0, 1)
         return self.lo(h).squeeze(1) * self.out_scale
 
@@ -105,6 +119,7 @@ class Net(torch.nn.Module):
         with torch.no_grad():
             self.ft.weight.clamp_(-FT_MAX, FT_MAX)
             self.b1.clamp_(-FT_MAX, FT_MAX)
+            self.rel.weight.clamp_(-200, 200)
             for w in (self.l2.weight, self.lh.weight):
                 w.clamp_(-127 / 64, 127 / 64)
 
@@ -117,6 +132,8 @@ class Net(torch.nn.Module):
             'ft_b': r(g(self.b1) * ONE).astype(np.int16),
             'l2_w': np.clip(r(g(self.l2.weight).T * 64), -128, 127).astype(np.int8),
             'l2_b': r(g(self.l2.bias) * ONE * 64).astype(np.int32),
+            'rel_w': r(g(self.rel.weight) * ONE).astype(np.int16),
+            'rel_b': r(g(self.rb) * ONE).astype(np.int32),
             'dense_m': r(g(self.dense_mul) * ONE * (1 << FIX)).astype(np.int32),
             'head_w': np.clip(r(g(self.lh.weight).T * 64), -128, 127).astype(np.int8),
             'head_b': r(g(self.lh.bias) * ONE * 64).astype(np.int32),
@@ -124,7 +141,7 @@ class Net(torch.nn.Module):
             'out_b': int(r(g(self.lo.bias) * ONE * 64)[0]),
             'out_q': int(r(np.array(self.out_scale / (ONE * 64) * (1 << FIX)))),
         }
-        q.update(acc=self.acc, emb=self.emb, hidden=self.hidden)
+        q.update(acc=self.acc, emb=self.emb, hidden=self.hidden, racc=self.racc, use_dense=self.use_dense)
         return q
 
     def to_bytes(self):
@@ -140,8 +157,8 @@ MAX_FEATURES = 128  # nnue::MAX_BOARD_FEATURES
 
 def qbytes(q):
     out = bytearray(MAGIC)
-    out += struct.pack('<6I', NB, q['acc'], q['emb'], ROLES, ND, q['hidden'])
-    for k in ('ft_w', 'ft_b', 'l2_w', 'l2_b', 'dense_m', 'head_w', 'head_b', 'out_w'):
+    out += struct.pack('<9I', NB, q['acc'], q['emb'], ROLES, ND, q['hidden'], NR, q['racc'], int(q['use_dense']))
+    for k in ('ft_w', 'ft_b', 'l2_w', 'l2_b', 'rel_w', 'rel_b', 'dense_m', 'head_w', 'head_b', 'out_w'):
         out += np.ascontiguousarray(q[k]).astype(q[k].dtype.newbyteorder('<')).tobytes()
     out += struct.pack('<2i', q['out_b'], q['out_q'])
     return bytes(out)
@@ -174,9 +191,15 @@ def qforward(q, b):
     counts = np.zeros((n, ROLES), dtype=np.int64)
     np.add.at(pooled, (rec, role), out_e)
     np.add.at(counts, (rec, role), 1)
+    racc = q['racc']
+    relw = q['rel_w'].reshape(NR, racc).astype(np.int64)
+    rel, ro = b['rel'].numpy(), np.append(b['rel_offsets'].numpy(), len(b['rel']))
+    ract = np.stack([np.clip(q['rel_b'].astype(np.int64) + relw[rel[ro[i]:ro[i + 1]]].sum(0), 0, ONE) for i in range(n)])
     d = b['dense'].numpy().astype(np.int64)
+    if not q['use_dense']:
+        d = np.zeros_like(d)
     dq = np.where(d != 0, np.clip(shr_round(d * q['dense_m'].astype(np.int64), FIX), -32767, 32767), 0)
-    x = np.concatenate([np.minimum(pooled.reshape(n, ROLES * emb), 32767), np.minimum(counts * ONE, 32767), dq], 1)
+    x = np.concatenate([np.minimum(pooled.reshape(n, ROLES * emb), 32767), np.minimum(counts * ONE, 32767), ract, dq], 1)
     s = q['head_b'].astype(np.int64) + x @ q['head_w'].reshape(-1, hid).astype(np.int64)
     h = np.clip(s >> SHIFT, 0, ONE)
     o = q['out_b'] + h @ q['out_w'].astype(np.int64)
@@ -186,13 +209,13 @@ def qforward(q, b):
 def save(net, out):
     """The engine's file, and the float checkpoint (`out`.pt) to resume or check from."""
     open(out, 'wb').write(net.to_bytes())
-    torch.save({'acc': net.acc, 'emb': net.emb, 'hidden': net.hidden, 'out_scale': net.out_scale,
+    torch.save({'acc': net.acc, 'emb': net.emb, 'hidden': net.hidden, 'racc': net.racc, 'use_dense': net.use_dense, 'out_scale': net.out_scale,
                 'state': net.state_dict()}, out + '.pt')
 
 
 def load(path):
     c = torch.load(path, map_location='cpu')
-    net = Net(c['acc'], c['emb'], c['hidden'], np.zeros(ND), c['out_scale'])
+    net = Net(c['acc'], c['emb'], c['hidden'], c['racc'], c['use_dense'], np.zeros(ND), c['out_scale'])
     net.load_state_dict(c['state'])
     return net
 
@@ -261,6 +284,8 @@ def main():
     ap.add_argument('--acc', type=int, default=128)
     ap.add_argument('--emb', type=int, default=32)
     ap.add_argument('--hidden', type=int, default=32)
+    ap.add_argument('--racc', type=int, default=64, help='relation accumulator width')
+    ap.add_argument('--no-dense', action='store_true', help='without the handcrafted counts (a pure NNUE)')
     ap.add_argument('--k', type=float, default=4350.0, help='internal units per logistic unit')
     ap.add_argument('--lam', type=float, default=0.9, help='teacher share of the target')
     ap.add_argument('--epochs', type=int, default=10)
@@ -288,7 +313,7 @@ def main():
     if args.init:
         net = load(args.init)
     else:
-        net = Net(args.acc, args.emb, args.hidden, dense_scale(data, rows), args.out_scale)
+        net = Net(args.acc, args.emb, args.hidden, args.racc, not args.no_dense, dense_scale(data, rows), args.out_scale)
     net.to(dev)
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=1e-5)
     steps = args.epochs * sum(math.ceil(len(t) / args.batch) for t, _ in rows)

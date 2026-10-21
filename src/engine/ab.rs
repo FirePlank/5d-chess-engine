@@ -936,19 +936,18 @@ impl AlphaBeta {
         if e.key == key && e.flags & KNOWN_EVAL != 0 {
             return e.eval;
         }
-        let sd = {
-            let _prof = crate::misc::prof::scope(23);
-            hce::sides_with(s, &mut *self.terms)
-        };
         if self.skill_level == 8
             && let Some(m) = &self.nnue {
-                let v = m.evaluate(s, &sd, &mut self.nnue_cache).clamp(-EVAL_MAX, EVAL_MAX);
+                // The handcrafted counts only for a model that reads them.
+                let sd = m.use_dense.then(|| hce::sides_with(s, &mut *self.terms));
+                let v = m.evaluate(s, sd.as_ref(), &mut self.nnue_cache).clamp(-EVAL_MAX, EVAL_MAX);
                 self.known.store(i, key, |e| {
                     e.eval = v;
                     e.flags |= KNOWN_EVAL;
                 });
                 return v;
             }
+        let sd = hce::sides_with(s, &mut *self.terms);
         let mut f = hce::features_from(&sd, s, hce::needs_checks(&self.hce));
         let spatial = if self.skill_level < 8 { Some(super::skill::spatial_score(&f, &self.hce, s.get_present().1)) } else { None };
         let chess = if hce::CHESS_IN_NET { [0; hce::NF] } else { hce::split_chess(&mut f) };
