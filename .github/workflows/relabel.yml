@@ -30,14 +30,6 @@ jobs:
       max_seconds: ${{ steps.cfg.outputs.max_seconds }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            .github/relabel.json
-            src/
-            data/
-            Cargo.toml
-            Cargo.lock
-          sparse-checkout-cone-mode: false
 
       - name: Read config
         id: cfg

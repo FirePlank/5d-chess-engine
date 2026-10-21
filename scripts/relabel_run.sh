@@ -54,9 +54,13 @@ while :; do
   [ "$st" = completed ] && break
   sleep 60
 done
+# A run whose build failed has no labels to fetch.
+if [ "$(ghr gh run view "$ID" -R "$REPO" --json jobs -q '[.jobs[] | select(.name | startswith("label"))] | length')" = 0 ]; then
+  echo "run $ID has no label jobs (the build failed)" >&2; exit 1
+fi
 D="$R/games/nnue/relabel_$NAME"
 rm -rf "$D"; mkdir -p "$D"
-until ghr gh run download "$ID" -R "$REPO" -D "$D" -p 'label-*'; do sleep 30; done
+for i in $(seq 20); do ghr gh run download "$ID" -R "$REPO" -D "$D" -p 'label-*' && break; sleep 30; done
 # Shard k's line j is line j * SHARDS + k - 1 of the picks.
 python - "$D" "$SHARDS" "$R/games/nnue/labels_$NAME.tsv" <<'EOF'
 import glob, os, sys
