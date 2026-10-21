@@ -135,12 +135,9 @@ const ROOT_EFFORT_HIGH: f64 = 0.9;
 const ROOT_EFFORT_SCALE: f64 = 0.75;
 /// Extra depth of a root action that is an f7-style sacrifice travel (`sac::signature_travels`).
 const SAC_ROOT_EXT: i32 = 2;
-/// Local nodes the f7 sac table's probes may use before every search, whatever the clock (the
-/// same work for the same position, in analysis and in games).
+/// Local nodes the f7 sac probes may solve before a search: none, since solving cost more than it
+/// found at every budget tried (50000 down to 5000); the precomputed table is only read.
 const SAC_PREP_NODES: u64 = 0;
-/// Ordering bonus of a semimove that is the proven attacker's mating move on a created line
-/// (a hint of the sac table).
-const SAC_HINT_BONUS: i32 = 25_000;
 /// Reverse futility pruning: at non-PV nodes up to this depth, return the static eval when
 /// it beats beta by RFP_MARGIN per ply.
 const RFP_DEPTH: i32 = 2;
@@ -1044,34 +1041,6 @@ impl AlphaBeta {
         }
     }
 
-    /// The sac table's mating moves on the created lines the side to move attacks on:
-    /// (line, from square, to square).
-    fn sac_hints(s: &State) -> Vec<(i32, i32, i32)> {
-        let mut out = Vec::new();
-        if !super::sac::any_proof() {
-            return out;
-        }
-        let m = s.multiverse();
-        let (amin, amax) = s.get_active_range();
-        let (l0, l1) = s.get_initial_lines_range();
-        let player = s.get_present().1;
-        for l in (amin..l0).chain(l1 + 1..=amax) {
-            if let Some((attacker, from, to)) = super::sac::line_hint(m, l)
-                && attacker == player
-            {
-                out.push((l, from, to));
-            }
-        }
-        out
-    }
-
-    fn hint_bonus(info: &HcInfo, n: usize, i: Index, _player: bool, hints: &[(i32, i32, i32)]) -> i32 {
-        match info.entry(n, i) {
-            Entry::Physical { m, .. } if hints.iter().any(|h| h.0 == m.from.l() && h.1 == m.from.xy() && h.2 == m.to.xy()) => SAC_HINT_BONUS,
-            _ => 0,
-        }
-    }
-
     /// Node ordering into `orders` (per axis, coordinates best first) and `scores` (per axis,
     /// each coordinate's score) of the axes in `axes`; checking semimoves are detected (and go
     /// first) when `checks`.
@@ -1101,7 +1070,6 @@ impl AlphaBeta {
             scores.resize_with(dim, Vec::new);
         }
         let mut detector = if checks { Some(CheckDetector::new(info, s, scratch)) } else { None };
-        let hints = Self::sac_hints(s);
         for n in axes.start..axes.end.min(dim) {
             let sc = &mut scores[n];
             sc.clear();
@@ -1165,7 +1133,6 @@ impl AlphaBeta {
                     }
                     _ => self.coord_score(s, info, n, i, &mut detector, recorded),
                 };
-                let score = if hints.is_empty() { score } else { score + Self::hint_bonus(info, n, i, s.get_present().1, &hints) };
                 sc[i as usize] = score;
                 v.push(((!((score as u32) ^ 0x8000_0000) as u64) << 32) | i as u64);
             }
