@@ -551,6 +551,11 @@ pub struct AlphaBeta {
     terms: Box<hce::TermCache>,
     /// Whether the position the next `negamax` call searches is in check, when known.
     known_check: Option<bool>,
+    /// Below an extended checking sacrifice by time travel (`root_child_depth`, the ply-2
+    /// extension): the side it was played against, which makes no null moves there. Given the
+    /// material, it is far ahead, so a null move would clear beta at every one of its nodes and
+    /// the slow attack would never be searched.
+    sac_line: Option<bool>,
     /// Static evaluations and in-check status of recently seen positions.
     known: KnownCache,
     /// The score (internal units, side to move) of the last `find_best_move`.
@@ -892,6 +897,7 @@ impl AlphaBeta {
             terms: Box::default(),
             phys_static: std::cell::RefCell::new(Vec::new()),
             known_check: None,
+            sac_line: None,
             known: KnownCache::new(),
             last_score: 0,
             last_proven: false,
@@ -2406,10 +2412,15 @@ impl AlphaBeta {
         best
     }
 
+    /// Whether a root action plays one of the checking sacrifices by time travel `sig`.
+    fn is_sig(act: &MoveSeq, sig: &[FullMove]) -> bool {
+        act.iter().any(|m| sig.contains(m))
+    }
+
     /// The depth a root action is searched to (both root paths, single-line and MultiPV, use it):
     /// the iteration's, less the skill level's travel reduction, plus the sacrifices' extension.
     fn root_child_depth(&self, act: &MoveSeq, depth: i32, sig: &[FullMove]) -> i32 {
-        let ext = if act.iter().any(|m| sig.contains(m)) { SAC_ROOT_EXT } else { 0 };
+        let ext = if Self::is_sig(act, sig) { SAC_ROOT_EXT } else { 0 };
         depth - super::skill::travel_reduction(self.skill_level, act) + ext
     }
 
@@ -2484,7 +2495,7 @@ impl AlphaBeta {
                     return e;
                 }
             }
-            if depth >= NMP_MIN_DEPTH && Self::has_null_material(s) && self.static_eval(s) >= beta {
+            if depth >= NMP_MIN_DEPTH && self.sac_line != Some(s.player()) && Self::has_null_material(s) && self.static_eval(s) >= beta {
                 let r = NMP_R + depth / NMP_DIV;
                 let mark = s.make_null();
                 let v = -self.negamax(s, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
@@ -2722,6 +2733,10 @@ impl AlphaBeta {
                     // as at the root.
                     let ext = if ply == 2 && depth >= 6 && act.iter().any(|m| super::sac::is_sac_travel(s, m)) { SAC_ROOT_EXT } else { 0 };
                     let mark = Self::make(s, &act);
+                    let sac_line = self.sac_line;
+                    if ext > 0 {
+                        self.sac_line = Some(s.player());
+                    }
                     let quiet = sc < 10_000;
                     let mut r = 0;
                     let mut child_check = None;
@@ -2750,6 +2765,7 @@ impl AlphaBeta {
                         }
                     }
                     s.unmake(mark);
+                    self.sac_line = sac_line;
                     if self.aborted {
                         break 'search Some(0);
                     }
@@ -3656,6 +3672,7 @@ impl AlphaBeta {
                         let act_nodes0 = self.nodes;
                         let mark = Self::make(&mut work, act);
                         let child_depth = self.root_child_depth(act, depth, &sig);
+                        self.sac_line = Self::is_sig(act, &sig).then_some(work.player());
                         let v = if k == 0 {
                             -self.negamax(&mut work, child_depth - 1, 1, -beta, -alpha, true)
                         } else {
@@ -3675,6 +3692,7 @@ impl AlphaBeta {
                             v
                         };
                         work.unmake(mark);
+                        self.sac_line = None;
                         if self.aborted {
                             break;
                         }
@@ -3874,6 +3892,7 @@ impl AlphaBeta {
             let bar = if top.len() >= want { top[want - 1] } else { -INF };
             let mark = Self::make(work, act);
             let child_depth = self.root_child_depth(act, depth, sig);
+            self.sac_line = Self::is_sig(act, sig).then_some(work.player());
             let mut exact = true;
             let v = if k == 0 {
                 let mut v = -self.negamax(work, child_depth - 1, 1, -hi, -lo, true);
@@ -3900,6 +3919,7 @@ impl AlphaBeta {
                 if exact { v } else { v.min(bar - 1) }
             };
             work.unmake(mark);
+            self.sac_line = None;
             if self.aborted {
                 break;
             }
