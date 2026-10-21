@@ -133,6 +133,10 @@ const CHECK_BONUS: i32 = 30_000;
 /// the best action stable, starts no next depth past this share of the usual time.
 const ROOT_EFFORT_HIGH: f64 = 0.9;
 const ROOT_EFFORT_SCALE: f64 = 0.75;
+/// An unstable search whose chosen action took less than this share of the nodes goes on to
+/// this multiple of the usual share of the target.
+const ROOT_EFFORT_LOW: f64 = 0.5;
+const ROOT_EFFORT_MORE: f64 = 1.3;
 /// Extra depth of a root action that is an f7-style sacrifice travel (`sac::signature_travels`).
 const SAC_ROOT_EXT: i32 = 2;
 /// Local nodes the f7 sac table's probes may use before every search, whatever the clock (the
@@ -3839,7 +3843,13 @@ impl AlphaBeta {
                 // The next depth costs about as much as all before it together: none is
                 // started past half the target.
                 // One action taking nearly all the nodes of a stable search is settled.
-                let settled = if effort > ROOT_EFFORT_HIGH && changes < 0.5 { ROOT_EFFORT_SCALE } else { 1.0 };
+                let settled = if effort > ROOT_EFFORT_HIGH && changes < 0.5 {
+                    ROOT_EFFORT_SCALE
+                } else if effort < ROOT_EFFORT_LOW && changes >= 1.0 {
+                    ROOT_EFFORT_MORE
+                } else {
+                    1.0
+                };
                 if elapsed * 1000.0 > p.target(falling, instability) * 0.5 * settled {
                     if elapsed * 1000.0 >= p.free as f64 {
                         break;
