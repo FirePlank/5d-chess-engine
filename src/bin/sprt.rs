@@ -234,6 +234,9 @@ struct Proc {
     name: String,
     /// Last search score reported in an info line (mover's view; mates as +-20000).
     last_score: Option<i32>,
+    /// That info line's depth and the first action of its line (the moves before `submit`).
+    last_depth: Option<i32>,
+    last_pv: Option<String>,
     /// The engine's last `STDERR_TAIL` stderr lines, and the thread collecting them.
     stderr: Arc<Mutex<VecDeque<String>>>,
     stderr_reader: Option<JoinHandle<()>>,
@@ -253,6 +256,11 @@ struct CrashReport {
 /// Score from an engine info line, on the reported scale: "score cp X" or "score mate N"
 /// (+-20000). Engines that print no "wdl" (kairos before the reported scale) report internal
 /// units, converted here.
+/// The moves of the first action of a move list (up to its `submit`), space-separated.
+fn first_action(moves: &str) -> String {
+    moves.split_whitespace().take_while(|w| *w != "submit").collect::<Vec<_>>().join(" ")
+}
+
 fn info_score(line: &str) -> Option<i32> {
     let reported = line.split_whitespace().any(|w| w == "wdl");
     let mut it = line.split_whitespace().skip_while(|w| *w != "score").skip(1);
@@ -302,7 +310,7 @@ impl Proc {
                 t.push_back(line);
             }
         });
-        let mut p = Proc { child, stdin, rx, name: name.into(), last_score: None, stderr, stderr_reader: Some(stderr_reader) };
+        let mut p = Proc { child, stdin, rx, name: name.into(), last_score: None, last_depth: None, last_pv: None, stderr, stderr_reader: Some(stderr_reader) };
         p.send("5duci")?;
         p.wait_for("5duciok", Duration::from_secs(30))?;
         p.send("setoption name debug value false")?;
@@ -328,6 +336,8 @@ impl Proc {
                     if l.starts_with("info")
                         && let Some(sc) = info_score(&l) {
                             self.last_score = Some(sc);
+                            self.last_depth = l.split_whitespace().skip_while(|w| *w != "depth").nth(1).and_then(|d| d.parse().ok());
+                            self.last_pv = l.split_once(" pv ").map(|(_, pv)| first_action(pv));
                         }
                     continue;
                 }
@@ -616,6 +626,10 @@ struct GameRecord {
     log: String,
     /// Each engine action's reported score, from the mover's view (reported scale).
     evals: Vec<Option<i32>>,
+    /// Each engine action's last completed depth, and whether that depth's line began with the
+    /// action played (else the score belongs to another action, e.g. after a late change).
+    depths: Vec<Option<i32>>,
+    pv_played: Vec<bool>,
     /// A game lost to an engine failure (exit or timeout): what is known about it.
     crash: Option<Crash>,
 }
@@ -635,6 +649,8 @@ struct Progress {
     /// Engine actions so far.
     actions: usize,
     evals: Vec<Option<i32>>,
+    depths: Vec<Option<i32>>,
+    pv_played: Vec<bool>,
     /// The last `position` and `go` commands each engine (NEW, BASE) was sent.
     last_position: [Option<String>; 2],
     last_go: [Option<String>; 2],
@@ -661,6 +677,8 @@ fn play_game(cfg: &Config, procs: &mut [Option<Proc>; 2], op: &Opening, new_firs
         actions: prog.actions,
         log: prog.history.clone(),
         evals: prog.evals.clone(),
+        depths: prog.depths.clone(),
+        pv_played: prog.pv_played.clone(),
         crash: None,
     };
     loop {
@@ -687,6 +705,8 @@ fn play_game(cfg: &Config, procs: &mut [Option<Proc>; 2], op: &Opening, new_firs
         proc.send(&position)?;
         prog.last_position[side] = Some(position);
         proc.last_score = None;
+        proc.last_depth = None;
+        proc.last_pv = None;
         // The delay of this action: from the active timelines at its start.
         let delay = cfg.clock.map_or(0, |c| c.delay_at(&s));
         let go = match cfg.clock {
@@ -711,6 +731,8 @@ fn play_game(cfg: &Config, procs: &mut [Option<Proc>; 2], op: &Opening, new_firs
             }
         }
         prog.evals.push(proc.last_score);
+        prog.depths.push(proc.last_depth);
+        prog.pv_played.push(proc.last_pv.as_deref().is_some_and(|pv| reply.split_whitespace().skip(1).collect::<Vec<_>>().join(" ") == pv));
         if reply.starts_with("nobestmove") {
             return Ok(finish(new_result(false), "nobestmove with legal actions".into(), prog));
         }
@@ -977,9 +999,12 @@ fn main() {
                                     };
                                     // An engine's failure keeps the game so far; an
                                     // unattributed one was replayed and keeps none.
-                                    let (actions, log, evals) =
-                                        if who < 2 { (prog.actions, prog.history, prog.evals) } else { (0, String::new(), Vec::new()) };
-                                    results.push(GameRecord { result, reason: format!("protocol: {}", e), actions, log, evals, crash });
+                                    let (actions, log, evals, depths, pv_played) = if who < 2 {
+                                        (prog.actions, prog.history, prog.evals, prog.depths, prog.pv_played)
+                                    } else {
+                                        (0, String::new(), Vec::new(), Vec::new(), Vec::new())
+                                    };
+                                    results.push(GameRecord { result, reason: format!("protocol: {}", e), actions, log, evals, depths, pv_played, crash });
                                     break;
                                 }
                             }
@@ -1017,7 +1042,7 @@ fn main() {
                         });
                         let _ = writeln!(
                             f,
-                            "{{\"game\":{},\"pair\":{},\"new_first\":{},\"score\":{},\"reason\":\"{}\",\"actions\":{},\"position\":\"{}\",\"book\":{},\"moves\":\"{}\",\"eval_scale\":{},\"evals\":[{}]{}}}",
+                            "{{\"game\":{},\"pair\":{},\"new_first\":{},\"score\":{},\"reason\":\"{}\",\"actions\":{},\"position\":\"{}\",\"book\":{},\"moves\":\"{}\",\"eval_scale\":{},\"evals\":[{}],\"depths\":[{}],\"pv_played\":[{}],\"promo\":{}{}}}",
                             2 * k + gi,
                             k,
                             gi == 0,
@@ -1029,6 +1054,9 @@ fn main() {
                             esc(r.log.trim()),
                             REPORT_SCALE,
                             r.evals.iter().map(|e| e.map(|v| v.to_string()).unwrap_or("null".into())).collect::<Vec<_>>().join(","),
+                            r.depths.iter().map(|e| e.map(|v| v.to_string()).unwrap_or("null".into())).collect::<Vec<_>>().join(","),
+                            r.pv_played.iter().map(|&b| if b { "1" } else { "0" }).collect::<Vec<_>>().join(","),
+                            op.promo,
                             crash
                         );
                         let _ = f.flush();
