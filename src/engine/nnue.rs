@@ -209,6 +209,14 @@ pub fn relation_features(s: &State, out: &mut Vec<u16>) {
 
 const MAGIC: &[u8; 8] = b"KNNUE003";
 
+static EMBEDDED: std::sync::OnceLock<Option<std::sync::Arc<Model>>> = std::sync::OnceLock::new();
+
+/// The network built into the engine (data/kairos.nnue): its evaluation unless `EvalFile` says
+/// otherwise.
+pub fn embedded() -> Option<std::sync::Arc<Model>> {
+    EMBEDDED.get_or_init(|| Model::from_bytes(include_bytes!("../../data/kairos.nnue")).ok().map(std::sync::Arc::new)).clone()
+}
+
 /// A trained, quantized network (`scripts/nnue/train.py --out`).
 pub struct Model {
     /// Accumulator and board embedding widths, head width, relation accumulator width.
