@@ -118,8 +118,8 @@ class Net(torch.nn.Module):
     def __init__(self, acc, emb, hidden, racc, use_dense, dense_mul, out_scale):
         super().__init__()
         self.acc, self.emb, self.hidden, self.racc, self.use_dense = acc, emb, hidden, racc, use_dense
-        self.rel = torch.nn.EmbeddingBag(NR, racc, mode='sum')
-        self.rb = torch.nn.Parameter(torch.full((racc,), 0.1))
+        self.rel = torch.nn.EmbeddingBag(NR, max(racc, 1), mode='sum')  # unused when racc is 0
+        self.rb = torch.nn.Parameter(torch.full((max(racc, 1),), 0.1))
         self.ft = torch.nn.EmbeddingBag(NB, acc, mode='sum')
         self.b1 = torch.nn.Parameter(torch.zeros(acc))
         self.l2 = torch.nn.Linear(2 * acc, emb)
@@ -140,7 +140,7 @@ class Net(torch.nn.Module):
         slot = b['board_rec'] * ROLES + b['role']
         pooled = torch.zeros(n * ROLES, self.emb, device=e.device).index_add_(0, slot, e)
         counts = torch.zeros(n * ROLES, device=e.device).index_add_(0, slot, torch.ones_like(slot, dtype=torch.float32))
-        r = torch.clamp(self.rel(b['rel'], b['rel_offsets']) + self.rb, 0, 1)
+        r = torch.clamp(self.rel(b['rel'], b['rel_offsets']) + self.rb, 0, 1)[:, :self.racc]
         d = b['dense'] * self.dense_mul if self.use_dense else torch.zeros_like(b['dense'])
         x = torch.cat([pooled.view(n, ROLES * self.emb), counts.view(n, ROLES), r, d], 1)
         h = torch.clamp(self.lh(x), 0, 1)
@@ -165,8 +165,8 @@ class Net(torch.nn.Module):
             'ft_b': r(g(self.b1) * ONE).astype(np.int16),
             'l2_w': np.clip(r(g(self.l2.weight).T * 64), -128, 127).astype(np.int8),
             'l2_b': r(g(self.l2.bias) * ONE * 64).astype(np.int32),
-            'rel_w': r(g(self.rel.weight) * ONE).astype(np.int16),
-            'rel_b': r(g(self.rb) * ONE).astype(np.int32),
+            'rel_w': r(g(self.rel.weight)[:, :self.racc] * ONE).astype(np.int16),
+            'rel_b': r(g(self.rb)[:self.racc] * ONE).astype(np.int32),
             'dense_m': r(g(self.dense_mul) * ONE * (1 << FIX)).astype(np.int32),
             'head_w': np.clip(r(g(self.lh.weight).T * 64), -128, 127).astype(np.int8),
             'head_b': r(g(self.lh.bias) * ONE * 64).astype(np.int32),
@@ -227,7 +227,7 @@ def qforward(q, b):
     racc = q['racc']
     relw = q['rel_w'].reshape(NR, racc).astype(np.int64)
     rel, ro = b['rel'].numpy(), np.append(b['rel_offsets'].numpy(), len(b['rel']))
-    ract = np.stack([np.clip(q['rel_b'].astype(np.int64) + relw[rel[ro[i]:ro[i + 1]]].sum(0), 0, ONE) for i in range(n)])
+    ract = np.stack([np.clip(q['rel_b'].astype(np.int64) + relw[rel[ro[i]:ro[i + 1]]].sum(0), 0, ONE) for i in range(n)]) if racc else np.zeros((n, 0), dtype=np.int64)
     d = b['dense'].numpy().astype(np.int64)
     if not q['use_dense']:
         d = np.zeros_like(d)
