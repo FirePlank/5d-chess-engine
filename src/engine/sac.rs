@@ -32,9 +32,6 @@ const PROOF_BITS: u32 = 20;
 /// Lock-free slots: [key ^ data, data] (a torn pair never matches its key).
 static RESULTS: [AtomicU64; 2 << RES_BITS] = [const { AtomicU64::new(0) }; 2 << RES_BITS];
 static PROOF: [AtomicU64; 2 << PROOF_BITS] = [const { AtomicU64::new(0) }; 2 << PROOF_BITS];
-/// The attacker's mating move (`Mv::code`) of the proven positions where it is to move, same
-/// slot layout as `PROOF`: a hint for the main search's ordering, never a proof.
-static HINTS: [AtomicU64; 2 << PROOF_BITS] = [const { AtomicU64::new(0) }; 2 << PROOF_BITS];
 /// Whether `PROOF` holds anything, and `TRAVELS` (while neither does, every term is skipped).
 static ANY_PROOF: AtomicBool = AtomicBool::new(false);
 static ANY_TRAVEL: AtomicBool = AtomicBool::new(false);
@@ -83,28 +80,6 @@ fn put(t: &[AtomicU64], bits: u32, key: u64, o: Outcome) {
     let d = encode(o);
     t[i].store(key ^ d, Ordering::Relaxed);
     t[i + 1].store(d, Ordering::Relaxed);
-}
-
-#[inline]
-fn put_hint(key: u64, code: u16) {
-    let i = slot(PROOF_BITS, key);
-    let d = code as u64 | 1 << 32;
-    HINTS[i].store(key ^ d, Ordering::Relaxed);
-    HINTS[i + 1].store(d, Ordering::Relaxed);
-}
-
-/// The proven attacker's mating move at the end of timeline `l`: (attacker, from, to) squares.
-#[inline]
-pub fn line_hint(m: &Multiverse, l: i32) -> Option<(bool, i32, i32)> {
-    let key = proof_key(window_key(m.timeline(l).keys()));
-    let Some(Outcome::Win { attacker, .. }) = get(&PROOF, PROOF_BITS, key) else { return None };
-    let i = slot(PROOF_BITS, key);
-    let d = HINTS[i + 1].load(Ordering::Relaxed);
-    if d == 0 || HINTS[i].load(Ordering::Relaxed) ^ d != key {
-        return None;
-    }
-    let code = d as u16;
-    Some((attacker, (code & 63) as i32, (code >> 6 & 63) as i32))
 }
 
 /// Whether any local win is known (else every term is zero and is skipped).
@@ -672,7 +647,6 @@ impl Local {
             }
             let count = self.moves(self.a, ply, n == 1, best);
             let Some(&(_, _, nb)) = self.lists[ply][..count].iter().find(|x| x.1.code() == best) else { return false };
-            put_hint(proof_key(k), best);
             self.push(nb);
             let r = self.extract(n - 1, false, ply + 1, stored);
             self.pop();
@@ -762,9 +736,6 @@ fn export_proof(l: &Local) {
             let n = (e.win - 1) as u32;
             let plies = if e.or { 2 * n - 1 } else { 2 * n };
             put(&PROOF, PROOF_BITS, proof_key(e.key), Outcome::Win { attacker: l.a, plies: plies as u8 });
-            if e.or && e.best != 0 {
-                put_hint(proof_key(e.key), e.best);
-            }
             stored = true;
         }
     }
