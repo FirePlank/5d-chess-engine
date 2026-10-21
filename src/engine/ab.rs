@@ -131,8 +131,8 @@ fn lmr(depth: i32, index: usize) -> i32 {
 const CHECK_BONUS: i32 = 30_000;
 /// A search whose chosen root action took more than this share of an iteration's nodes, with
 /// the best action stable, starts no next depth past this share of the usual time.
-const ROOT_EFFORT_HIGH: f64 = 0.8;
-const ROOT_EFFORT_SCALE: f64 = 0.6;
+const ROOT_EFFORT_HIGH: f64 = 0.9;
+const ROOT_EFFORT_SCALE: f64 = 0.75;
 /// Extra depth of a root action that is an f7-style sacrifice travel (`sac::signature_travels`).
 const SAC_ROOT_EXT: i32 = 2;
 /// Local nodes the f7 sac table's probes may use before every search, whatever the clock (the
