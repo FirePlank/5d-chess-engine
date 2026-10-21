@@ -935,7 +935,7 @@ pub fn root_terms(m: &Multiverse, rt: &RootTravels) -> ([i32; 2], [i32; 2]) {
 // ------------------------------------------------------------------ the f-sac signature
 
 /// Turns up to which a travel's target board makes the f-sac signature.
-pub const SIG_TURN: i32 = 8;
+pub const SIG_TURN: i32 = 6;
 
 /// The side to move's f-sac travels: a queen or bishop onto a square next to an enemy royal on
 /// a past board up to turn `SIG_TURN`, capturing or checking. Ordered f7/f2 first, then queens.
