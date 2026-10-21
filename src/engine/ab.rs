@@ -112,7 +112,7 @@ const ROOT_TRAVEL_MATE_COMPLETIONS: usize = 512;
 /// Hypercuboids the cursor may take on a capturing travel (`optional_travels`) before it gives
 /// it up (when most of its combinations with the other boards' moves are illegal, finding one
 /// can take thousands).
-const TRAVEL_CAPTURE_STEPS: u32 = 16;
+const TRAVEL_CAPTURE_STEPS: u32 = 64;
 /// Aspiration windows: from ASP_MIN_DEPTH the root searches [prev - w, prev + w], w starting at
 /// ASP_WINDOW and multiplied by ASP_FAIL_MULT on each fail; past ASP_MAX_WINDOW or
 /// ASP_MAX_TRIES tries, a full-window search.
