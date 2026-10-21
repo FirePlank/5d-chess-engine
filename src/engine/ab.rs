@@ -52,6 +52,9 @@ const ROOT_CAP: usize = 1000;
 const BATCH: usize = 12;
 const QDEPTH: i32 = 2;
 const QCAP: usize = 4;
+/// Charged to the side to move when quiescence stops in check: the static eval doesn't see
+/// checks from other boards, and the evasions it would need were never searched.
+const QCHECK_LEAF_PENALTY: i32 = 500;
 /// Internal iterative reduction: nodes of this depth or more without a TT action lose a ply.
 const IIR_DEPTH: i32 = 4;
 /// Singular extension: depth from which the TT action is tested, and the margin per depth.
@@ -2275,7 +2278,7 @@ impl AlphaBeta {
         // Royal captures are threatened: standing pat is unsound, so search evasions (the
         // static evaluation only matters at the depth limit).
         if in_check && leaf {
-            return self.static_eval(s);
+            return self.static_eval(s) - QCHECK_LEAF_PENALTY;
         }
         if !in_check {
             let stand = self.static_eval(s);
