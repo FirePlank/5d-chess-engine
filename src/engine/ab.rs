@@ -137,7 +137,7 @@ const ROOT_EFFORT_SCALE: f64 = 0.75;
 const SAC_ROOT_EXT: i32 = 2;
 /// Local nodes the f7 sac table's probes may use before every search, whatever the clock (the
 /// same work for the same position, in analysis and in games).
-const SAC_PREP_NODES: u64 = 0;
+const SAC_PREP_NODES: u64 = 5_000;
 /// Ordering bonus of a semimove that is the proven attacker's mating move on a created line
 /// (a hint of the sac table).
 const SAC_HINT_BONUS: i32 = 25_000;
