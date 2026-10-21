@@ -562,6 +562,9 @@ pub struct AlphaBeta {
     /// and its board embeddings.
     nnue: Option<Arc<super::nnue::Model>>,
     nnue_cache: Box<super::nnue::Cache>,
+    /// The network's share of the evaluation in percent (`EvalBlend`), the handcrafted
+    /// evaluation the rest.
+    nnue_blend: i32,
     /// The score (internal units, side to move) of the last `find_best_move`.
     last_score: i32,
     /// Whether that score, a mate score, is proven (see `proven`).
@@ -905,6 +908,7 @@ impl AlphaBeta {
             known: KnownCache::new(),
             nnue: None,
             nnue_cache: Box::default(),
+            nnue_blend: 100,
             last_score: 0,
             last_proven: false,
             resume: None,
@@ -936,36 +940,45 @@ impl AlphaBeta {
         if e.key == key && e.flags & KNOWN_EVAL != 0 {
             return e.eval;
         }
-        if self.skill_level == 8
-            && let Some(m) = &self.nnue {
-                // The handcrafted counts only for a model that reads them.
-                let sd = m.use_dense.then(|| hce::sides_with(s, &mut *self.terms));
-                let v = m.evaluate(s, sd.as_ref(), &mut self.nnue_cache).clamp(-EVAL_MAX, EVAL_MAX);
-                self.known.store(i, key, |e| {
-                    e.eval = v;
-                    e.flags |= KNOWN_EVAL;
-                });
-                return v;
+        // The network's share of the evaluation (`EvalBlend`), at full strength with one loaded.
+        let blend = if self.skill_level == 8 && self.nnue.is_some() { self.nnue_blend } else { 0 };
+        // The handcrafted counts: for the handcrafted evaluation, or a network that reads them.
+        let sd = (blend < 100 || self.nnue.as_ref().is_some_and(|m| m.use_dense)).then(|| hce::sides_with(s, &mut *self.terms));
+        let nn = match &self.nnue {
+            Some(m) if blend > 0 => Some(m.evaluate(s, sd.as_ref(), &mut self.nnue_cache).clamp(-EVAL_MAX, EVAL_MAX)),
+            _ => None,
+        };
+        let v = match (nn, sd) {
+            (Some(n), _) if blend == 100 => n,
+            (n, Some(sd)) => {
+                let h = self.handcrafted(s, &sd);
+                n.map_or(h, |n| (h * (100 - blend) + n * blend) / 100)
             }
-        let sd = hce::sides_with(s, &mut *self.terms);
-        let mut f = hce::features_from(&sd, s, hce::needs_checks(&self.hce));
+            (n, None) => n.unwrap_or(0),
+        };
+        self.known.store(i, key, |e| {
+            e.eval = v;
+            e.flags |= KNOWN_EVAL;
+        });
+        v
+    }
+
+    /// The handcrafted evaluation (with the residual net and the chess terms) of `s`, side to
+    /// move's view, from its counts `sd`.
+    fn handcrafted(&self, s: &State, sd: &hce::Sides) -> i32 {
+        let mut f = hce::features_from(sd, s, hce::needs_checks(&self.hce));
         let spatial = if self.skill_level < 8 { Some(super::skill::spatial_score(&f, &self.hce, s.get_present().1)) } else { None };
         let chess = if hce::CHESS_IN_NET { [0; hce::NF] } else { hce::split_chess(&mut f) };
         let base = hce::score(&f, &self.hce, s.get_present().1);
         let v = match super::evalnet::embedded() {
-            Some(net) => base + net.residual(&super::evalnet::inputs_from(&sd, s, base)),
+            Some(net) => base + net.residual(&super::evalnet::inputs_from(sd, s, base)),
             None => base,
         };
         let v = v + hce::score_chess(&chess, &self.hce, s.get_present().1);
         let v = spatial.map_or(v, |local| super::skill::blend(local, v, self.skill_level));
         // Terms add up over every board, so with many timelines the sum can reach the mate
         // range (where it would be taken for a mate score).
-        let v = v.clamp(-EVAL_MAX, EVAL_MAX);
-        self.known.store(i, key, |e| {
-            e.eval = v;
-            e.flags |= KNOWN_EVAL;
-        });
-        v
+        v.clamp(-EVAL_MAX, EVAL_MAX)
     }
 
     /// Whether the side to move is in check (royal captures threatened if it passed).
@@ -3099,8 +3112,9 @@ struct HelperJob {
     resumed_depth: i32,
     /// The main thread's `MultiPV` (helpers search the same lines, as in Apeiron).
     multipv: usize,
-    /// The main thread's evaluation network (`EvalFile`).
+    /// The main thread's evaluation network (`EvalFile`) and its share (`EvalBlend`).
     nnue: Option<Arc<super::nnue::Model>>,
+    nnue_blend: i32,
     start: Instant,
     tt: Arc<TtTable>,
     stop: Arc<AtomicBool>,
@@ -3152,7 +3166,7 @@ impl Helper {
                     match msg {
                         HelperMsg::NewGame => e.history.iter_mut().for_each(|h| *h = 0),
                         HelperMsg::Search(job) => {
-                            let HelperJob { root, roots, roots_complete, max_depth, resumed_depth, multipv, nnue, start, tt, stop, counters, done } = *job;
+                            let HelperJob { root, roots, roots_complete, max_depth, resumed_depth, multipv, nnue, nnue_blend, start, tt, stop, counters, done } = *job;
                             if stop.load(Ordering::Relaxed) {
                                 continue; // That search is over already.
                             }
@@ -3162,8 +3176,9 @@ impl Helper {
                                 (Some(a), Some(b)) => Arc::ptr_eq(a, b),
                                 (None, None) => true,
                                 _ => false,
-                            } {
+                            } || e.nnue_blend != nnue_blend {
                                 e.nnue = nnue;
+                                e.nnue_blend = nnue_blend;
                                 e.known.clear();
                                 e.nnue_cache.clear();
                             }
@@ -3252,6 +3267,16 @@ impl AlphaBeta {
                 }
             };
             self.set_nnue(model);
+            return true;
+        }
+        if key == "EvalBlend" {
+            let Some(p) = value.as_f64().filter(|p| (0.0..=100.0).contains(p)) else { return false };
+            if p as i32 != self.nnue_blend {
+                self.nnue_blend = p as i32;
+                self.known.clear();
+                self.new_game();
+                self.resume = None;
+            }
             return true;
         }
         if key == "OwnBook" {
@@ -3591,6 +3616,7 @@ impl AlphaBeta {
                 resumed_depth,
                 multipv: self.multipv,
                 nnue: self.nnue.clone(),
+                nnue_blend: self.nnue_blend,
                 start,
                 tt: self.tt.clone(),
                 stop: helper_stop.clone(),

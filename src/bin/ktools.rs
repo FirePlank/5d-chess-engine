@@ -1474,6 +1474,10 @@ fn abbench(path: &str, depth: u32, out: &mut impl Write) {
         if let Ok(f) = std::env::var("NNUE_FILE") {
             assert!(e.set_option("EvalFile", &kairos::engine::OptionValue::Str(f)), "NNUE_FILE");
         }
+        // NNUE_BLEND: the network's share in percent (`EvalBlend`).
+        if let Some(b) = std::env::var("NNUE_BLEND").ok().and_then(|b| b.parse::<i64>().ok()) {
+            assert!(e.set_option("EvalBlend", &kairos::engine::OptionValue::Int(b)), "NNUE_BLEND");
+        }
         let node_cap = std::env::var("AB_NODES").ok().and_then(|v| v.parse().ok());
         let limits = Limits { depth: Some(depth), nodes: node_cap, ..Default::default() };
         let mut last = String::new();
