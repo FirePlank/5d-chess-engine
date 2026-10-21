@@ -85,8 +85,8 @@ pub mod fi {
     /// Time-travel exposure of the squares next to enemy royals (`ex::F7_WEAK` ..= `ex::KN_CHECKS`),
     /// white's minus black's.
     pub const F7: usize = 70;
-    /// Terms from the f7 sac table (`sac`), white minus black: created timelines that are a
-    /// known local mate, winning travels available now, and open routes to winning targets.
+    /// Always 0: the f7 sac table these terms came from is gone (the slots keep the weights'
+    /// layout).
     pub const SAC_LINE: usize = 75;
     pub const SAC_CLOSE: usize = 76;
     pub const SAC_NOW: usize = 77;
@@ -241,8 +241,7 @@ pub fn tuned_weights() -> Weights {
         ("f7_qreach", 248.4),
         ("f7_broute", -11.6),
         ("kn_checks", 296.2),
-        // Set by hand, not tuned (see `split_sac`). Kept moderate because the local proofs
-        // ignore time-travel defences and other timelines, so they can be false.
+        // Unused: the features are always 0 (`fi::SAC_LINE`).
         ("sac_line", 600.0),
         ("sac_close", 100.0),
         ("sac_now", 0.0),
@@ -487,7 +486,7 @@ pub mod ex {
     pub const F7_BROUTE: usize = 10;
     /// Knight checks available against enemy royals (Nh3-g5+ in the f7 attack).
     pub const KN_CHECKS: usize = 11;
-    /// The f7 sac table (`fi::SAC_LINE` ..).
+    /// Unused (`fi::SAC_LINE`): always 0.
     pub const SAC_LINE: usize = 12;
     pub const SAC_CLOSE: usize = 13;
     pub const SAC_NOW: usize = 14;
@@ -737,10 +736,6 @@ pub trait TermSource {
         None
     }
     fn past_put(&mut self, _key: u64, _v: [i32; 2]) {}
-    /// The winning travels of the search's root (`sac::root_travels`), if known.
-    fn sac_root(&self) -> Option<&super::sac::RootTravels> {
-        None
-    }
 }
 
 /// Terms computed on every request.
@@ -757,8 +752,6 @@ pub struct TermCache {
     size: (i32, i32),
     slots: Vec<(Board, bool, BoardTerms)>,
     past: Vec<(u64, [i32; 2])>,
-    /// The winning travels of the current search's root.
-    pub sac_root: super::sac::RootTravels,
 }
 
 impl Default for TermCache {
@@ -767,7 +760,6 @@ impl Default for TermCache {
             size: (0, 0),
             slots: vec![(Board::default(), false, BoardTerms::ZERO); 1 << 12],
             past: vec![(0, [0; 2]); 1 << 14],
-            sac_root: super::sac::RootTravels::default(),
         }
     }
 }
@@ -781,10 +773,6 @@ impl TermSource for TermCache {
     #[inline]
     fn past_put(&mut self, key: u64, v: [i32; 2]) {
         self.past[(key >> 50) as usize] = (key, v);
-    }
-    #[inline]
-    fn sac_root(&self) -> Option<&super::sac::RootTravels> {
-        Some(&self.sac_root)
     }
     #[inline]
     fn terms(&mut self, b: &Board, w: i32, h: i32) -> &BoardTerms {
@@ -912,41 +900,12 @@ pub fn sides_with(s: &State, src: &mut impl TermSource) -> Sides {
         }
     }
     royal_5d(s, &mut sd, src, &atts);
-    if super::sac::active() {
-        sac_terms(s, &mut sd, src);
-    }
     let (l0_min, l0_max) = s.get_initial_lines_range();
     let white_created = l_max - l0_max;
     let black_created = l0_min - l_min;
     sd.side[0][si::SLOTS] = (1 + black_created - white_created).clamp(0, 4);
     sd.side[1][si::SLOTS] = (1 + white_created - black_created).clamp(0, 4);
     sd
-}
-
-/// The f7 sac table's terms (`ex::SAC_LINE` ..): created timelines whose latest board is a
-/// local mate, and the root's winning travels still on hand.
-fn sac_terms(s: &State, sd: &mut Sides, src: &mut impl TermSource) {
-    use super::sac;
-    let m = s.multiverse();
-    let (amin, amax) = s.get_active_range();
-    let (l0, l1) = s.get_initial_lines_range();
-    if (amin < l0 || amax > l1) && sac::any_proof() {
-        for l in (amin..l0).chain(l1 + 1..=amax) {
-            if let Some((attacker, plies)) = sac::line_win(m, l) {
-                let e = &mut sd.extra[attacker as usize];
-                e[ex::SAC_LINE] += 1;
-                e[ex::SAC_CLOSE] += 12 - (plies as i32).min(11);
-            }
-        }
-    }
-    if let Some(rt) = src.sac_root()
-        && rt.n > 0 {
-            let (now, open) = sac::root_terms(m, rt);
-            for c in 0..2 {
-                sd.extra[c][ex::SAC_NOW] += now[c];
-                sd.extra[c][ex::SAC_OPEN] += open[c];
-            }
-        }
 }
 
 // ------------------------------------------------------------------ 5D royal danger
@@ -1536,12 +1495,6 @@ pub fn features_from(sd: &Sides, s: &State, checks: bool) -> Features {
     for k in 0..=ex::KN_CHECKS - ex::F7_WEAK {
         f[fi::F7 + k] = e(ex::F7_WEAK + k);
     }
-    let capped = |i: usize, cap: i32| sd.extra[0][i].min(cap) - sd.extra[1][i].min(cap);
-    f[fi::SAC_LINE] = capped(ex::SAC_LINE, 2);
-    f[fi::SAC_CLOSE] = capped(ex::SAC_CLOSE, 22);
-    f[fi::SAC_NOW] = capped(ex::SAC_NOW, 1);
-    f[fi::SAC_NOW_STM] = sign * sd.extra[stm as usize][ex::SAC_NOW].min(1);
-    f[fi::SAC_OPEN] = capped(ex::SAC_OPEN, 8);
     for k in 0..=ex::K_FLIGHT - ex::ZONE_HOT {
         f[fi::KS + k] = e(ex::ZONE_HOT + k);
     }
@@ -1573,16 +1526,6 @@ const DANGER_CAP: i32 = 6;
 #[inline]
 fn royal_danger(f: &[i32; si::COUNT]) -> i32 {
     (f[si::ROYAL_ATT] + f[si::TRAVEL_PAST] + f[si::TRAVEL_NOW] + f[si::WEAK_SQ] + f[si::LOW_FLIGHT] + f[si::KING_OFF]).min(DANGER_CAP)
-}
-
-/// Move the f7 sac table's features (`fi::SAC_LINE` ..) out of `f` into the returned vector:
-/// the search adds their score after the eval net's correction, which never saw them.
-pub fn split_sac(f: &mut Features) -> Features {
-    let mut s = [0i32; NF];
-    for i in fi::SAC_LINE..=fi::SAC_OPEN {
-        s[i] = std::mem::take(&mut f[i]);
-    }
-    s
 }
 
 /// Move the standard-chess terms (`fi::CH` ..) out of `f` into the returned vector (with the

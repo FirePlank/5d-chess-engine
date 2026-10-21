@@ -135,9 +135,6 @@ const ROOT_EFFORT_HIGH: f64 = 0.9;
 const ROOT_EFFORT_SCALE: f64 = 0.75;
 /// Extra depth of a checking sacrifice by time travel (`sac::is_sac_travel`).
 const SAC_ROOT_EXT: i32 = 2;
-/// Local nodes the f7 sac probes may solve before a search: none, since solving cost more than it
-/// found at every budget tried (50000 down to 5000); the precomputed table is only read.
-const SAC_PREP_NODES: u64 = 0;
 /// Reverse futility pruning: at non-PV nodes up to this depth, return the static eval when
 /// it beats beta by RFP_MARGIN per ply.
 const RFP_DEPTH: i32 = 2;
@@ -930,14 +927,12 @@ impl AlphaBeta {
         let sd = hce::sides_with(s, &mut *self.terms);
         let mut f = hce::features_from(&sd, s, hce::needs_checks(&self.hce));
         let spatial = if self.skill_level < 8 { Some(super::skill::spatial_score(&f, &self.hce, s.get_present().1)) } else { None };
-        let sac = hce::split_sac(&mut f);
         let chess = if hce::CHESS_IN_NET { [0; hce::NF] } else { hce::split_chess(&mut f) };
         let base = hce::score(&f, &self.hce, s.get_present().1);
         let v = match super::evalnet::embedded() {
             Some(net) => base + net.residual(&super::evalnet::inputs_from(&sd, s, base)),
             None => base,
         };
-        let v = v + hce::score(&sac, &self.hce, s.get_present().1);
         let v = v + hce::score_chess(&chess, &self.hce, s.get_present().1);
         let v = spatial.map_or(v, |local| super::skill::blend(local, v, self.skill_level));
         // Terms add up over every board, so with many timelines the sum can reach the mate
@@ -3330,9 +3325,6 @@ impl AlphaBeta {
         let start = Instant::now();
         let plan = TimePlan::new(limits, Self::mandatory_boards(root), root.active_timelines());
         let deadline = plan.as_ref().map(|p| start + Duration::from_millis(p.maximum.saturating_sub(5).max(1)));
-        // The f7 sac table: local outcomes of the travels (and created timelines) this
-        // position may need, kept for the rest of the game.
-        super::sac::prepare(root, SAC_PREP_NODES, None, Some(stop), super::sac::PROBE_NODES, false);
         self.begin_search(stop, limits.nodes, deadline);
         // Enumerating actions stops at the deadline or when told to stop (see `interrupted`).
         let _interrupt = interrupt_on(stop, deadline);
@@ -3589,9 +3581,6 @@ impl AlphaBeta {
         resume: Option<&SearchResume>,
     ) -> ThreadResult {
         let main = self.thread_id == 0;
-        // The f7 sac table's winning travels at this root, for the evaluation.
-        self.terms.sac_root = super::sac::root_travels(root);
-        // Only the travels onto f7 / f2.
         // The checking sacrifices by time travel among the root actions (`sac::is_sac_travel`).
         let mut sig: Vec<FullMove> = Vec::new();
         for m in roots.iter().flat_map(|r| r.1.iter()) {
