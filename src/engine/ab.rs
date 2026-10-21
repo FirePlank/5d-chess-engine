@@ -133,7 +133,7 @@ const CHECK_BONUS: i32 = 30_000;
 /// the best action stable, starts no next depth past this share of the usual time.
 const ROOT_EFFORT_HIGH: f64 = 0.9;
 const ROOT_EFFORT_SCALE: f64 = 0.75;
-/// Extra depth of a root action that is an f7-style sacrifice travel (`sac::signature_travels`).
+/// Extra depth of a checking sacrifice by time travel (`sac::is_sac_travel`).
 const SAC_ROOT_EXT: i32 = 2;
 /// Local nodes the f7 sac probes may solve before a search: none, since solving cost more than it
 /// found at every budget tried (50000 down to 5000); the precomputed table is only read.
@@ -2411,6 +2411,13 @@ impl AlphaBeta {
         best
     }
 
+    /// The depth a root action is searched to (both root paths, single-line and MultiPV, use it):
+    /// the iteration's, less the skill level's travel reduction, plus the sacrifices' extension.
+    fn root_child_depth(&self, act: &MoveSeq, depth: i32, sig: &[FullMove]) -> i32 {
+        let ext = if act.iter().any(|m| sig.contains(m)) { SAC_ROOT_EXT } else { 0 };
+        depth - super::skill::travel_reduction(self.skill_level, act) + ext
+    }
+
     /// Search one remembered action (TT move or killer) with PVS; returns its score.
     #[allow(clippy::too_many_arguments)]
     fn search_child(&mut self, s: &mut State, mark: Mark, first: bool, depth: i32, ply: usize, alpha: i32, beta: i32, pv: bool) -> i32 {
@@ -2716,9 +2723,9 @@ impl AlphaBeta {
                         skipped = true;
                         break;
                     }
-                    // Our second move of the line: an f7 / f2 sacrifice travel is searched deeper
+                    // Our second move of the line: a checking sacrifice by time travel is searched deeper
                     // as at the root.
-                    let ext = if ply == 2 && depth >= 6 && act.iter().any(|m| m.to.t() < m.from.t() && (m.to.xy() & 7) == 5 && matches!(m.to.xy() >> 3, 1 | 6) && matches!(mover_victim(s, m), (BISHOP_W | QUEEN_W, v) if v != NO_PIECE)) { SAC_ROOT_EXT } else { 0 };
+                    let ext = if ply == 2 && depth >= 6 && act.iter().any(|m| super::sac::is_sac_travel(s, m)) { SAC_ROOT_EXT } else { 0 };
                     let mark = Self::make(s, &act);
                     let quiet = sc < 10_000;
                     let mut r = 0;
@@ -3585,7 +3592,13 @@ impl AlphaBeta {
         // The f7 sac table's winning travels at this root, for the evaluation.
         self.terms.sac_root = super::sac::root_travels(root);
         // Only the travels onto f7 / f2.
-        let sig: Vec<_> = super::sac::signature_travels(root).into_iter().filter(|m| (m.to.xy() & 7) == 5 && matches!(m.to.xy() >> 3, 1 | 6)).collect();
+        // The checking sacrifices by time travel among the root actions (`sac::is_sac_travel`).
+        let mut sig: Vec<FullMove> = Vec::new();
+        for m in roots.iter().flat_map(|r| r.1.iter()) {
+            if !sig.contains(m) && super::sac::is_sac_travel(root, m) {
+                sig.push(*m);
+            }
+        }
         let mut work = root.clone();
         work.enable_undo();
         let mut best: MoveSeq = resume.map_or_else(|| roots[0].1.clone(), |r| r.best.clone());
@@ -3632,7 +3645,7 @@ impl AlphaBeta {
             // Share of the iteration's nodes the chosen action took (see the clock below).
             let mut effort = 0.0f64;
             if multi {
-                let pass = self.multipv_pass(&mut work, &roots, depth, lo, hi, roots_complete);
+                let pass = self.multipv_pass(&mut work, &roots, &sig, depth, lo, hi, roots_complete);
                 // Its scores are exact: no fail high is a bound to keep.
                 hi = INF;
                 iter_best = pass.best;
@@ -3653,23 +3666,22 @@ impl AlphaBeta {
                     for (k, (_, act)) in roots.iter().enumerate() {
                         let act_nodes0 = self.nodes;
                         let mark = Self::make(&mut work, act);
-                        // A sacrifice of the f7 kind is searched deeper (its point is far away).
-                        let ext = if act.iter().any(|m| sig.contains(m)) { SAC_ROOT_EXT } else { 0 };
+                        let child_depth = self.root_child_depth(act, depth, &sig);
                         let v = if k == 0 {
-                            -self.negamax(&mut work, depth - 1 + ext, 1, -beta, -alpha, true)
+                            -self.negamax(&mut work, child_depth - 1, 1, -beta, -alpha, true)
                         } else {
                             // Late root actions are reduced, never pruned.
                             let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(self.in_check(&work)) } else { None };
                             let r = if child_check == Some(false) { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
                             self.known_check = child_check;
-                            let mut v = -self.negamax(&mut work, depth - 1 + ext - r, 1, -alpha - 1, -alpha, false);
+                            let mut v = -self.negamax(&mut work, child_depth - 1 - r, 1, -alpha - 1, -alpha, false);
                             if !self.aborted && v > alpha && r > 0 {
                                 self.known_check = child_check;
-                                v = -self.negamax(&mut work, depth - 1 + ext, 1, -alpha - 1, -alpha, false);
+                                v = -self.negamax(&mut work, child_depth - 1, 1, -alpha - 1, -alpha, false);
                             }
                             if !self.aborted && v > alpha {
                                 self.known_check = child_check;
-                                v = -self.negamax(&mut work, depth - 1 + ext, 1, -beta, -alpha, true);
+                                v = -self.negamax(&mut work, child_depth - 1, 1, -beta, -alpha, true);
                             }
                             v
                         };
@@ -3863,7 +3875,8 @@ impl AlphaBeta {
     /// One depth of MultiPV root search: the first action uses the window `lo..hi`, the next
     /// get full windows until `MultiPV` are exact, then each is scouted at the `MultiPV`-th best
     /// score and re-searched only if it beats it.
-    fn multipv_pass(&mut self, work: &mut State, roots: &[(i32, MoveSeq)], depth: i32, lo: i32, hi: i32, roots_complete: bool) -> MultiPass {
+    #[allow(clippy::too_many_arguments)]
+    fn multipv_pass(&mut self, work: &mut State, roots: &[(i32, MoveSeq)], sig: &[FullMove], depth: i32, lo: i32, hi: i32, roots_complete: bool) -> MultiPass {
         let want = self.multipv;
         let mut pass = MultiPass { best: None, best_pv: Vec::new(), all_proven: roots_complete, scores: Vec::with_capacity(roots.len()), lines: Vec::new() };
         // The best exact scores so far, best first, at most `want` of them.
@@ -3871,7 +3884,7 @@ impl AlphaBeta {
         for (k, (_, act)) in roots.iter().enumerate() {
             let bar = if top.len() >= want { top[want - 1] } else { -INF };
             let mark = Self::make(work, act);
-            let child_depth = depth - super::skill::travel_reduction(self.skill_level, act);
+            let child_depth = self.root_child_depth(act, depth, sig);
             let mut exact = true;
             let v = if k == 0 {
                 let mut v = -self.negamax(work, child_depth - 1, 1, -hi, -lo, true);
