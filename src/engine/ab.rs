@@ -57,6 +57,8 @@ const IIR_DEPTH: i32 = 4;
 /// Singular extension: depth from which the TT action is tested, and the margin per depth.
 const SING_DEPTH: i32 = 4;
 const SING_MARGIN: i32 = 100;
+/// How far below the singular beta a verification must fail for a double extension.
+const SING_DOUBLE_MARGIN: i32 = 300;
 const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
 /// Board-rank pruning (`board_ranks`): from this many actions searched, a quiet action that
@@ -2728,7 +2730,9 @@ impl AlphaBeta {
                             return 0;
                         }
                         if v < sb {
-                            tt_ext = 1;
+                            // Far below the singular beta outside PV nodes: two plies (Stockfish's
+                            // double extension).
+                            tt_ext = if !pv && v < sb - SING_DOUBLE_MARGIN { 2 } else { 1 };
                         }
                     }
             }
