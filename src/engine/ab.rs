@@ -3110,7 +3110,15 @@ impl AlphaBeta {
             self.proven = false;
             return self.static_eval(s);
         }
-        let bound = if best > alpha0 { Bound::Exact } else { Bound::Upper };
+        // With actions left unsearched (the cap, pruning) a score that raised alpha is only a
+        // lower bound: a skipped action may score higher, as for a fail-low (see below).
+        let bound = if best <= alpha0 {
+            Bound::Upper
+        } else if skipped {
+            Bound::Lower
+        } else {
+            Bound::Exact
+        };
         let proven = mate_proven(best, best_proven, all_proven);
         // A fail-low with actions the action cap left unsearched bounds nothing: one of those
         // might score higher (e.g. the only mating move), and a stored "at most" would poison
