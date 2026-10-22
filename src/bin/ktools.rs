@@ -169,7 +169,12 @@ fn main() {
                 }
                 let mut last = String::new();
                 let t = Instant::now();
-                let best = e.find_best_move(&s, &Limits { movetime: Some(ms), ..Default::default() }, &stop, &mut |m| last = m);
+                // GAMEPROBE_NODES: a node limit instead of `ms` (deterministic with one thread).
+                let lim = match std::env::var("GAMEPROBE_NODES").ok().and_then(|v| v.parse().ok()) {
+                    Some(n) => Limits { nodes: Some(n), ..Default::default() },
+                    None => Limits { movetime: Some(ms), ..Default::default() },
+                };
+                let best = e.find_best_move(&s, &lim, &stop, &mut |m| last = m);
                 let (w, _) = HcInfo::build_hc(&s);
                 let (mut phys, mut arr, mut dep) = (0, 0, 0);
                 let u = w.get_universe();
