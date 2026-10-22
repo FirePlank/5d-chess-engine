@@ -21,7 +21,8 @@ import numpy as np
 import torch
 
 NB = 12 * 2 * 64 + 4 * 2 * 64   # board features (nnue::NB)
-ROLES = 4                         # nnue::ROLES
+# nnue::ROLES (NNUE_ROLES for exports made with the past boards' roles).
+ROLES = int(__import__('os').environ.get('NNUE_ROLES', 6))
 # Dense inputs (nnue::ND); NNUE_ND for exports made with more of the handcrafted terms.
 ND = int(__import__('os').environ.get('NNUE_ND', 2 * 54 + 2 * 30 + 4))
 NR = 2 * 12 * 9 * 5 * 2 * 2 + 2 * 12 * 12 * 5 * 2  # relation features (nnue::NR)

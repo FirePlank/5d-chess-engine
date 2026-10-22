@@ -30,12 +30,18 @@ const UNMOVED: [Piece; 4] = [KING_W, ROOK_W, PAWN_W, BRAWN_W];
 /// Board features: (kind, own/enemy, square), then (unmoved kind, own/enemy, square).
 pub const NB: usize = KINDS.len() * 2 * 64 + UNMOVED.len() * 2 * 64;
 /// Board roles, the order of the pooled sums: the side to move's boards on the present (it
-/// must play them), its other playable boards, the opponent's latest boards, inactive lines.
-pub const ROLES: usize = 4;
+/// must play them), its other playable boards, the opponent's latest boards, inactive lines;
+/// then the active lines' past boards, one or two half-turns back and three or four (where
+/// time travel lands).
+pub const ROLES: usize = 6;
 pub const ROLE_MANDATORY: u8 = 0;
 pub const ROLE_OPTIONAL: u8 = 1;
 pub const ROLE_OPPONENT: u8 = 2;
 pub const ROLE_INACTIVE: u8 = 3;
+pub const ROLE_PAST_NEAR: u8 = 4;
+pub const ROLE_PAST_FAR: u8 = 5;
+/// Half-turns back the past boards go.
+const PAST_BACK: i32 = 4;
 /// Dense bridge inputs: both sides' `hce::Sides` counts (side to move first), then active and
 /// inactive timelines, heavy pieces and mandatory boards.
 pub const ND: usize = 2 * hce::si::COUNT + 2 * hce::ex::COUNT + 4;
@@ -103,7 +109,7 @@ pub fn other_view(f: u16, h: i32) -> u16 {
     ((((f >> 6) ^ 1) << 6) as i32 + (s & 7) + 8 * (h - 1 - (s >> 3))) as u16
 }
 
-/// One latest board of a position, as the network sees it.
+/// One board of a position the network sees (a latest board, or a past one of an active line).
 pub struct BoardInput<'a> {
     pub board: &'a Board,
     pub role: u8,
@@ -113,13 +119,14 @@ pub struct BoardInput<'a> {
     pub c: bool,
 }
 
-/// The latest boards of `s` with their roles, in timeline order.
+/// The latest boards of `s` with their roles, in timeline order, then the active lines' past
+/// boards up to `PAST_BACK` half-turns back.
 pub fn boards(s: &State) -> impl Iterator<Item = BoardInput<'_>> {
     let present = s.get_present();
     let stm = present.1;
     let (amin, amax) = s.get_active_range();
     let (lo, hi) = s.get_lines_range();
-    (lo..=hi).map(move |l| {
+    let latest = (lo..=hi).map(move |l| {
         let (t, c) = s.get_timeline_end(l);
         let role = if l < amin || l > amax {
             ROLE_INACTIVE
@@ -131,7 +138,17 @@ pub fn boards(s: &State) -> impl Iterator<Item = BoardInput<'_>> {
             ROLE_OPTIONAL
         };
         BoardInput { board: s.board(l, t, c), role, l, t, c }
-    })
+    });
+    let past = (amin..=amax).flat_map(move |l| {
+        let mut tc = s.get_timeline_end(l);
+        (1..=PAST_BACK).map_while(move |back| {
+            tc = if tc.1 { (tc.0, false) } else { (tc.0 - 1, true) };
+            let (t, c) = tc;
+            let role = if back <= 2 { ROLE_PAST_NEAR } else { ROLE_PAST_FAR };
+            s.get_board_ptr(l, t, c).map(|board| BoardInput { board, role, l, t, c })
+        })
+    });
+    latest.chain(past)
 }
 
 /// The dense bridge inputs of `s` (side to move's view).
