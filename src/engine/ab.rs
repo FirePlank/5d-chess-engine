@@ -59,13 +59,15 @@ const SING_DEPTH: i32 = 4;
 const SING_MARGIN: i32 = 100;
 const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
-/// Board-rank pruning (`board_ranks`): from this many actions searched, a quiet action that
-/// plays two or more boards and gives no check is skipped at non-PV nodes when the ranks of
-/// its moves in their boards' orders sum to this much per board or more. (Measured at
-/// many-timeline nodes: such actions are four in ten of those searched there and give 0.3% of
-/// their cutoffs.)
+/// Board-rank reduction (`weak_on_boards`): from this many actions searched, a quiet action
+/// that plays two or more boards and gives no check is searched `BOARD_RANK_R` plies
+/// shallower still at non-PV nodes when the ranks of its moves in their boards' orders sum to
+/// this much per board or more. (Measured at many-timeline nodes: such actions are four in ten
+/// of those searched there and give 0.3% of their cutoffs.) Never skipped: a deeper search
+/// reaches every one of them.
 const BOARD_RANK_MIN_INDEX: usize = 8;
 const RANK_PER_BOARD: u32 = 4;
+const BOARD_RANK_R: i32 = 2;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
 const ROOT_LMR_MIN_INDEX: usize = 6;
@@ -2831,10 +2833,7 @@ impl AlphaBeta {
                         }
                     }
                     if weak && quiet && searched >= BOARD_RANK_MIN_INDEX && !*child_check.get_or_insert_with(|| self.in_check(s)) {
-                        s.unmake(mark);
-                        self.sac_line = sac_line;
-                        skipped = true;
-                        continue;
+                        r = (r + BOARD_RANK_R).min(depth - 2).max(0);
                     }
                     let mut v;
                     let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act) + ext;
