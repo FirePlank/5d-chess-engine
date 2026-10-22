@@ -200,3 +200,42 @@ The latter two-pair run validates the rebuilt executable; the six-pair retest
 above remains the adoption evidence, not a proven confidence-bound speed claim.
 Subsequent experiments compare against this HC-enabled baseline, with the same
 frozen network and blend 65.
+
+Remaining audit items are tested against the accepted HC implementation. Each
+candidate uses six sequential AB/BA pairs, the same frozen third network and blend
+65, CPU 12 and above-normal priority, with full oracle/trace comparisons. At the
+user's direction, the process-cycle point estimate breaks ties when the NPS
+interval includes zero; acceptance on that basis retains measurement uncertainty.
+Concurrent work is changing NNUE architecture, so these builds use source frozen
+at `327251d` plus accepted performance patches. This isolates each experiment.
+Process counts remain Windows accounting, not PMU hardware cycles.
+
+| Remaining candidate | Combined NPS gain | Process cycles/node change (95%; negative better) | Decision |
+|---|---:|---|---|
+| Root/skipped storage reuse | -2.10% | +2.07% (-1.49% to +5.75%) | Reverted |
+| Axis universe/subset proof | -1.05% | +0.99% (-0.09% to +2.08%) | Reverted |
+| Double NNUE board cache | -0.03% | +0.04% (-3.20% to +3.38%) | Reverted |
+| Cache standard-chess terms | -0.01% | +0.02% (-1.20% to +1.26%) | Reverted |
+| Exclusively owned single-thread TT | -0.34% | +0.42% (-2.44% to +3.37%) | Reverted |
+<!-- remaining-experiments-details -->
+
+Root/skipped storage reuse: All 109 tests passed (two existing ignores), including stable tie/missing-score permutations and heap ownership. MultiPV, HCE/model switches, warm searches, skill 4 and explicit resume matched the HC baseline. Timeline NPS and cycle throughput intervals were negative. Raw results: `target/perf-series/13-root-storage-pairs.json`.
+
+Axis universe/subset proof: All 109 tests passed (two existing ignores), including original-bound comparisons over 768 contexts with shared/natural orders, ties, empties, outside coordinates and word boundaries. Ordered action dump, perft and extended search/resume oracles matched. Both combined estimates were negative. Raw results: `target/perf-series/14-axis-bounds-pairs.json`.
+
+Double NNUE board cache: All 109 tests passed (two existing ignores), including direct/cached values over corpus positions and every variant, forced key/dimension mismatches and cache clears. Model switches, MultiPV, skill and resumed-search oracles matched. NPS was -0.03%; accounted-cycle throughput was -0.04%, providing no reason to retain the extra cache memory. Raw results: `target/perf-series/15-nnue-cache-pairs.json`.
+
+Cache standard-chess terms: All 110 tests passed (two existing ignores), including forced slot collisions, dimensions, standalone requests, full Sides equality and lazy allocation on multi-timeline positions. Extended model/MultiPV/skill/resume oracles matched. NPS (-0.005%) and accounted-cycle throughput (-0.018%) were effectively flat, with no cycle advantage to retain the bookkeeping. Raw results: `target/perf-series/16-chess-cache-pairs.json`.
+
+Exclusively owned single-thread TT: All 111 tests passed (two existing ignores) on frozen source and current workspace, including exact shared/owned replacement, spills under four-thread contention, reentrant probes, Arc ownership, thread changes and hash replacement. MultiPV/model/HCE/skill/resume search oracles matched. Combined NPS and accounted-cycle throughput point estimates were both negative. Raw results: `target/perf-series/17-owned-tt-pairs.json`.
+
+All five remaining experiments matched the suite oracle and every normalized
+report in all 140 runs, including warmups. Each also matched the extended probe
+with MultiPV 3, HCE/network switches, warm searches, an explicit resume one ply
+deeper, and deterministic skill-4 reports. The probe now performs this explicit
+third resume pass; the previous two passes exercised cold/warm state only.
+The final source after reverting these five candidates passes 108 tests with two
+existing ignores. All twelve audit areas have now had measured attempts. Only
+reduced HC copying was retained in this campaign, at the user's direction; the
+other variants did not show a combined process-cycle advantage in their screens.
+The saved patches and complete measurements remain under `target/perf-series/`.

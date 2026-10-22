@@ -76,8 +76,9 @@ rustc --edition=2024 -C opt-level=3 -C target-cpu=native -C panic=abort -C lto=f
 Repeat for the candidate library. Run both probes with identical arguments:
 `CORPUS DEPTH NODE_CAP MULTIPV SKILL MODEL [MODEL...]`, then compare stdout byte
 for byte. A zero cap means uncapped; `<empty>` selects HCE. Each model is loaded
-in sequence into the same engine, with two searches to exercise warm/resumed
-state and model invalidation. Use explicit model files to avoid differing
+in sequence into the same engine, with a cold search, a warm search, and an
+explicit resumed search one ply deeper to exercise retained root order and model
+invalidation. Use explicit model files to avoid differing
 embedded versions; set the same `NNUE_BLEND` environment value for both probes.
 These are equivalence checks, not NPS measurements. Finish
 compilation and validation before starting timing pairs.

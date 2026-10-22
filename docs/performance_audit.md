@@ -1,14 +1,18 @@
 # Oracle-preserving performance audit
 
-Updated 2026-10-22. **The benchmark repair is complete; implementation experiments
-are underway, one candidate at a time.**
+Updated 2026-10-22. **The benchmark repair and the remaining audit experiments
+are complete. All twelve audit areas now have measured implementation attempts.**
 
-Eleven experiments preserved the oracle. Reduced HC copying was restored and
-accepted at the user's direction after its process-cycle retest; ten other
+Sixteen experiments preserved the oracle. Reduced HC copying was restored and
+accepted at the user's direction after its process-cycle retest; fifteen other
 patches remain reverted, including local capture caching at longer budgets.
 The fresh-HCE zero-gain shortcut also failed its NPS and process-cycle comparisons.
 The runner now optionally records Windows process cycles per node alongside NPS;
 actual ETW hardware-counter recording was denied by this session's privileges.
+The remaining root/skipped storage, axis-bound proof, NNUE cache-size, chess-term
+cache and exclusively owned TT attempts all matched the oracle. Their combined
+process-cycle point estimates provided no improvement, so those patches remain
+reverted. This completes the queued areas, not every possible variant of each idea.
 Measured outcomes and uncertainty are recorded in
 [performance_results.md](performance_results.md). The queue below retains each
 candidate's rationale and required invariants; it is not a list of proven wins.
