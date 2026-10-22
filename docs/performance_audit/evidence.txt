@@ -1,0 +1,213 @@
+FILE: base-main.txt
+aboracle e82287ff973edc82 | depth 20 | nodes 123808 in 3.471s (35667 nps)
+
+FILE: base-perft.txt
+oracle c3d0858de3887e52 | perft leaves 21813 in 0.051s (429309/s)
+
+FILE: frozen-profile-main.txt
+aboracle e82287ff973edc82 | depth 20 | nodes 123808 in 3.641s (34006 nps)
+  build_hc           0.148s      16898 calls     8.77us/call
+  hc_movegen         0.141s      16898 calls     8.37us/call
+  take_point         0.095s     155246 calls     0.61us/call
+  jump+present       0.148s     109937 calls     1.35us/call
+  find_checks        0.118s     100841 calls     1.17us/call
+  space_ops          0.008s      12499 calls     0.68us/call
+  ordering           0.125s      22132 calls     5.64us/call
+  state_clone        0.044s     179159 calls     0.25us/call
+  eval               0.579s     158722 calls     3.65us/call
+  in_check           0.118s     210024 calls     0.56us/call
+  tt_validate        0.091s     192505 calls     0.47us/call
+  hc_entries         0.053s      16898 calls     3.13us/call
+  hc_branch          0.035s      16898 calls     2.05us/call
+  hc_finish          0.022s      16898 calls     1.28us/call
+  hc_status          0.147s      16898 calls     8.69us/call
+  hc_physical        0.082s      45532 calls     1.79us/call
+  hc_jumps           0.047s      45532 calls     1.03us/call
+  nnue_boards        0.170s     115615 calls     1.47us/call
+  nnue_embed         0.131s      76779 calls     1.70us/call
+  nnue_head          0.070s     115615 calls     0.60us/call
+  nnue_ft            0.065s      74164 calls     0.87us/call
+  nnue_l2            0.052s      76779 calls     0.68us/call
+
+FILE: frozen-profile-repeat.txt
+aboracle e82287ff973edc82 | depth 20 | nodes 123808 in 3.786s (32706 nps)
+  build_hc           0.174s      16898 calls    10.29us/call
+  hc_movegen         0.168s      16898 calls     9.96us/call
+  take_point         0.112s     154430 calls     0.73us/call
+  jump+present       0.156s     109381 calls     1.43us/call
+  find_checks        0.125s     100285 calls     1.24us/call
+  space_ops          0.009s      12502 calls     0.73us/call
+  ordering           0.145s      22132 calls     6.54us/call
+  state_clone        0.045s     178603 calls     0.25us/call
+  eval               0.590s     158722 calls     3.72us/call
+  in_check           0.146s     208912 calls     0.70us/call
+  tt_validate        0.113s     192641 calls     0.59us/call
+  hc_entries         0.063s      16898 calls     3.73us/call
+  hc_branch          0.037s      16898 calls     2.20us/call
+  hc_finish          0.024s      16898 calls     1.41us/call
+  hc_status          0.173s      16898 calls    10.21us/call
+  hc_physical        0.095s      45532 calls     2.08us/call
+  hc_jumps           0.057s      45532 calls     1.25us/call
+  nnue_boards        0.165s     115615 calls     1.43us/call
+  nnue_embed         0.130s      76779 calls     1.69us/call
+  nnue_head          0.072s     115615 calls     0.63us/call
+  nnue_ft            0.068s      74164 calls     0.91us/call
+  nnue_l2            0.047s      76779 calls     0.62us/call
+
+FILE: detailed-main.txt
+aboracle 9499dbcadf3b45cd | depth 20 | nodes 180000 in 3.985s (45166 nps)
+  event 0         13144
+  event 1         48362
+  event 2         35410
+  event 3          8542
+  build_hc           0.205s      16898 calls    12.11us/call
+  hc_movegen         0.118s      16898 calls     6.96us/call
+  take_point         0.104s     153932 calls     0.68us/call
+  jump+present       0.173s     109145 calls     1.58us/call
+  find_checks        0.141s     100049 calls     1.41us/call
+  space_ops          0.010s      12499 calls     0.80us/call
+  ordering           0.150s      22132 calls     6.78us/call
+  state_clone        0.048s     178367 calls     0.27us/call
+  eval               0.688s     158722 calls     4.34us/call
+  in_check           0.145s     208440 calls     0.70us/call
+  tt_validate        0.075s      40420 calls     1.87us/call
+  hc_entries         0.027s      16898 calls     1.58us/call
+  hc_branch          0.015s      16898 calls     0.91us/call
+  hc_finish          0.035s      16898 calls     2.06us/call
+  hc_status          0.005s      16898 calls     0.29us/call
+  hc_physical        0.043s      45532 calls     0.95us/call
+  hc_jumps           0.059s      45532 calls     1.29us/call
+  nnue_boards        0.174s     115615 calls     1.51us/call
+  nnue_embed         0.137s      76779 calls     1.78us/call
+  nnue_head          0.076s     115615 calls     0.66us/call
+  nnue_ft            0.072s      74164 calls     0.97us/call
+  nnue_l2            0.050s      76779 calls     0.65us/call
+  hce_sides          0.292s     115615 calls     2.53us/call
+  board_chess        0.024s      61506 calls     0.38us/call
+  local_gain         0.034s      43952 calls     0.77us/call
+  royal_5d           0.092s     115615 calls     0.80us/call
+  past_line          0.014s      64350 calls     0.22us/call
+  heap_bound         0.031s     151722 calls     0.20us/call
+
+FILE: detailed-main-200k.txt
+aboracle b285b733aee3ed42 | depth 20 | nodes 1800000 in 20.046s (89793 nps)
+  event 0        115760
+  event 1        469554
+  event 2        544177
+  event 3         86177
+  build_hc           2.159s     215172 calls    10.04us/call
+  hc_movegen         1.256s     215172 calls     5.84us/call
+  take_point         0.828s    1390250 calls     0.60us/call
+  jump+present       1.446s    1200006 calls     1.21us/call
+  find_checks        1.135s    1087115 calls     1.04us/call
+  space_ops          0.099s     174202 calls     0.57us/call
+  ordering           1.998s     267972 calls     7.46us/call
+  state_clone        0.355s    1601081 calls     0.22us/call
+  eval               5.985s    1534641 calls     3.90us/call
+  in_check           1.270s    1856076 calls     0.68us/call
+  tt_validate        0.640s     500897 calls     1.28us/call
+  hc_entries         0.307s     215172 calls     1.43us/call
+  hc_branch          0.189s     215172 calls     0.88us/call
+  hc_finish          0.297s     215172 calls     1.38us/call
+  hc_status          0.048s     215172 calls     0.22us/call
+  hc_physical        0.383s     690882 calls     0.55us/call
+  hc_jumps           0.776s     690882 calls     1.12us/call
+  nnue_boards        1.431s    1278364 calls     1.12us/call
+  nnue_embed         1.059s     798027 calls     1.33us/call
+  nnue_head          0.739s    1278364 calls     0.58us/call
+  nnue_ft            0.448s     766579 calls     0.58us/call
+  nnue_l2            0.455s     798027 calls     0.57us/call
+  hce_sides          2.602s    1278364 calls     2.04us/call
+  board_chess        0.185s     585314 calls     0.32us/call
+  local_gain         0.433s     630354 calls     0.69us/call
+  royal_5d           0.891s    1278364 calls     0.70us/call
+  past_line          0.122s     682893 calls     0.18us/call
+  heap_bound         0.298s    1733721 calls     0.17us/call
+
+FILE: detailed-timelines.txt
+aboracle 502c5d4122e3cb03 | depth 20 | nodes 18000 in 6.460s (2787 nps)
+  event 0            24
+  event 1           755
+  event 2          5692
+  event 3           639
+  build_hc           0.164s       5611 calls    29.23us/call
+  hc_movegen         0.070s       5611 calls    12.49us/call
+  take_point         0.752s     473744 calls     1.59us/call
+  jump+present       0.977s     309018 calls     3.16us/call
+  find_checks        0.747s     266179 calls     2.80us/call
+  space_ops          0.197s      95733 calls     2.06us/call
+  ordering           0.309s      11007 calls    28.08us/call
+  state_clone        0.146s     259234 calls     0.56us/call
+  eval               0.081s       9853 calls     8.23us/call
+  in_check           0.322s     377928 calls     0.85us/call
+  tt_validate        0.039s      16092 calls     2.43us/call
+  hc_entries         0.026s       5611 calls     4.62us/call
+  hc_branch          0.019s       5611 calls     3.48us/call
+  hc_finish          0.044s       5611 calls     7.86us/call
+  hc_status          0.002s       5611 calls     0.40us/call
+  hc_physical        0.023s      36137 calls     0.62us/call
+  hc_jumps           0.043s      36137 calls     1.19us/call
+  nnue_boards        0.020s       7096 calls     2.84us/call
+  nnue_embed         0.011s       3239 calls     3.52us/call
+  nnue_head          0.006s       7096 calls     0.79us/call
+  nnue_ft            0.009s       3067 calls     2.78us/call
+  nnue_l2            0.002s       3239 calls     0.71us/call
+  hce_sides          0.045s       7096 calls     6.35us/call
+  board_chess        0.000s        779 calls     0.34us/call
+  local_gain         0.006s       6331 calls     0.92us/call
+  royal_5d           0.026s       7096 calls     3.71us/call
+  past_line          0.001s       2882 calls     0.22us/call
+  heap_bound         0.105s     303038 calls     0.35us/call
+
+FILE: detailed-timelines-positions.txt
+pos 0 nodes 2000 0.01s
+pos 1 nodes 2000 0.02s
+pos 2 nodes 0 0.00s
+pos 3 nodes 2000 0.07s
+pos 4 nodes 2000 0.11s
+pos 5 nodes 2000 1.21s
+pos 6 nodes 2000 1.03s
+pos 7 nodes 2000 1.08s
+pos 8 nodes 2000 1.38s
+pos 9 nodes 2000 1.49s
+
+FILE: inventory-sample.txt
+pos 0 lines 1 active 1 boards 8
+pos 1 lines 3 active 3 boards 59
+pos 2 lines 7 active 6 boards 75
+pos 3 lines 5 active 5 boards 69
+pos 4 lines 8 active 8 boards 164
+pos 5 lines 11 active 11 boards 175
+pos 6 lines 13 active 13 boards 191
+pos 7 lines 16 active 16 boards 204
+pos 8 lines 10 active 10 boards 98
+pos 9 lines 13 active 12 boards 119
+
+FILE: trace-main.txt
+pos 0 lines 1 active 1 actual 20000 score 894 proven false seconds 0.096452 last [depth 7 score cp 19 wdl 551 0 449 nodes 13407 roots 20 pv (0T1)d2d4 submit (0T1)g8f6 submit (0T2)b1c3 submit (0T2)b8c6 submit (0T3)g1f3 submit (0T3)d7d5 submit (0T4)c1f4 submit] best Some("(0T1)d2d4 ")
+pos 1 lines 1 active 1 actual 20000 score 88 proven false seconds 0.111499 last [depth 7 score cp 2 wdl 505 0 495 nodes 10687 roots 21 pv (0T2)d2d4 submit (0T2)d7d5 submit (0T3)c1f4 submit (0T3)c8f5 submit (0T4)b1c3 submit (0T4)g8f6 submit (0T5)e2e4 submit] best Some("(0T2)d2d4 ")
+pos 2 lines 1 active 1 actual 20000 score -11954 proven false seconds 0.117850 last [depth 6 score cp -249 wdl 60 0 940 nodes 13051 roots 34 pv (0T15)e7e4 submit (0T15)f8d6 submit (0T16)e4(0T3)e4 submit (1T3)g8f6 submit (1T4)b1c3 submit (1T4)f6e4 submit (1T5)c3e4 submit] best Some("(0T15)e7e4 ")
+pos 3 lines 8 active 8 actual 0 score 29999 proven true seconds 0.000803 last [depth 1 score mate 1 wdl 1000 0 0 nodes 0 roots 1 pv (-4T31)f2b2 (0T33)f2(-3T33)f2 submit] best Some("(-4T31)f2b2 (0T33)f2(-3T33)f2 ")
+pos 4 lines 1 active 1 actual 20000 score -3271 proven false seconds 0.099743 last [depth 7 score cp -68 wdl 320 0 680 nodes 12320 roots 14 pv (0T21)g2h3 submit (0T21)c2c3 submit (0T22)h3h2 submit (0T22)c3c2 submit (0T23)h2h3 submit (0T23)c2c3 submit (0T24)h3h2 submit (0T24)a8a1 submit (0T25)h5e5 submit] best Some("(0T21)g2h3 ")
+pos 5 lines 1 active 1 actual 20000 score 1851 proven false seconds 0.106701 last [depth 6 score cp 39 wdl 605 0 395 nodes 6069 roots 30 pv (0T3)g1f3 submit (0T3)g8f6 submit (0T4)e2e4 submit (0T4)b8c6 submit (0T5)d2d4 submit (0T5)d7d5 submit] best Some("(0T3)d2d4 ")
+pos 6 lines 1 active 1 actual 20000 score 11433 proven false seconds 0.154668 last [depth 7 score cp 238 wdl 933 0 67 nodes 18836 roots 66 pv (0T4)f3d5 submit (0T4)d8f6 submit (0T5)d5(0T3)f7 submit (0T5)f6(0T0)f6 submit (-1T1)g1h3 submit (-1T1)b8c6 submit (-1T2)e2e3 submit (-1T2)c6d4 submit] best Some("(0T4)f3d5 ")
+pos 7 lines 6 active 4 actual 20000 score 6333 proven false seconds 1.229065 last [depth 4 score cp 132 wdl 811 0 189 nodes 18644 roots 1000 pv (2T9)g8f6 (-1T9)a8c8 submit (-1T10)c3d5 (2T10)f3e5 submit (2T10)c6e5 (-1T10)e7e5 submit (-1T11)d5c7 (2T11)d2e1 submit (4T9)e5f4 (3T12)a8b8 (2T11)e5d3 (0T12)f4g3 (-1T11)c8c7 submit (-1T12)f3e5 (0T13)h2g3 (1T13)d3e4 (2T12)e2d3 (3T13)f3e5 (4T10)c3a4 submit] best Some("(2T9)g8f6 (-1T9)a8c8 ")
+pos 8 lines 4 active 4 actual 0 score 29999 proven true seconds 0.001482 last [depth 1 score mate 1 wdl 1000 0 0 nodes 0 roots 1 pv (2T2)c3(1T1)c4 submit] best Some("(2T2)c3(1T1)c4 ")
+pos 9 lines 1 active 1 actual 20000 score 1543 proven false seconds 0.111341 last [depth 7 score cp 32 wdl 588 0 412 nodes 19264 roots 23 pv (0T2)a7a6 submit (0T3)b5a4 submit (0T3)b8c6 submit (0T4)g1f3 submit (0T4)d7d5 submit (0T5)a4c6 submit (0T5)b7c6 submit] best Some("(0T2)a7a6 ")
+pos 10 lines 6 active 6 actual 20000 score 10587 proven false seconds 1.341348 last [depth 2 score cp 214 wdl 914 0 86 nodes 11530 roots 1002 pv (-3T2)b2b4 (1T2)f5(-1T2)f6 (2T2)f3g5 submit (2T2)e7e6 (1T2)g8f6 (-1T2)g7f6 (-2T2)b6(-3T2)b4 submit] best Some("(-3T2)h2h4 (1T2)f5(-1T2)f6 (2T2)f3g5 ")
+trace 0299ba183744930d actual_nodes 180000 seconds 3.435705 nps 52391
+
+FILE: trace-main-repeat.txt
+pos 0 lines 1 active 1 actual 20000 score 894 proven false seconds 0.102279 last [depth 7 score cp 19 wdl 551 0 449 nodes 13407 roots 20 pv (0T1)d2d4 submit (0T1)g8f6 submit (0T2)b1c3 submit (0T2)b8c6 submit (0T3)g1f3 submit (0T3)d7d5 submit (0T4)c1f4 submit] best Some("(0T1)d2d4 ")
+pos 1 lines 1 active 1 actual 20000 score 88 proven false seconds 0.097214 last [depth 7 score cp 2 wdl 505 0 495 nodes 10687 roots 21 pv (0T2)d2d4 submit (0T2)d7d5 submit (0T3)c1f4 submit (0T3)c8f5 submit (0T4)b1c3 submit (0T4)g8f6 submit (0T5)e2e4 submit] best Some("(0T2)d2d4 ")
+pos 2 lines 1 active 1 actual 20000 score -11954 proven false seconds 0.105155 last [depth 6 score cp -249 wdl 60 0 940 nodes 13051 roots 34 pv (0T15)e7e4 submit (0T15)f8d6 submit (0T16)e4(0T3)e4 submit (1T3)g8f6 submit (1T4)b1c3 submit (1T4)f6e4 submit (1T5)c3e4 submit] best Some("(0T15)e7e4 ")
+pos 3 lines 8 active 8 actual 0 score 29999 proven true seconds 0.000659 last [depth 1 score mate 1 wdl 1000 0 0 nodes 0 roots 1 pv (-4T31)f2b2 (0T33)f2(-3T33)f2 submit] best Some("(-4T31)f2b2 (0T33)f2(-3T33)f2 ")
+pos 4 lines 1 active 1 actual 20000 score -3271 proven false seconds 0.082659 last [depth 7 score cp -68 wdl 320 0 680 nodes 12320 roots 14 pv (0T21)g2h3 submit (0T21)c2c3 submit (0T22)h3h2 submit (0T22)c3c2 submit (0T23)h2h3 submit (0T23)c2c3 submit (0T24)h3h2 submit (0T24)a8a1 submit (0T25)h5e5 submit] best Some("(0T21)g2h3 ")
+pos 5 lines 1 active 1 actual 20000 score 1851 proven false seconds 0.098046 last [depth 6 score cp 39 wdl 605 0 395 nodes 6069 roots 30 pv (0T3)g1f3 submit (0T3)g8f6 submit (0T4)e2e4 submit (0T4)b8c6 submit (0T5)d2d4 submit (0T5)d7d5 submit] best Some("(0T3)d2d4 ")
+pos 6 lines 1 active 1 actual 20000 score 11433 proven false seconds 0.133066 last [depth 7 score cp 238 wdl 933 0 67 nodes 18836 roots 66 pv (0T4)f3d5 submit (0T4)d8f6 submit (0T5)d5(0T3)f7 submit (0T5)f6(0T0)f6 submit (-1T1)g1h3 submit (-1T1)b8c6 submit (-1T2)e2e3 submit (-1T2)c6d4 submit] best Some("(0T4)f3d5 ")
+pos 7 lines 6 active 4 actual 20000 score 6333 proven false seconds 1.176729 last [depth 4 score cp 132 wdl 811 0 189 nodes 18644 roots 1000 pv (2T9)g8f6 (-1T9)a8c8 submit (-1T10)c3d5 (2T10)f3e5 submit (2T10)c6e5 (-1T10)e7e5 submit (-1T11)d5c7 (2T11)d2e1 submit (4T9)e5f4 (3T12)a8b8 (2T11)e5d3 (0T12)f4g3 (-1T11)c8c7 submit (-1T12)f3e5 (0T13)h2g3 (1T13)d3e4 (2T12)e2d3 (3T13)f3e5 (4T10)c3a4 submit] best Some("(2T9)g8f6 (-1T9)a8c8 ")
+pos 8 lines 4 active 4 actual 0 score 29999 proven true seconds 0.001274 last [depth 1 score mate 1 wdl 1000 0 0 nodes 0 roots 1 pv (2T2)c3(1T1)c4 submit] best Some("(2T2)c3(1T1)c4 ")
+pos 9 lines 1 active 1 actual 20000 score 1543 proven false seconds 0.111456 last [depth 7 score cp 32 wdl 588 0 412 nodes 19264 roots 23 pv (0T2)a7a6 submit (0T3)b5a4 submit (0T3)b8c6 submit (0T4)g1f3 submit (0T4)d7d5 submit (0T5)a4c6 submit (0T5)b7c6 submit] best Some("(0T2)a7a6 ")
+pos 10 lines 6 active 6 actual 20000 score 10587 proven false seconds 1.369060 last [depth 2 score cp 214 wdl 914 0 86 nodes 11530 roots 1002 pv (-3T2)b2b4 (1T2)f5(-1T2)f6 (2T2)f3g5 submit (2T2)e7e6 (1T2)g8f6 (-1T2)g7f6 (-2T2)b6(-3T2)b4 submit] best Some("(-3T2)h2h4 (1T2)f5(-1T2)f6 (2T2)f3g5 ")
+trace 0299ba183744930d actual_nodes 180000 seconds 3.349581 nps 53738
+

@@ -1,0 +1,21 @@
+Benchmark v2 validation, 2026-10-22
+Engine base: 1f109900dd262168feee8b99878fcdc40ae8df90 plus working-tree benchmark repair
+Release build; default embedded evaluation and blend; one thread; MateVerify=counted
+
+FILE: main-1.txt
+aboracle 675116deb4e173ea | v2 depth 20 | nodes 180000 in 1.835271s (98078 nps) | wall 1.920770s | mate counted | node-cap 20000
+
+FILE: main-2.txt
+aboracle 675116deb4e173ea | v2 depth 20 | nodes 180000 in 1.543417s (116624 nps) | wall 1.623992s | mate counted | node-cap 20000
+
+FILE: timelines-1.txt
+aboracle b00c871af5ef5dda | v2 depth 20 | nodes 18000 in 1.250144s (14398 nps) | wall 1.301286s | mate counted | node-cap 2000
+
+FILE: timelines-2.txt
+aboracle b00c871af5ef5dda | v2 depth 20 | nodes 18000 in 1.524286s (11809 nps) | wall 1.592650s | mate counted | node-cap 2000
+
+FILE: depth2-1.txt
+aboracle 763f7d8280d6431f | v2 depth 2 | nodes 15753 in 0.208675s (75491 nps) | wall 0.264650s | mate counted | node-cap none
+
+FILE: depth2-2.txt
+aboracle 763f7d8280d6431f | v2 depth 2 | nodes 15753 in 0.195125s (80733 nps) | wall 0.249581s | mate counted | node-cap none
