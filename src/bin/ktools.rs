@@ -647,6 +647,7 @@ fn main() {
         "mate1recall" => mate1recall(&args[2..], &mut out),
         "matescan" => matescan(&args[2..], &mut out),
         "matekinds" => matekinds(&args[2..], &mut out),
+        "depthtl" => depthtl(&args[2..], &mut out),
         "abbench" => abbench(
             args.get(2).map(|s| s.as_str()).unwrap_or("data/bench_ab.g"),
             args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20),
@@ -3662,6 +3663,74 @@ fn matekinds(args: &[String], out: &mut impl Write) {
     v.sort_by(|a, b| b.1.cmp(&a.1));
     for (k, n) in v {
         writeln!(out, "{:6} {:5.1}%  {}", n, 100.0 * n as f64 / mates.max(1) as f64, k).unwrap();
+    }
+}
+
+/// The depth the engines reached in recorded games (`depths`) by the number of active
+/// timelines (and of all timelines) of the position they searched, and around the first
+/// timeline a game creates.
+///   depthtl games.jsonl...
+fn depthtl(args: &[String], out: &mut impl Write) {
+    use kairos::core::variants::{apply_uci_moves, position_from_uci};
+    use std::collections::BTreeMap;
+    let mut by_active: BTreeMap<i32, (f64, usize)> = BTreeMap::new();
+    let mut around: BTreeMap<i32, (f64, usize)> = BTreeMap::new();
+    for f in args {
+        let text = std::fs::read_to_string(f).expect("games file");
+        for line in text.lines() {
+            let (Some(pos), Some(moves)) = (json_field(line, "position"), json_field(line, "moves")) else { continue };
+            let Some(e) = line.find("\"depths\":") else { continue };
+            let t = &line[e..];
+            let t = &t[t.find('[').unwrap_or(0) + 1..];
+            let depths: Vec<i32> = t[..t.find(']').unwrap_or(0)].split(',').filter_map(|x| x.trim().parse().ok()).collect();
+            let Ok(mut s) = position_from_uci(pos) else { continue };
+            let mut active = Vec::new();
+            let mut prefix = Vec::new();
+            for act in moves.split("submit").map(str::trim).filter(|a| !a.is_empty()) {
+                active.push(s.active_timelines() as i32);
+                prefix.push(act);
+                if apply_uci_moves(&mut s, &format!("{} submit", act)).is_err() {
+                    break;
+                }
+            }
+            let first = active.iter().position(|&a| a > 1);
+            // DEPTHTL_SAVE=<file>: the positions searched one action before and one, five after
+            // the first with two active timelines, as .g lines tagged -1, +1, +5.
+            if let (Ok(path), Some(f)) = (std::env::var("DEPTHTL_SAVE"), first) {
+                let mut g = String::new();
+                for k in [-1i32, 1, 5] {
+                    let i = f as i32 + k;
+                    if i >= 0 && (i as usize) < prefix.len() {
+                        let m: String = prefix[..i as usize].iter().map(|a| format!(" {} submit", a)).collect();
+                        g += &format!("G {} {} moves{}
+", k, pos, m);
+                    }
+                }
+                use std::io::Write as _;
+                std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap().write_all(g.as_bytes()).unwrap();
+            }
+            for (i, (&a, &d)) in active.iter().zip(&depths).enumerate() {
+                let x = by_active.entry(a.min(9)).or_default();
+                x.0 += d as f64;
+                x.1 += 1;
+                if let Some(f) = first {
+                    let k = i as i32 - f as i32;
+                    if (-6..=6).contains(&k) {
+                        let y = around.entry(k).or_default();
+                        y.0 += d as f64;
+                        y.1 += 1;
+                    }
+                }
+            }
+        }
+    }
+    writeln!(out, "mean depth by active timelines (9: 9 or more):").unwrap();
+    for (a, (d, n)) in &by_active {
+        writeln!(out, "  {:2} {:6.2} ({} searches)", a, d / *n as f64, n).unwrap();
+    }
+    writeln!(out, "mean depth by actions from the first one searched with two or more active timelines:").unwrap();
+    for (k, (d, n)) in &around {
+        writeln!(out, "  {:+3} {:6.2} ({})", k, d / *n as f64, n).unwrap();
     }
 }
 
