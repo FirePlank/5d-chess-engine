@@ -146,6 +146,8 @@ const SAC_ROOT_EXT: i32 = 2;
 /// it beats beta by RFP_MARGIN per ply.
 const RFP_DEPTH: i32 = 2;
 const RFP_MARGIN: i32 = 250;
+/// Futility margin per ply of reduced depth for quiet actions.
+const FUTILITY_MARGIN: i32 = 400;
 /// Null move (a pass, i.e. a phantom turn): at non-PV nodes from this depth, when the static
 /// eval is at least beta, search the pass with depth reduced by NMP_R + depth / NMP_DIV.
 const NMP_MIN_DEPTH: i32 = 3;
@@ -2702,6 +2704,8 @@ impl AlphaBeta {
         let mut best = -INF;
         let mut best_action = MoveSeq::new();
         let mut searched = 0usize;
+        // The static evaluation futility compares with (none at PV nodes or in check).
+        let fut_eval = if pv || known_check.unwrap_or_else(|| self.in_check(s)) { None } else { Some(self.static_eval(s)) };
         // Mate proof: the best reply's, and every searched reply's (see `proven`).
         let (mut best_proven, mut all_proven) = (false, true);
         let mut cap = {
@@ -2939,6 +2943,18 @@ impl AlphaBeta {
                         if !ic {
                             r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
                         }
+                    }
+                    // Futility: a quiet action at a non-PV node whose static evaluation plus a
+                    // margin for the depth it would get still falls short of alpha is not worth
+                    // searching, unless it checks or every action so far loses to a mate
+                    // (Stockfish, Apeiron).
+                    let futile = quiet && searched >= 1 && best > -MATE + 1000 && alpha.abs() < MATE - 1000
+                        && fut_eval.is_some_and(|e| e + FUTILITY_MARGIN * (depth - lmr(depth, searched)).max(1) <= alpha);
+                    if futile && !*child_check.get_or_insert_with(|| self.in_check(s)) {
+                        s.unmake(mark);
+                        self.sac_line = sac_line;
+                        skipped = true;
+                        continue;
                     }
                     if weak && quiet && searched >= BOARD_RANK_MIN_INDEX && !*child_check.get_or_insert_with(|| self.in_check(s)) {
                         s.unmake(mark);
