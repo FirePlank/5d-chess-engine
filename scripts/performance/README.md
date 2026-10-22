@@ -32,6 +32,9 @@ If the embedded network is being updated concurrently, pass `--nnue-file` with a
 frozen copy. It loads that same file in both binaries and records its SHA-256,
 independently of the workspace's current network and either executable's embedded
 version.
+Use `--nnue-blend 50` (or the intended common value) as well when defaults differ.
+The runner saves raw per-position stderr alongside the normalized comparison
+trace, retaining position timings for diagnosis.
 
 Positive `nps_gain_percent` means the candidate is faster. Results use geometric
 means of paired elapsed-time ratios, with an approximate 95% Student-t interval
@@ -39,3 +42,48 @@ over pair log ratios. The combined result adds each suite's search time within a
 pair before forming the ratio. Inspect each suite as well as the combined result.
 Twelve pairs are a starting point; a small or noisy gain may remain inconclusive.
 Keep the raw results, and establish a gain before accepting a speed patch.
+
+On Windows, add `--process-cycles` to collect
+[QueryProcessCycleTime](https://learn.microsoft.com/en-us/windows/win32/api/realtimeapiset/nf-realtimeapiset-queryprocesscycletime)
+after each child exits. This needs no elevation and does not instrument the engine.
+Each run records the count and cycles per searched node. A separate paired summary
+reports `nodes_per_process_cycle_gain_percent`; positive means fewer cycles for
+the same work. Warmups remain excluded, and combined comparisons sum cycles across
+suites before taking ratios. The count covers the whole process, including model
+loading, initialization, output, and all user/kernel threads; NPS covers the
+engine's reported benchmark interval. Do not treat their scopes as identical.
+
+This API reports Windows process cycle accounting, **not** the hardware PMU
+`TotalCycles` event. Windows cycle accounting can depend on the platform's
+[timer and CPU frequency behavior](https://learn.microsoft.com/en-us/windows/win32/api/realtimeapiset/nf-realtimeapiset-querythreadcycletime#remarks);
+it is an additional measure, not proof of a change in
+hardware cycles or instructions. Actual hardware counters can be captured with
+[ETW PMU recording](https://learn.microsoft.com/en-us/windows-hardware/test/wpt/recording-pmu-events)
+and require suitable tracing privileges. Keep hardware counter results separate
+from process accounting and wall-clock results. On the audit machine, `xperf
+-pmcsources` exposes `TotalCycles` and `InstructionRetired`, but this task runs
+without an administrator token.
+
+`oracle.rs` provides broader deterministic checks using the same source linked
+against each frozen release library. Example for one library (PowerShell):
+
+```powershell
+$deps = 'target/base/release/deps'
+$lib = (Get-ChildItem $deps -Filter 'libkairos*.rlib' | Select-Object -First 1).FullName
+rustc --edition=2024 -C opt-level=3 -C target-cpu=native -C panic=abort -C lto=fat -C codegen-units=1 scripts/performance/oracle.rs --extern "kairos=$lib" -L "dependency=$deps" -o target/oracle-base.exe
+```
+
+Repeat for the candidate library. Run both probes with identical arguments:
+`CORPUS DEPTH NODE_CAP MULTIPV SKILL MODEL [MODEL...]`, then compare stdout byte
+for byte. A zero cap means uncapped; `<empty>` selects HCE. Each model is loaded
+in sequence into the same engine, with two searches to exercise warm/resumed
+state and model invalidation. Use explicit model files to avoid differing
+embedded versions; set the same `NNUE_BLEND` environment value for both probes.
+These are equivalence checks, not NPS measurements. Finish
+compilation and validation before starting timing pairs.
+Below skill 8, the engine randomly selects a final move from its searched
+candidates. The probe compares their deterministic reports, node count and proof
+status; it omits the randomized final move and its score. Full-strength results
+include all final fields. Choose tractable positions for extended MultiPV/model
+checks; synthetic perft stress positions can have extremely expensive root scans
+even at a small search node cap.
