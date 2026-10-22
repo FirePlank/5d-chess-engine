@@ -65,7 +65,7 @@ const LMR_MIN_INDEX: usize = 4;
 /// many-timeline nodes: such actions are four in ten of those searched there and give 0.3% of
 /// their cutoffs.)
 const BOARD_RANK_MIN_INDEX: usize = 8;
-const RANK_PER_BOARD: u32 = 4;
+const RANK_PER_BOARD: u32 = 3;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
 const ROOT_LMR_MIN_INDEX: usize = 6;
