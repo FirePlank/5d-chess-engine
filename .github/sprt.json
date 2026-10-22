@@ -1,7 +1,7 @@
 {
-  "name": "sac_nodes_v2",
-  "old": "d2a8490",
-  "games": 4000,
+  "name": "board_rank_depth",
+  "old": "326c45c",
+  "games": 8775,
   "shards": 39,
   "tc": "tc 10+0.1",
   "elo0": 0,
