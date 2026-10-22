@@ -140,8 +140,6 @@ const CHECK_BONUS: i32 = 30_000;
 /// the best action stable, starts no next depth past this share of the usual time.
 const ROOT_EFFORT_HIGH: f64 = 0.9;
 const ROOT_EFFORT_SCALE: f64 = 0.75;
-/// Extra depth of a checking sacrifice by time travel (`sac::is_sac_travel`).
-const SAC_ROOT_EXT: i32 = 2;
 /// Reverse futility pruning: at non-PV nodes up to this depth, return the static eval when
 /// it beats beta by RFP_MARGIN per ply.
 const RFP_DEPTH: i32 = 2;
@@ -656,11 +654,6 @@ pub struct AlphaBeta {
     terms: Box<hce::TermCache>,
     /// Whether the position the next `negamax` call searches is in check, when known.
     known_check: Option<bool>,
-    /// Below an extended checking sacrifice by time travel (`root_child_depth`, the ply-2
-    /// extension): the side it was played against, which makes no null moves there. Given the
-    /// material, it is far ahead, so a null move would clear beta at every one of its nodes and
-    /// the slow attack would never be searched.
-    sac_line: Option<bool>,
     /// Static evaluations and in-check status of recently seen positions.
     known: KnownCache,
     /// The board NNUE that replaces the handcrafted evaluation at full strength (`EvalFile`),
@@ -1012,7 +1005,6 @@ impl AlphaBeta {
             terms: Box::default(),
             phys_static: std::cell::RefCell::new(Vec::new()),
             known_check: None,
-            sac_line: None,
             known: KnownCache::new(),
             nnue: super::nnue::embedded(),
             nnue_cache: Box::default(),
@@ -2598,32 +2590,14 @@ impl AlphaBeta {
         best
     }
 
-    /// Whether a root action plays one of the checking sacrifices by time travel `sig`.
-    fn is_sig(act: &MoveSeq, sig: &[FullMove]) -> bool {
-        act.iter().any(|m| sig.contains(m))
-    }
-
     /// The depth a root action is searched to (both root paths, single-line and MultiPV, use it):
-    /// the iteration's, less the skill level's travel reduction, plus the sacrifices' extension.
-    fn root_child_depth(&self, act: &MoveSeq, depth: i32, sig: &[FullMove]) -> i32 {
-        let ext = if Self::is_sig(act, sig) { SAC_ROOT_EXT } else { 0 };
-        depth - super::skill::travel_reduction(self.skill_level, act) + ext
+    /// the iteration's, less the skill level's travel reduction.
+    fn root_child_depth(&self, act: &MoveSeq, depth: i32) -> i32 {
+        depth - super::skill::travel_reduction(self.skill_level, act)
     }
 
     /// Search one remembered action (TT move or killer) with PVS; returns its score.
     #[allow(clippy::too_many_arguments)]
-    /// A child of an interior node (`depth`, `ply`) that plays `act`: its extension and the side
-    /// that makes no null moves below it (`sac_line`). A checking sacrifice by time travel, at
-    /// any node with null moves left below it, means the side it is played against never passes
-    /// there (a side given the material clears beta by passing at every node, so the slow
-    /// attack would never be searched); with depth to spare, the first one of a line is also
-    /// searched deeper, as at the root.
-    fn sac_child(&self, s: &State, act: &MoveSeq, depth: i32, ply: usize) -> (i32, Option<bool>) {
-        // Off: the search finds these sacrifices without the rule (non-regression test).
-        let _ = (s, act, depth, ply);
-        (0, self.sac_line)
-    }
-
     fn search_child(&mut self, s: &mut State, mark: Mark, first: bool, depth: i32, ply: usize, alpha: i32, beta: i32, pv: bool) -> i32 {
         let v = if first {
             -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, pv)
@@ -2703,7 +2677,7 @@ impl AlphaBeta {
                     return e;
                 }
             }
-            if depth >= NMP_MIN_DEPTH && self.null_child != ply && self.sac_line != Some(s.player()) && Self::has_null_material(s) && self.static_eval(s) >= beta {
+            if depth >= NMP_MIN_DEPTH && self.null_child != ply && Self::has_null_material(s) && self.static_eval(s) >= beta {
                 let r = NMP_R + depth / NMP_DIV;
                 let mark = s.make_null();
                 let null_child = std::mem::replace(&mut self.null_child, ply + 1);
@@ -2766,10 +2740,8 @@ impl AlphaBeta {
             remembered.extend(self.killers[ply].iter().flatten().filter(|k| tt_action.as_ref() != Some(*k)).cloned());
         }
         for (k, act) in remembered.into_iter().enumerate() {
-            let (ext, line) = self.sac_child(s, &act, depth, ply);
             let Some(mark) = Self::make_checked(s, &act) else { continue };
-            let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act) + ext;
-            let sac_line = std::mem::replace(&mut self.sac_line, line);
+            let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act);
             // The TT action keeps the node's PV status; killers after it are null-window.
             let v = if k == 0 && tt_action.is_some() && !(excl_node && self.excluded.as_ref() == tt_action.as_ref()) {
                 let v = -self.negamax(s, child_depth - 1 + tt_ext, ply + 1, -beta, -alpha, pv);
@@ -2778,7 +2750,6 @@ impl AlphaBeta {
             } else {
                 self.search_child(s, mark, searched == 0, child_depth, ply, alpha, beta, pv)
             };
-            self.sac_line = sac_line;
             if self.aborted {
                 return 0;
             }
@@ -2831,12 +2802,9 @@ impl AlphaBeta {
             if pre_tried.contains(&act) {
                 continue;
             }
-            let (ext, line) = self.sac_child(s, &act, depth, ply);
             let mark = Self::make(s, &act);
-            let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act) + ext;
-            let sac_line = std::mem::replace(&mut self.sac_line, line);
+            let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act);
             let v = self.search_child(s, mark, searched == 0, child_depth, ply, alpha, beta, pv);
-            self.sac_line = sac_line;
             if self.aborted {
                 self.bufs.push(nb);
                 return 0;
@@ -2945,13 +2913,11 @@ impl AlphaBeta {
                         skipped = true;
                         break;
                     }
-                    let (ext, line) = self.sac_child(s, &act, depth, ply);
                     // Quiet: no move of the action captures or promotes (an ordering score summed
                     // over boards tells neither).
                     let _ = sc;
                     let quiet = !Self::is_tactical(s, &act);
                     let mark = Self::make(s, &act);
-                    let sac_line = std::mem::replace(&mut self.sac_line, line);
                     let mut r = 0;
                     let mut child_check = None;
                     // Checking actions are not reduced: mating lines run through them.
@@ -2964,12 +2930,11 @@ impl AlphaBeta {
                     }
                     if weak && quiet && searched >= BOARD_RANK_MIN_INDEX && !*child_check.get_or_insert_with(|| self.in_check(s)) {
                         s.unmake(mark);
-                        self.sac_line = sac_line;
                         skipped = true;
                         continue;
                     }
                     let mut v;
-                    let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act) + ext;
+                    let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act);
                     self.known_check = child_check;
                     if searched == 0 {
                         v = -self.negamax(s, child_depth - 1, ply + 1, -beta, -alpha, pv);
@@ -2985,7 +2950,6 @@ impl AlphaBeta {
                         }
                     }
                     s.unmake(mark);
-                    self.sac_line = sac_line;
                     if self.aborted {
                         break 'search Some(0);
                     }
@@ -3063,12 +3027,9 @@ impl AlphaBeta {
                     if widened >= cap {
                         break 'widen None;
                     }
-                    let (ext, line) = self.sac_child(s, &act, depth, ply);
                     let mark = Self::make(s, &act);
-                    let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act) + ext;
-                    let sac_line = std::mem::replace(&mut self.sac_line, line);
+                    let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act);
                     let v = self.search_child(s, mark, false, child_depth, ply, alpha, beta, pv);
-                    self.sac_line = sac_line;
                     if self.aborted {
                         break 'widen Some(0);
                     }
@@ -3911,13 +3872,6 @@ impl AlphaBeta {
         resume: Option<&SearchResume>,
     ) -> ThreadResult {
         let main = self.thread_id == 0;
-        // The checking sacrifices by time travel among the root actions (`sac::is_sac_travel`).
-        let mut sig: Vec<FullMove> = Vec::new();
-        for m in roots.iter().flat_map(|r| r.1.iter()) {
-            if false && !sig.contains(m) && super::sac::is_sac_travel(root, m) {
-                sig.push(*m);
-            }
-        }
         let mut work = root.clone();
         work.enable_undo();
         let mut best: MoveSeq = resume.map_or_else(|| roots[0].1.clone(), |r| r.best.clone());
@@ -3964,7 +3918,7 @@ impl AlphaBeta {
             // Share of the iteration's nodes the chosen action took (see the clock below).
             let mut effort = 0.0f64;
             if multi {
-                let pass = self.multipv_pass(&mut work, &roots, &sig, depth, lo, hi, roots_complete);
+                let pass = self.multipv_pass(&mut work, &roots, depth, lo, hi, roots_complete);
                 // Its scores are exact: no fail high is a bound to keep.
                 hi = INF;
                 iter_best = pass.best;
@@ -3985,8 +3939,7 @@ impl AlphaBeta {
                     for (k, (_, act)) in roots.iter().enumerate() {
                         let act_nodes0 = self.nodes;
                         let mark = Self::make(&mut work, act);
-                        let child_depth = self.root_child_depth(act, depth, &sig);
-                        self.sac_line = Self::is_sig(act, &sig).then_some(work.player());
+                        let child_depth = self.root_child_depth(act, depth);
                         let v = if k == 0 {
                             -self.negamax(&mut work, child_depth - 1, 1, -beta, -alpha, true)
                         } else {
@@ -4006,7 +3959,6 @@ impl AlphaBeta {
                             v
                         };
                         work.unmake(mark);
-                        self.sac_line = None;
                         if self.aborted {
                             break;
                         }
@@ -4197,7 +4149,7 @@ impl AlphaBeta {
     /// get full windows until `MultiPV` are exact, then each is scouted at the `MultiPV`-th best
     /// score and re-searched only if it beats it.
     #[allow(clippy::too_many_arguments)]
-    fn multipv_pass(&mut self, work: &mut State, roots: &[(i32, MoveSeq)], sig: &[FullMove], depth: i32, lo: i32, hi: i32, roots_complete: bool) -> MultiPass {
+    fn multipv_pass(&mut self, work: &mut State, roots: &[(i32, MoveSeq)], depth: i32, lo: i32, hi: i32, roots_complete: bool) -> MultiPass {
         let want = self.multipv;
         let mut pass = MultiPass { best: None, best_pv: Vec::new(), all_proven: roots_complete, scores: Vec::with_capacity(roots.len()), lines: Vec::new() };
         // The best exact scores so far, best first, at most `want` of them.
@@ -4205,8 +4157,7 @@ impl AlphaBeta {
         for (k, (_, act)) in roots.iter().enumerate() {
             let bar = if top.len() >= want { top[want - 1] } else { -INF };
             let mark = Self::make(work, act);
-            let child_depth = self.root_child_depth(act, depth, sig);
-            self.sac_line = Self::is_sig(act, sig).then_some(work.player());
+            let child_depth = self.root_child_depth(act, depth);
             let mut exact = true;
             let v = if k == 0 {
                 let mut v = -self.negamax(work, child_depth - 1, 1, -hi, -lo, true);
@@ -4233,7 +4184,6 @@ impl AlphaBeta {
                 if exact { v } else { v.min(bar - 1) }
             };
             work.unmake(mark);
-            self.sac_line = None;
             if self.aborted {
                 break;
             }
