@@ -2683,8 +2683,6 @@ impl AlphaBeta {
         // a mated score made of the actions the cap let in claims mates the side to move
         // escapes (see `mated_cap`).
         let mut cap_raised = false;
-        // Checking actions (ordered first) are never cut by the cap: mating lines run through them.
-        let mut checks_left = true;
 
         // Remembered actions first, before paying for the action space: the TT action,
         // then the killers.
@@ -2831,7 +2829,7 @@ impl AlphaBeta {
         let mut batch_size = 1;
         let outcome: Option<i32> = 'search: {
             while !exhausted {
-                if searched >= cap && !checks_left && !Self::mated_cap(&mut cap, &mut cap_raised, best) {
+                if searched >= cap && !Self::mated_cap(&mut cap, &mut cap_raised, best) {
                     break;
                 }
                 let mut batch: Vec<(i32, MoveSeq, bool)> = Vec::with_capacity(BATCH);
@@ -2892,10 +2890,7 @@ impl AlphaBeta {
                 }
                 batch.sort_by(|a, b| b.0.cmp(&a.0));
                 for (sc, act, weak) in batch {
-                    // (`action_score` adds no check bonus: a sum of captures on several boards
-                    // reached it, which let those combinations past the cap.)
-                    checks_left = false;
-                    if searched >= cap && !checks_left && !Self::mated_cap(&mut cap, &mut cap_raised, best) {
+                    if searched >= cap && !Self::mated_cap(&mut cap, &mut cap_raised, best) {
                         skipped = true;
                         break;
                     }
