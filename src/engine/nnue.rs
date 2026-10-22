@@ -30,12 +30,18 @@ const UNMOVED: [Piece; 4] = [KING_W, ROOK_W, PAWN_W, BRAWN_W];
 /// Board features: (kind, own/enemy, square), then (unmoved kind, own/enemy, square).
 pub const NB: usize = KINDS.len() * 2 * 64 + UNMOVED.len() * 2 * 64;
 /// Board roles, the order of the pooled sums: the side to move's boards on the present (it
-/// must play them), its other playable boards, the opponent's latest boards, inactive lines.
-pub const ROLES: usize = 4;
+/// must play them), its other playable boards, the opponent's latest boards, inactive lines;
+/// then the active lines' past boards, one or two half-turns back and three or four (where
+/// time travel lands).
+pub const ROLES: usize = 6;
 pub const ROLE_MANDATORY: u8 = 0;
 pub const ROLE_OPTIONAL: u8 = 1;
 pub const ROLE_OPPONENT: u8 = 2;
 pub const ROLE_INACTIVE: u8 = 3;
+pub const ROLE_PAST_NEAR: u8 = 4;
+pub const ROLE_PAST_FAR: u8 = 5;
+/// Half-turns back the past boards go.
+const PAST_BACK: i32 = 4;
 /// Dense bridge inputs: both sides' `hce::Sides` counts (side to move first), then active and
 /// inactive timelines, heavy pieces and mandatory boards.
 pub const ND: usize = 2 * hce::si::COUNT + 2 * hce::ex::COUNT + 4;
@@ -103,7 +109,7 @@ pub fn other_view(f: u16, h: i32) -> u16 {
     ((((f >> 6) ^ 1) << 6) as i32 + (s & 7) + 8 * (h - 1 - (s >> 3))) as u16
 }
 
-/// One latest board of a position, as the network sees it.
+/// One board of a position the network sees (a latest board, or a past one of an active line).
 pub struct BoardInput<'a> {
     pub board: &'a Board,
     pub role: u8,
@@ -113,13 +119,14 @@ pub struct BoardInput<'a> {
     pub c: bool,
 }
 
-/// The latest boards of `s` with their roles, in timeline order.
+/// The latest boards of `s` with their roles, in timeline order, then the active lines' past
+/// boards up to `PAST_BACK` half-turns back.
 pub fn boards(s: &State) -> impl Iterator<Item = BoardInput<'_>> {
     let present = s.get_present();
     let stm = present.1;
     let (amin, amax) = s.get_active_range();
     let (lo, hi) = s.get_lines_range();
-    (lo..=hi).map(move |l| {
+    let latest = (lo..=hi).map(move |l| {
         let (t, c) = s.get_timeline_end(l);
         let role = if l < amin || l > amax {
             ROLE_INACTIVE
@@ -131,7 +138,17 @@ pub fn boards(s: &State) -> impl Iterator<Item = BoardInput<'_>> {
             ROLE_OPTIONAL
         };
         BoardInput { board: s.board(l, t, c), role, l, t, c }
-    })
+    });
+    let past = (amin..=amax).flat_map(move |l| {
+        let mut tc = s.get_timeline_end(l);
+        (1..=PAST_BACK).map_while(move |back| {
+            tc = if tc.1 { (tc.0, false) } else { (tc.0 - 1, true) };
+            let (t, c) = tc;
+            let role = if back <= 2 { ROLE_PAST_NEAR } else { ROLE_PAST_FAR };
+            s.get_board_ptr(l, t, c).map(|board| BoardInput { board, role, l, t, c })
+        })
+    });
+    latest.chain(past)
 }
 
 /// The dense bridge inputs of `s` (side to move's view).
@@ -581,7 +598,7 @@ pub struct Cache {
 }
 
 impl Cache {
-    const BITS: u32 = 13;
+    const BITS: u32 = 14;
 
     pub fn new() -> Cache {
         Cache { acc: 0, emb: 0, keys: Vec::new(), flags: Vec::new(), accs: Vec::new(), embs: Vec::new(), rel: Vec::with_capacity(MAX_RELATIONS) }
@@ -799,6 +816,31 @@ mod kernels {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn board_cache_matches_direct_evaluation_after_replacement_and_clear() {
+        use crate::core::{perft::parse_g_line, variants::{default_variant, state_from_setup, VARIANT_NAMES}};
+        let corpus = concat!(include_str!("../../data/bench_ab.g"), "\n", include_str!("../../data/bench_timeline.g"));
+        let mut states: Vec<_> = corpus.lines().filter(|l| l.starts_with("G ")).map(|l| parse_g_line(l).unwrap()).collect();
+        states.extend(VARIANT_NAMES.iter().map(|name| state_from_setup(&default_variant(name).unwrap()).unwrap()));
+        let model = Model::random(32, 16, 8, 16, true, 47);
+        let mut cache = Cache::new();
+        for s in states {
+            let sd = hce::sides(&s);
+            let expected = reference(&model, &s, &sd);
+            assert_eq!(model.evaluate(&s, Some(&sd), &mut cache), expected);
+            assert_eq!(model.evaluate(&s, Some(&sd), &mut cache), expected);
+            let h = s.get_board_size().1;
+            for bi in boards(&s) {
+                let slot = Cache::slot(bi.board, h);
+                cache.keys[slot] = (Board::default(), h + 1);
+                cache.flags[slot] = 7;
+            }
+            assert_eq!(model.evaluate(&s, Some(&sd), &mut cache), expected);
+            cache.clear();
+            assert_eq!(model.evaluate(&s, Some(&sd), &mut cache), expected);
+        }
+    }
     use crate::core::variants::{apply_uci_moves, position_from_uci};
 
     fn start() -> State {
