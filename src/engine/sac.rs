@@ -1,12 +1,10 @@
 //! Checking sacrifices by time travel: the f-sac signature travels (`SacBot`, a test
-//! opponent) and the general rule the search extends (`is_sac_travel`).
+//! opponent).
 
 use crate::core::action::FullMove;
 use crate::core::bitboard::*;
-use crate::core::hypercuboid::has_physical_check;
 use crate::core::multiverse::MoveList;
 use crate::core::vec4::Vec4;
-use crate::core::piece::*;
 use crate::core::state::State;
 
 // ------------------------------------------------------------------ the f-sac signature
@@ -56,36 +54,4 @@ pub fn signature_travels(s: &State) -> Vec<FullMove> {
     }
     out.sort_by_key(|x| x.0);
     out.into_iter().map(|x| x.1).collect()
-}
-
-/// Whether `m`, a move of the side to move in `s`, is a checking sacrifice by time travel: it
-/// lands on a past board (creating a timeline), captures a piece there, gives check on the board
-/// it creates, and only the opponent's royal can capture the piece back on that board.
-pub fn is_sac_travel(s: &State, m: &FullMove) -> bool {
-    let c = s.get_present().1;
-    if (m.from.l(), m.from.t()) == (m.to.l(), m.to.t()) || (m.to.t(), c) == s.get_timeline_end(m.to.l()) {
-        return false;
-    }
-    let (Some(src), Some(target)) = (s.get_board_ptr(m.from.l(), m.from.t(), c), s.get_board_ptr(m.to.l(), m.to.t(), c)) else { return false };
-    let piece = src.kind(m.from.xy());
-    let dst = m.to.xy();
-    let victim = target.kind(dst);
-    if piece == NO_PIECE || matches!(piece, KING_W | ROYAL_QUEEN_W) || matches!(victim, KING_W | ROYAL_QUEEN_W) {
-        return false;
-    }
-    // Only a royal next to the landing square can be the one piece to take back (a royal queen
-    // reaches further): most travels end here, before the board is built and checks are found.
-    let royals = target.royal() & target.hostile(c);
-    if royals & target.royal_queen() == 0 && marked_pos(royals).all(|r| king_attack(r) & pmask(dst) == 0) {
-        return false;
-    }
-    // The board the travel creates: the piece stands on the captured piece's square.
-    let mut b = *target;
-    b.set_piece(dst, if c { to_black(piece) } else { piece });
-    if !has_physical_check(&b, !c) {
-        return false;
-    }
-    let enemy = b.hostile(c);
-    let back = b.attacks_to(dst) & enemy;
-    back != 0 && back & !b.royal() == 0
 }
