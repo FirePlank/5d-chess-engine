@@ -2928,8 +2928,6 @@ impl AlphaBeta {
                     // over boards tells neither).
                     let _ = sc;
                     let quiet = !Self::is_tactical(s, &act);
-                    // The quiet action's mean history (Stockfish's statScore, per move here).
-                    let hist = if quiet { act.iter().map(|m| self.history[history_index(s, m)]).sum::<i32>() / act.len().max(1) as i32 } else { 0 };
                     let mark = Self::make(s, &act);
                     let sac_line = std::mem::replace(&mut self.sac_line, line);
                     let mut r = 0;
@@ -2939,8 +2937,7 @@ impl AlphaBeta {
                         let ic = self.in_check(s);
                         child_check = Some(ic);
                         if !ic {
-                            // Less at PV nodes and for a good history (Stockfish, Apeiron).
-                            r = (lmr(depth, searched) - pv as i32 - hist / 6000).clamp(0, depth - 2);
+                            r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
                         }
                     }
                     if weak && quiet && searched >= BOARD_RANK_MIN_INDEX && !*child_check.get_or_insert_with(|| self.in_check(s)) {
