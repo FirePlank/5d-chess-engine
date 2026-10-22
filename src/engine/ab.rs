@@ -440,7 +440,9 @@ impl TtTable {
         let proof_kept = same && e.key == key && e.proven && e.score.abs() >= MATE - 1000 && !proven;
         if proof_kept {
         } else if keep {
-            e.action.assign(action);
+            if !action.is_empty() {
+                e.action.assign(action);
+            }
             if e.action.spilled() && !self.spilled.load(Ordering::Relaxed) {
                 self.spilled.store(true, Ordering::Relaxed);
             }
@@ -454,7 +456,10 @@ impl TtTable {
             e.proven = proven;
             e.generation = generation;
             e.score = score;
-            e.action.assign(action);
+            // A store without an action keeps the position's remembered one.
+            if !(same && e.key == key && action.is_empty()) {
+                e.action.assign(action);
+            }
             if e.action.spilled() && !self.spilled.load(Ordering::Relaxed) {
                 self.spilled.store(true, Ordering::Relaxed);
             }
@@ -3094,7 +3099,9 @@ impl AlphaBeta {
         // might score higher (e.g. the only mating move), and a stored "at most" would poison
         // deeper searches of this node.
         if bound != Bound::Upper || (exhausted && !skipped) {
-            self.tt_store(key, depth, bound, mate_to_tt(best, ply), proven, &best_action);
+            // A fail-low has no best action: the position's remembered one stays.
+            let action = if bound == Bound::Upper { MoveSeq::new() } else { best_action.clone() };
+            self.tt_store(key, depth, bound, mate_to_tt(best, ply), proven, &action);
         }
         self.proven = proven;
         best
