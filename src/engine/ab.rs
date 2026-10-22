@@ -410,10 +410,8 @@ impl TtTable {
             let value = if e.bound == Bound::Empty {
                 i32::MIN
             } else {
-                // A search of age costs 8 plies, as in Stockfish and Apeiron; a proven mate of
-                // this search is worth more than any depth (an older one ages like the rest).
-                let age = generation.wrapping_sub(e.generation) as i32;
-                e.depth as i32 + 3 - 8 * age + if age == 0 && e.proven && e.score.abs() >= MATE - 1000 { 1000 } else { 0 }
+                // A proven mate is worth more than any depth.
+                e.depth as i32 + 3 - generation.wrapping_sub(e.generation) as i32 + if e.proven && e.score.abs() >= MATE - 1000 { 1000 } else { 0 }
             };
             let hit = e.bound != Bound::Empty && e.key == key;
             slot.lock.store(false, Ordering::Release);
@@ -434,7 +432,7 @@ impl TtTable {
         let e = unsafe { &mut *slot.entry.get() };
         // The same position keeps a much deeper bound of this search unless this one is exact;
         // it takes the new action, and a kept mate bound loses a ply.
-        let keep = same && e.key == key && e.generation == generation && bound != Bound::Exact && !proven && depth <= e.depth as i32 - 4;
+        let keep = same && e.key == key && e.generation == generation && bound != Bound::Exact && depth + 2 * (bound == Bound::Exact) as i32 <= e.depth as i32 - 4;
         // A proven mate of the position stays until another proof replaces it: an unproven
         // result, however deep, may only have missed the line.
         let proof_kept = same && e.key == key && e.proven && e.score.abs() >= MATE - 1000 && !proven;
