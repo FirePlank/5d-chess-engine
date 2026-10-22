@@ -569,13 +569,11 @@ fn board_extra(b: &Board, extra: &mut [[i32; ex::COUNT]; 2], w: i32, h: i32, att
         }
         let back = if c == 0 { 0xff } else { 0xffu64 << (8 * (h - 1)) };
         f[ex::UNDEVELOPED] += ((b.knight() | b.bishop()) & me & back).count_ones() as i32;
-        // The f7 weakness of the enemy royals (see `ex::F7_WEAK`).
-        for k in marked_pos(b.royal() & me) {
-            f[ex::K_DEF] += (king_attack(k) & att_nr[c]).count_ones() as i32;
-        }
-        for k in marked_pos(b.royal() & me) {
-            f[ex::DEF_BOARD] += (king_attack(k) & att_nr[c]).count_ones() as i32;
-        }
+        // Squares around own royals other own pieces defend: `ex::K_DEF` and `ex::DEF_BOARD`
+        // count the same thing (both are tuned weights and NNUE inputs, so both stay).
+        let k_def: i32 = marked_pos(b.royal() & me).map(|k| (king_attack(k) & att_nr[c]).count_ones() as i32).sum();
+        f[ex::K_DEF] += k_def;
+        f[ex::DEF_BOARD] += k_def;
         if b.royal() & me == 0 {
             f[ex::KINGLESS] += 1;
             f[ex::KL_SWARM] += (them & !b.lpawn() & !b.royal()).count_ones() as i32;

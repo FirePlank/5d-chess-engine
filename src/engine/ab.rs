@@ -154,6 +154,8 @@ const NMP_DIV: i32 = 4;
 const DEFAULT_HASH_MB: usize = 64;
 /// Static evaluations are kept within +-EVAL_MAX, well clear of mate scores.
 const EVAL_MAX: i32 = 20000;
+/// History entries stay within plus or minus this (gravity, `on_cutoff`).
+const HISTORY_MAX: i32 = 16384;
 
 /// How far the search for a checkmate in one goes (`MateVerify` option, `MateVerify::Auto` by
 /// default): in a game a share of the move's time, in an analysis a few seconds.
@@ -313,10 +315,22 @@ const TT_BUCKET: usize = 4;
 
 /// One table slot: an entry and its lock. All-zero bytes are an empty, unlocked slot.
 struct TtSlot {
-    /// Held while the entry is read or written, since actions may live on the heap. Only ever
-    /// tried: a thread finding it held treats the probe as a miss or skips the store.
+    /// Held while the entry is read or written, since actions may live on the heap (see
+    /// `acquire`).
     lock: AtomicBool,
     entry: UnsafeCell<TtEntry>,
+}
+
+impl TtSlot {
+    /// Take the slot's lock, waiting for another thread to let go of it (it is held only to
+    /// copy one entry): a probe or store skipping a held slot could miss the position or put a
+    /// second entry for it in the bucket.
+    #[inline]
+    fn acquire(&self) {
+        while self.lock.swap(true, Ordering::Acquire) {
+            std::hint::spin_loop();
+        }
+    }
 }
 
 /// The transposition table, shared by every search thread: zero-allocated, so creating or
@@ -376,9 +390,7 @@ impl TtTable {
     fn probe<R>(&self, key: u64, f: impl FnOnce(&TtEntry) -> R) -> Option<R> {
         let mut f = Some(f);
         for slot in self.bucket(key) {
-            if slot.lock.swap(true, Ordering::Acquire) {
-                continue;
-            }
+            slot.acquire();
             // SAFETY: the lock gives this thread exclusive access to the entry.
             let e = unsafe { &mut *slot.entry.get() };
             let r = if e.bound != Bound::Empty && e.key == key {
@@ -402,9 +414,7 @@ impl TtTable {
         // shallowest counting each search of age as `TT_AGE_PLIES` plies.
         let (mut target, mut target_value, mut same) = (None, i32::MAX, false);
         for (i, slot) in bucket.iter().enumerate() {
-            if slot.lock.swap(true, Ordering::Acquire) {
-                continue;
-            }
+            slot.acquire();
             // SAFETY: the lock gives this thread exclusive access to the entry.
             let e = unsafe { &*slot.entry.get() };
             let value = if e.bound == Bound::Empty {
@@ -427,9 +437,7 @@ impl TtTable {
         }
         let Some(i) = target else { return };
         let slot = &bucket[i];
-        if slot.lock.swap(true, Ordering::Acquire) {
-            return;
-        }
+        slot.acquire();
         // SAFETY: the lock gives this thread exclusive access to the entry.
         let e = unsafe { &mut *slot.entry.get() };
         // The same position keeps a much deeper bound of this search unless this one is exact;
@@ -639,6 +647,8 @@ pub struct AlphaBeta {
     excl_key: u64,
     /// The ply right after a null move (no second null move there).
     null_child: usize,
+    /// Quiet actions searched at each ply's node so far (penalized when another one cuts).
+    quiets: Vec<Vec<MoveSeq>>,
     /// Per-node buffers, reused down the recursion.
     #[allow(clippy::vec_box)] // popped and pushed per node: moving a pointer, not the buffers
     bufs: Vec<Box<NodeBufs>>,
@@ -997,6 +1007,7 @@ impl AlphaBeta {
             excluded: None,
             excl_key: 0,
             null_child: usize::MAX,
+            quiets: vec![Vec::new(); MAX_PLY + 1],
             bufs: Vec::new(),
             terms: Box::default(),
             phys_static: std::cell::RefCell::new(Vec::new()),
@@ -1150,7 +1161,7 @@ impl AlphaBeta {
                 if victim != NO_PIECE {
                     sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
                 } else {
-                    sc += history.unwrap_or_else(|| self.history[history_index_of(mover, m, s.get_present().1)]).clamp(-5000, 5000);
+                    sc += history.unwrap_or_else(|| self.history[history_index_of(mover, m, s.get_present().1)]) / 3;
                 }
                 if (mover == PAWN_W || mover == BRAWN_W) && m.to.y() == promotion_rank(s.get_board_size().1, s.get_present().1) {
                     sc += 9000;
@@ -1251,7 +1262,7 @@ impl AlphaBeta {
                         let p = st[i as usize - 1];
                         let mut sc = p.base;
                         if !p.capture {
-                            sc += self.history[p.history as usize].clamp(-5000, 5000);
+                            sc += self.history[p.history as usize] / 3;
                         }
                         if let Some(d) = detector.as_mut()
                             && (p.physical_check || d.reach_check(n, i)) {
@@ -2240,7 +2251,7 @@ impl AlphaBeta {
             if victim != NO_PIECE {
                 sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
             } else {
-                sc += self.history[history_index_of(mover, m, s.get_present().1)].clamp(-5000, 5000) / 4;
+                sc += self.history[history_index_of(mover, m, s.get_present().1)] / 3 / 4;
             }
             if m.from.tl() != m.to.tl() && victim == NO_PIECE {
                 sc -= 300;
@@ -2620,6 +2631,14 @@ impl AlphaBeta {
         if ply >= MAX_PLY {
             return self.static_eval(s);
         }
+        self.quiets[ply].clear();
+        // Mate distance pruning: no line from here mates sooner than a mate already in hand,
+        // nor is mated later than mated right now (Stockfish, Apeiron).
+        let beta = beta.min(MATE - ply as i32 - 1);
+        alpha = alpha.max(-(MATE - ply as i32));
+        if alpha >= beta {
+            return alpha;
+        }
         let alpha0 = alpha;
         let key = s.hash();
         let mut tt_action: Option<MoveSeq> = None;
@@ -2948,6 +2967,9 @@ impl AlphaBeta {
                     if self.aborted {
                         break 'search Some(0);
                     }
+                    if quiet {
+                        self.quiets[ply].push(act.clone());
+                    }
                     searched += 1;
                     all_proven &= self.proven;
                     if v > best {
@@ -3116,15 +3138,21 @@ impl AlphaBeta {
         if Self::is_tactical(s, act) {
             return;
         }
+        // Gravity updates (Stockfish, Apeiron, Peras): a bonus to the cutting action's moves and
+        // the same malus to the quiet actions searched before it here; entries stay within
+        // `HISTORY_MAX` and move less the closer they are to it.
+        let bonus = (8 * depth * depth).min(4000);
+        let gravity = |h: &mut i32, b: i32| *h += b - *h * b.abs() / HISTORY_MAX;
         for m in act {
-            let h = &mut self.history[history_index(s, m)];
-            *h += depth * depth;
-            if *h > 20000 {
-                for x in self.history.iter_mut() {
-                    *x /= 2;
-                }
+            gravity(&mut self.history[history_index(s, m)], bonus);
+        }
+        let tried = std::mem::take(&mut self.quiets[ply.min(MAX_PLY)]);
+        for q in tried.iter().filter(|q| *q != act) {
+            for m in q {
+                gravity(&mut self.history[history_index(s, m)], -bonus);
             }
         }
+        self.quiets[ply.min(MAX_PLY)] = tried;
         if ply <= MAX_PLY && self.killers[ply][0].as_ref() != Some(act) {
             self.killers[ply][1] = self.killers[ply][0].take();
             self.killers[ply][0] = Some(act.clone());
