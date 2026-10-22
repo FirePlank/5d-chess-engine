@@ -5,9 +5,11 @@
 Embedded NNUE SHA-256:
 `6afdc42781243db129fdefd566f374f4fe1278d359b2becf6789a3a4302c8aa0`.
 
-Measurements use `scripts/performance/pairs.py`: 12 sequential AB/BA pairs after
-warmup, logical CPU 4, main corpus at 100k nodes per position and timeline corpus
-at 10k. Values are paired geometric-mean NPS gains; intervals are estimated 95%
+Initial measurements use `scripts/performance/pairs.py`: 12 sequential AB/BA pairs
+after warmup, main corpus at 100k nodes per position and timeline corpus at 10k.
+The first two experiments used logical CPU 4; later runs use CPU 12 and above-normal
+child priority. The frozen evaluation blend was 50%. Values are paired
+geometric-mean NPS gains; intervals are estimated 95%
 Student-t intervals over pair log ratios. Root preparation is included. No SPRT.
 
 | Candidate | Main gain | Timeline gain | Combined gain (95% interval) | Decision |
@@ -18,6 +20,11 @@ Student-t intervals over pair log ratios. Root preparation is included. No SPRT.
 | Cache compound-reach queries | −4.70% | +0.90% | −2.24% (−4.50% to +0.07%) | Reverted; main-corpus regression |
 | Cache complete local capture gains (24-pair confirmation) | +1.98% | +0.59% | +1.44% (−0.72% to +3.65%) | Reverted; gain not established |
 | Use graph validity instead of clearing edge references | −2.03% | +2.02% | −0.30% (−2.35% to +1.79%) | Reverted; gain not established |
+| Bulk-copy spilled action assignments | −3.28% | −1.78% | −2.67% (−4.09% to −1.24%) | Reverted; regression |
+| Double HCE term cache to 8,192 slots | +0.54% | −0.41% | +0.13% (−2.35% to +2.67%) | Reverted; gain not established |
+| Extract NNUE features once for both views | +1.19% | −1.75% | −0.13% (−1.72% to +1.48%) | Reverted; gain not established |
+| Bulk destination-region merge (24-pair confirmation) | −0.07% | −0.90% | −0.44% (−1.60% to +0.73%) | Reverted; gain not confirmed |
+| Fresh HCE proof of zero local gain (blend 65) | −1.54% | −0.33% | −1.02% (−2.30% to +0.27%) | Reverted; no gain in NPS or subsequent process-cycle run |
 
 The source-mask experiment passed 108 tests (two existing ignores), a differential
 mask-versus-check-list test, and exact ordered action dumps across the perft,
@@ -77,3 +84,83 @@ Ordered action dumps and perft matched. Search reports matched at node caps 2k/2
 and at uncapped depth 2, in addition to every timed pair. Raw output:
 `target/perf-series/06-edge-matrix-pairs.json`; patch:
 `target/perf-series/06-edge-matrix.patch`.
+
+Bulk action assignment passed 108 tests (two existing ignores), including inline,
+spill, growth and retained-capacity transitions, clones, and zero-filled TT
+storage. Ordered generation, perft and all search reports matched, but throughput
+regressed. Raw output: `target/perf-series/07-bulk-actions-pairs.json`; patch:
+`target/perf-series/07-bulk-actions.patch`.
+
+The larger HCE cache passed 108 tests (two existing ignores), direct-value checks
+over all built-in variants and corpus boards, forced collisions, size changes and
+upper-half index coverage. Extended checks on five representative positions up
+to 16 active timelines matched full results across warm searches, MultiPV 3, two
+frozen networks and HCE, including model switches. At skill 4, deterministic
+candidate reports/nodes/proof matched; its existing randomized final choice and
+chosen score were excluded. The synthetic perft stress search was abandoned
+after an excessively long baseline root scan, not counted as a pass. The extra
+3.19 MiB per thread did not establish a throughput gain. Raw outputs:
+`target/perf-series/08-hce-cache-pairs.json` and `08-oracle-matrix.json`; patch:
+`target/perf-series/08-hce-cache.patch`.
+
+The NNUE view transform passed 108 tests (two existing ignores), including cold,
+incremental and reverse accumulators against separate extraction of both views
+over corpus histories and every built-in variant. All timed search reports and
+oracles matched. Raw output: `target/perf-series/09-nnue-views-pairs.json`; patch:
+`target/perf-series/09-nnue-views.patch`.
+
+Bulk region merging passed 108 tests (two existing ignores), 1,024 randomized
+merge comparisons, the same ordered action dump and perft, and every search
+report/oracle comparison. The first 12 pairs suggested +1.68% (−0.31% to +3.72%);
+the separate 24-pair confirmation did not reproduce it. Raw outputs:
+`target/perf-series/10-region-merge-pairs.json` and `10-region-merge-confirm.json`;
+patch: `target/perf-series/10-region-merge.patch`.
+
+After concurrent commit `84895d2` changed the default blend from 50% to 65% and
+the network, local capture caching was retested with both explicitly frozen:
+network SHA-256 `b8aa980a730d77be7ce14283becd0586586f97f33cd236f1a2d7a46b8ebb1fee`,
+blend 65. Twelve longer pairs used 500k/50k node caps (4,500,000/385,938 actual
+nodes), giving main +1.80%, timelines −0.77%, combined +0.57% (−0.37% to +1.51%).
+All traces matched, but there was still no established combined gain, so the
+cache was reverted again. This baseline executable's explicit evaluation options
+reproduce the new configuration; engine changes in `84895d2` are only defaults.
+Raw output: `target/perf-series/05-local-current-long.json`; current-source patch:
+`target/perf-series/05-local-current.patch`.
+
+The fresh-HCE zero-gain shortcut reused existing attack maps to prove there were
+no local captures or quiet promotions. Its proof was consumed immediately after
+a fresh evaluation and cleared on evaluation-cache hits. It passed 111 tests
+(two existing ignores), exhaustive single-piece/target checks, feature equality,
+and extended oracle checks across MultiPV, warm searches, two frozen networks,
+model switches, HCE, and blends 65/100. At skill 4 the deterministic reports,
+nodes and proof matched; the existing randomized final selection was excluded.
+The extended matrix output hashes are recorded in
+`target/perf-series/11-oracle-matrix.json`.
+
+Both binaries loaded the third frozen network above at blend 65. All 12 NPS
+pairs matched main `b880243d945d51cd` / 900,000 nodes and timeline
+`9849dd738e5d0d59` / 83,213 nodes, including every normalized report. Combined
+NPS was −1.02% (−2.30% to +0.27%). A second, separately reported 12-pair run
+collected Windows process cycles as well: main NPS −2.09%, timelines −0.83%,
+combined −1.58% (−3.46% to +0.34%). Nodes per accounted process cycle were
+−2.05%, −0.75%, and −1.52% combined (−3.39% to +0.39%), respectively.
+All oracle comparisons passed in that run too. No gain was established, so the
+engine patch was reverted. Raw outputs: `target/perf-series/11-local-zero-pairs.json`
+and `11-local-zero-cycles.json`; saved patch: `11-local-zero.patch`.
+
+Cycle collection uses `QueryProcessCycleTime` after process exit, with no engine
+instrumentation. It includes initialization, model loading, output, and all
+process threads in user/kernel mode, while NPS uses the engine's search interval.
+It is Windows process cycle accounting, not the PMU `TotalCycles` event or retired
+instructions. A four-pair identical-binary control gave NPS +0.47% (−5.07% to
++6.34%) and nodes per accounted cycle +0.52% (−4.84% to +6.18%); both are consistent
+with zero. This short control showed no clear precision advantage over NPS.
+Raw control: `target/perf-series/aa-process-cycles.json`.
+
+`xperf -pmcsources` exposes `TotalCycles` and `InstructionRetired` on this host,
+but starting a strict ETW PMC recording returned `Access is denied (0x5)`.
+The current token is not an administrator and has no `SeSystemProfilePrivilege`.
+No hardware-counter results are claimed; no tracing session was left running.
+The runner retains optional process-cycle counts, paired intervals, explicit
+blend selection and raw position timings. `scripts/performance/oracle.rs` retains
+the broader deterministic equivalence checks for future candidates.
