@@ -22,7 +22,8 @@ import torch
 
 NB = 12 * 2 * 64 + 4 * 2 * 64   # board features (nnue::NB)
 ROLES = 4                         # nnue::ROLES
-ND = 2 * 54 + 2 * 30 + 4          # dense inputs (nnue::ND)
+# Dense inputs (nnue::ND); NNUE_ND for exports made with more of the handcrafted terms.
+ND = int(__import__('os').environ.get('NNUE_ND', 2 * 54 + 2 * 30 + 4))
 NR = 2 * 12 * 9 * 5 * 2 * 2 + 2 * 12 * 12 * 5 * 2  # relation features (nnue::NR)
 MAGIC = b'KNNUE003'
 REC = np.dtype([('h', '<f4', 4), ('d', '<i2', ND)])
