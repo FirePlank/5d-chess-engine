@@ -2688,17 +2688,17 @@ impl AlphaBeta {
         // then the killers.
         let mut pre_tried: Vec<MoveSeq> = Vec::new();
         let mut tt_ext = 0;
-        if depth >= SING_DEPTH && !excl_node && ply > 0
+        if depth >= SING_DEPTH && self.excluded.is_none() && ply > 0
             && let Some(ta) = tt_action.clone() {
                 let info = self.tt.probe(key, |e| (mate_from_tt(e.score, ply), e.depth as i32, e.bound));
                 if let Some((sc, ed, bound)) = info
                     && ed >= depth - 3 && matches!(bound, Bound::Lower | Bound::Exact) && sc.abs() < MATE - 1000 {
                         let sb = sc - SING_MARGIN * depth;
-                        // The exclusion holds at this node only (a verification search below
-                        // may run its own and puts this one back after).
-                        let outer = (self.excluded.replace(ta), std::mem::replace(&mut self.excl_key, key));
+                        self.excluded = Some(ta);
+                        self.excl_key = key;
                         let v = self.negamax(s, (depth - 1) / 2, ply, sb - 1, sb, false);
-                        (self.excluded, self.excl_key) = outer;
+                        self.excluded = None;
+                        self.excl_key = 0;
                         if self.aborted {
                             return 0;
                         }
@@ -2707,8 +2707,8 @@ impl AlphaBeta {
                         }
                     }
             }
-        let mut remembered: Vec<MoveSeq> = tt_action.iter().filter(|a| !excl_node || self.excluded.as_ref() != Some(*a)).cloned().collect();
-        if excl_node && let Some(x) = &self.excluded {
+        let mut remembered: Vec<MoveSeq> = tt_action.iter().filter(|a| self.excluded.as_ref() != Some(*a)).cloned().collect();
+        if let Some(x) = &self.excluded {
             pre_tried.push(x.clone());
         }
         if ply <= MAX_PLY {
@@ -2720,7 +2720,7 @@ impl AlphaBeta {
             let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act) + ext;
             let sac_line = std::mem::replace(&mut self.sac_line, line);
             // The TT action keeps the node's PV status; killers after it are null-window.
-            let v = if k == 0 && tt_action.is_some() && !(excl_node && self.excluded.as_ref() == tt_action.as_ref()) {
+            let v = if k == 0 && tt_action.is_some() && self.excluded.as_ref() != tt_action.as_ref() {
                 let v = -self.negamax(s, child_depth - 1 + tt_ext, ply + 1, -beta, -alpha, pv);
                 s.unmake(mark);
                 v
