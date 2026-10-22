@@ -2215,6 +2215,13 @@ impl AlphaBeta {
         boards >= 2 && ranks >= RANK_PER_BOARD * boards
     }
 
+    /// Whether the ordering marked a move of the last action `cursor` found as giving check
+    /// (`CHECK_BONUS`; a capture with a promotion can score as high, so callers confirm it).
+    fn checking_coordinate(cursor: &BestFirstCursor) -> bool {
+        let scores = cursor.scores();
+        cursor.last_point().iter().enumerate().any(|(n, &c)| c != 0 && scores.get(n).and_then(|a| a.get(c as usize)).is_some_and(|&v| v >= CHECK_BONUS - 10_000))
+    }
+
     fn is_tactical(s: &State, act: &MoveSeq) -> bool {
         let h = s.get_board_size().1;
         act.iter().any(|m| {
@@ -2753,7 +2760,7 @@ impl AlphaBeta {
                 if searched >= cap && !checks_left && !Self::mated_cap(&mut cap, &mut cap_raised, best) {
                     break;
                 }
-                let mut batch: Vec<(i32, MoveSeq, bool)> = Vec::with_capacity(BATCH);
+                let mut batch: Vec<(i32, MoveSeq, bool, bool)> = Vec::with_capacity(BATCH);
                 let size = batch_size;
                 batch_size = (2 * batch_size).min(BATCH);
                 while batch.len() < size {
@@ -2803,15 +2810,15 @@ impl AlphaBeta {
                                 continue;
                             }
                             let weak = !pv && Self::weak_on_boards(&nb.cursor);
-                            batch.push((self.action_score(s, &act, ply), act, weak));
+                            let check = Self::checking_coordinate(&nb.cursor);
+                            batch.push((self.action_score(s, &act, ply), act, weak, check));
                         }
                     }
                 }
-                batch.sort_by(|a, b| b.0.cmp(&a.0));
-                for (sc, act, weak) in batch {
-                    // (`action_score` adds no check bonus: a sum of captures on several boards
-                    // reached it, which let those combinations past the cap.)
-                    checks_left = false;
+                // Checking actions first (the cursor yields them first), then by score.
+                batch.sort_by(|a, b| b.3.cmp(&a.3).then(b.0.cmp(&a.0)));
+                for (sc, act, weak, check) in batch {
+                    checks_left = check;
                     if searched >= cap && !checks_left && !Self::mated_cap(&mut cap, &mut cap_raised, best) {
                         skipped = true;
                         break;
@@ -2822,6 +2829,19 @@ impl AlphaBeta {
                     let quiet = sc < 10_000;
                     let mut r = 0;
                     let mut child_check = None;
+                    // Past the cap only actions that give check are searched: one whose ordering
+                    // marked it a check (a capture with a promotion can score as high) is
+                    // confirmed here.
+                    if searched >= cap {
+                        let ic = self.in_check(s);
+                        child_check = Some(ic);
+                        if !ic {
+                            s.unmake(mark);
+                            self.sac_line = sac_line;
+                            skipped = true;
+                            continue;
+                        }
+                    }
                     // Checking actions are not reduced: mating lines run through them.
                     if depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet {
                         let ic = self.in_check(s);
