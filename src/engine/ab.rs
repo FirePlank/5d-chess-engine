@@ -315,10 +315,22 @@ const TT_BUCKET: usize = 4;
 
 /// One table slot: an entry and its lock. All-zero bytes are an empty, unlocked slot.
 struct TtSlot {
-    /// Held while the entry is read or written, since actions may live on the heap. Only ever
-    /// tried: a thread finding it held treats the probe as a miss or skips the store.
+    /// Held while the entry is read or written, since actions may live on the heap (see
+    /// `acquire`).
     lock: AtomicBool,
     entry: UnsafeCell<TtEntry>,
+}
+
+impl TtSlot {
+    /// Take the slot's lock, waiting for another thread to let go of it (it is held only to
+    /// copy one entry): a probe or store skipping a held slot could miss the position or put a
+    /// second entry for it in the bucket.
+    #[inline]
+    fn acquire(&self) {
+        while self.lock.swap(true, Ordering::Acquire) {
+            std::hint::spin_loop();
+        }
+    }
 }
 
 /// The transposition table, shared by every search thread: zero-allocated, so creating or
@@ -378,9 +390,7 @@ impl TtTable {
     fn probe<R>(&self, key: u64, f: impl FnOnce(&TtEntry) -> R) -> Option<R> {
         let mut f = Some(f);
         for slot in self.bucket(key) {
-            if slot.lock.swap(true, Ordering::Acquire) {
-                continue;
-            }
+            slot.acquire();
             // SAFETY: the lock gives this thread exclusive access to the entry.
             let e = unsafe { &mut *slot.entry.get() };
             let r = if e.bound != Bound::Empty && e.key == key {
@@ -404,9 +414,7 @@ impl TtTable {
         // shallowest counting each search of age as `TT_AGE_PLIES` plies.
         let (mut target, mut target_value, mut same) = (None, i32::MAX, false);
         for (i, slot) in bucket.iter().enumerate() {
-            if slot.lock.swap(true, Ordering::Acquire) {
-                continue;
-            }
+            slot.acquire();
             // SAFETY: the lock gives this thread exclusive access to the entry.
             let e = unsafe { &*slot.entry.get() };
             let value = if e.bound == Bound::Empty {
@@ -429,9 +437,7 @@ impl TtTable {
         }
         let Some(i) = target else { return };
         let slot = &bucket[i];
-        if slot.lock.swap(true, Ordering::Acquire) {
-            return;
-        }
+        slot.acquire();
         // SAFETY: the lock gives this thread exclusive access to the entry.
         let e = unsafe { &mut *slot.entry.get() };
         // The same position keeps a much deeper bound of this search unless this one is exact;
