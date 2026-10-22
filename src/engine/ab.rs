@@ -1400,8 +1400,25 @@ impl AlphaBeta {
         }
         info.materialize_branch(s);
         let info: &HcInfo = info;
+        // At the root (`checks` collects) capturing travels count too: one that moves the
+        // present back is an action alone, which the root's enumeration reaches only after every
+        // action creating no timeline, if at all; a capture can start a mate as well as a check.
+        let capture: Vec<bool> = travels
+            .iter()
+            .map(|&(_, _, n, i)| {
+                checks.is_some()
+                    && match if n < fba { if let Entry::Arriving { m, .. } = info.entry(n, i) { Some(*m) } else { None } } else { info.branch_departure(i).map(|b| b.0) } {
+                        Some(m) => mover_victim(s, &m).1 != NO_PIECE,
+                        None => false,
+                    }
+            })
+            .collect();
         let mut det = CheckDetector::new(info, s, scratch);
-        travels.retain(|&(_, _, n, i)| det.gives_check(n, i));
+        let mut k = 0;
+        travels.retain(|&(_, _, n, i)| {
+            k += 1;
+            capture[k - 1] || det.gives_check(n, i)
+        });
         det.finish(scratch);
         for &(fa, dep, n, i) in &travels {
             // The travel plus a few legal moves on the other required boards. Search every
