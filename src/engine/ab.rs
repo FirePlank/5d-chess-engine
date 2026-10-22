@@ -2901,12 +2901,9 @@ impl AlphaBeta {
                         break;
                     }
                     let (ext, line) = self.sac_child(s, &act, depth, ply);
-                    // Quiet: no move of the action captures or promotes (an ordering score summed
-                    // over boards tells neither).
-                    let _ = sc;
-                    let quiet = !Self::is_tactical(s, &act);
                     let mark = Self::make(s, &act);
                     let sac_line = std::mem::replace(&mut self.sac_line, line);
+                    let quiet = sc < 10_000;
                     let mut r = 0;
                     let mut child_check = None;
                     // Checking actions are not reduced: mating lines run through them.
