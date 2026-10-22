@@ -149,8 +149,8 @@ const RFP_MARGIN: i32 = 250;
 /// Null move (a pass, i.e. a phantom turn): at non-PV nodes from this depth, when the static
 /// eval is at least beta, search the pass with depth reduced by NMP_R + depth / NMP_DIV.
 const NMP_MIN_DEPTH: i32 = 3;
-const NMP_R: i32 = 2;
-const NMP_DIV: i32 = 4;
+const NMP_R: i32 = 3;
+const NMP_DIV: i32 = 3;
 const DEFAULT_HASH_MB: usize = 64;
 /// Static evaluations are kept within +-EVAL_MAX, well clear of mate scores.
 const EVAL_MAX: i32 = 20000;
@@ -2682,7 +2682,9 @@ impl AlphaBeta {
                 }
             }
             if depth >= NMP_MIN_DEPTH && self.null_child != ply && self.sac_line != Some(s.player()) && Self::has_null_material(s) && self.static_eval(s) >= beta {
-                let r = NMP_R + depth / NMP_DIV;
+                // Deeper and further above beta, a larger reduction (Stockfish, Apeiron: the
+                // excess over beta in about pawns, at most 3 more plies).
+                let r = NMP_R + depth / NMP_DIV + ((self.static_eval(s) - beta) / 500).clamp(0, 3);
                 let mark = s.make_null();
                 let null_child = std::mem::replace(&mut self.null_child, ply + 1);
                 let v = -self.negamax(s, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
