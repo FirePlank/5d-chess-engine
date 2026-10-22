@@ -646,6 +646,7 @@ fn main() {
         "bookeval" => bookeval(&args[2..], &mut out),
         "mate1recall" => mate1recall(&args[2..], &mut out),
         "matescan" => matescan(&args[2..], &mut out),
+        "matekinds" => matekinds(&args[2..], &mut out),
         "abbench" => abbench(
             args.get(2).map(|s| s.as_str()).unwrap_or("data/bench_ab.g"),
             args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20),
@@ -3606,6 +3607,64 @@ fn mate1recall(args: &[String], out: &mut impl Write) {
 /// `matescan <file.g>... [-n max] [-t threads]`: runs the root mate-in-one scan (depth 1) on each
 /// position and reports whether it played a mate, what the scan reported, and the time.
 /// Env as for `mate1recall`, plus M1_PLY (for jsonl games) and M1_SAVE=<path> for mated lines.
+/// How games end in checkmate: the checks on the mated side in the final position, by the
+/// checking piece, physical (same board) or across time/timelines, adjacent or from a distance,
+/// and whether the mating action travelled.
+///   matekinds games.jsonl...
+fn matekinds(args: &[String], out: &mut impl Write) {
+    use kairos::core::check_position::CheckPosition;
+    use kairos::core::variants::{apply_uci_moves, position_from_uci};
+    use std::collections::BTreeMap;
+    let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
+    let (mut games, mut mates) = (0usize, 0usize);
+    for f in args {
+        let text = std::fs::read_to_string(f).expect("games file");
+        for line in text.lines() {
+            games += 1;
+            if json_field(line, "reason") != Some("checkmate") {
+                continue;
+            }
+            let (Some(pos), Some(moves)) = (json_field(line, "position"), json_field(line, "moves")) else { continue };
+            let Ok(mut s) = position_from_uci(pos) else { continue };
+            if apply_uci_moves(&mut s, moves).is_err() {
+                continue;
+            }
+            mates += 1;
+            let last = moves.trim_end().trim_end_matches("submit").trim_end();
+            let last = &last[last.rfind("submit").map(|i| i + 6).unwrap_or(0)..];
+            // A move whose destination names another board: "(0T5)b3(0T1)f7".
+            let travelled = last.split_whitespace().any(|m| m.matches('(').count() > 1);
+            let stm = s.get_present().1;
+            let checks = CheckPosition::for_phantom(&s).checks(!stm, true);
+            let mut seen = std::collections::BTreeSet::new();
+            for m in &checks {
+                // The phantom pass may leave the attacker's board a half-turn off: either colour's board.
+                let p = [!stm, stm].iter().find_map(|&c| s.get_board_ptr(m.from.l(), m.from.t(), c).map(|b| b.get_piece(m.from.xy()))).unwrap_or(b'?') & 0x7f;
+                let (dx, dy, dl, dt) = (m.to.x() - m.from.x(), m.to.y() - m.from.y(), m.to.l() - m.from.l(), m.to.t() - m.from.t());
+                let dist = dx.abs().max(dy.abs()).max(dl.abs()).max(dt.abs());
+                let axes = [dx, dy, dl, dt].iter().filter(|&&v| v != 0).count();
+                let plane = if dl == 0 && dt == 0 { "board" } else if dl == 0 { "time" } else if dt == 0 { "timelines" } else { "time+timelines" };
+                let _ = axes;
+                let knight = (p as char).eq_ignore_ascii_case(&'n');
+                let reach = if knight { "knight" } else if dist > 1 { "line, distant" } else { "adjacent" };
+                let k = format!("{:15} {:14} {}", plane, reach, if travelled { "mating action travelled" } else { "" });
+                if seen.insert(k.clone()) {
+                    *kinds.entry(k).or_default() += 1;
+                }
+            }
+            if checks.is_empty() {
+                *kinds.entry("no check found".into()).or_default() += 1;
+            }
+        }
+    }
+    writeln!(out, "{} games, {} checkmates; check kinds per mate (a mate may have several):", games, mates).unwrap();
+    let mut v: Vec<_> = kinds.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1));
+    for (k, n) in v {
+        writeln!(out, "{:6} {:5.1}%  {}", n, 100.0 * n as f64 / mates.max(1) as f64, k).unwrap();
+    }
+}
+
 fn matescan(args: &[String], out: &mut impl Write) {
     use kairos::core::variants::{apply_uci_moves, position_from_uci};
     use kairos::engine::ab::AlphaBeta;
