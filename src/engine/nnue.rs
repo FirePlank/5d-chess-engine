@@ -38,7 +38,7 @@ pub const ROLE_OPPONENT: u8 = 2;
 pub const ROLE_INACTIVE: u8 = 3;
 /// Dense bridge inputs: both sides' `hce::Sides` counts (side to move first), then active and
 /// inactive timelines, heavy pieces and mandatory boards.
-pub const ND: usize = 2 * hce::si::COUNT + 2 * hce::ex::NNUE_COUNT + 4;
+pub const ND: usize = 2 * hce::si::COUNT + 2 * hce::ex::COUNT + 4;
 /// Most features of one board from one view (64 squares, each a piece and an unmoved flag).
 pub const MAX_BOARD_FEATURES: usize = 128;
 /// Largest layer widths a model may have (the evaluation works in fixed buffers).
@@ -137,12 +137,12 @@ pub fn boards(s: &State) -> impl Iterator<Item = BoardInput<'_>> {
 /// The dense bridge inputs of `s` (side to move's view).
 pub fn dense(sd: &Sides, s: &State) -> [i16; ND] {
     let stm = s.get_present().1 as usize;
-    let (ns, ne) = (hce::si::COUNT, hce::ex::NNUE_COUNT);
+    let (ns, ne) = (hce::si::COUNT, hce::ex::COUNT);
     let mut x = [0i32; ND];
     x[..ns].copy_from_slice(&sd.side[stm]);
     x[ns..2 * ns].copy_from_slice(&sd.side[1 - stm]);
-    x[2 * ns..2 * ns + ne].copy_from_slice(&sd.extra[stm][..ne]);
-    x[2 * ns + ne..2 * ns + 2 * ne].copy_from_slice(&sd.extra[1 - stm][..ne]);
+    x[2 * ns..2 * ns + ne].copy_from_slice(&sd.extra[stm]);
+    x[2 * ns + ne..2 * ns + 2 * ne].copy_from_slice(&sd.extra[1 - stm]);
     let g = &mut x[2 * ns + 2 * ne..];
     g[0] = sd.active;
     g[1] = sd.inactive;
