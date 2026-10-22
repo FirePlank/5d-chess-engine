@@ -1963,7 +1963,7 @@ impl HcCursor {
             match info.find_problem(s, pt, &hc, &mut self.checks) {
                 None => {
                     let act = info.to_action(pt);
-                    hc.remove_point_with(pt, |h| self.ss.push_back(h));
+                    hc.into_remove_point_with(pt, |h| self.ss.push_back(h));
                     self.last.clone_from(pt);
                     return Ok(Some(act));
                 }
@@ -2315,18 +2315,18 @@ impl BestFirstCursor {
             let pt = &self.sc.point;
             let heap = &mut self.heap;
             if let Some(region) = self.excluded.holding(pt) {
-                hc.remove_slice_with(region, |h| heap.push(h, class, fill));
+                hc.into_remove_slice_with(region, |h| heap.push(h, class, fill));
                 continue;
             }
             if let Some(problem) = memo.then(|| self.memo.holding(pt)).flatten() {
                 let _prof = crate::misc::prof::scope(5);
-                hc.remove_slice_with(problem, |h| heap.push(h, class, fill));
+                hc.into_remove_slice_with(problem, |h| heap.push(h, class, fill));
                 continue;
             }
             match info.find_problem(s, pt, &hc, &mut self.checks) {
                 None => {
                     let act = info.to_action(pt);
-                    hc.remove_point_with(pt, |h| heap.push(h, class, fill));
+                    hc.into_remove_point_with(pt, |h| heap.push(h, class, fill));
                     self.last_class = class;
                     self.last.clone_from(pt);
                     return Ok(Some(act));
@@ -2336,7 +2336,7 @@ impl BestFirstCursor {
                     if memo {
                         self.memo.add(&problem);
                     }
-                    hc.remove_slice_with(&problem, |h| heap.push(h, class, fill));
+                    hc.into_remove_slice_with(&problem, |h| heap.push(h, class, fill));
                 }
             }
         }

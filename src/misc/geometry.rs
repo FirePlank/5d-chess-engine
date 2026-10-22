@@ -31,6 +31,11 @@ impl Clone for Hc {
     fn clone(&self) -> Self {
         Hc { k: self.k, w: pooled_copy(&self.w) }
     }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.k = source.k;
+        self.w.clone_from(&source.w);
+    }
 }
 
 impl Drop for Hc {
@@ -142,10 +147,18 @@ impl Hc {
     }
 
     /// Remove a slice the HC is known to intersect; the pieces go to `out` in order.
-    pub fn remove_slice_with(&self, s: &Slice, mut out: impl FnMut(Hc)) {
-        let mut remaining = self.clone();
+    pub fn remove_slice_with(&self, s: &Slice, out: impl FnMut(Hc)) {
+        self.clone().into_remove_slice_with(s, out);
+    }
+
+    /// Remove a slice while reusing the owned HC as the remaining intersection.
+    pub fn into_remove_slice_with(self, s: &Slice, mut out: impl FnMut(Hc)) {
+        let mut remaining = self;
         for (i, fixed) in &s.fixed {
             let i = *i;
+            if remaining[i].is_subset_of(fixed) {
+                continue;
+            }
             let mut x = remaining.clone();
             x[i].minus(fixed);
             // A slice may list coordinates outside this HC: the later pieces must not gain them.
@@ -163,8 +176,13 @@ impl Hc {
     }
 
     /// Everything but the point `p`, as disjoint pieces (in axis order) passed to `out`.
-    pub fn remove_point_with(&self, p: &Point, mut out: impl FnMut(Hc)) {
-        let mut remaining = self.clone();
+    pub fn remove_point_with(&self, p: &Point, out: impl FnMut(Hc)) {
+        self.clone().into_remove_point_with(p, out);
+    }
+
+    /// Remove a point while reusing the owned HC as the remaining prefix.
+    pub fn into_remove_point_with(self, p: &Point, mut out: impl FnMut(Hc)) {
+        let mut remaining = self;
         for i in 0..p.len() {
             if remaining[i].has_other_than(p[i]) {
                 let mut x = remaining.clone();
@@ -192,17 +210,7 @@ impl Hc {
 
     fn remove_intersected(&self, s: &Slice) -> SearchSpace {
         let mut result = SearchSpace::default();
-        let mut remaining = self.clone();
-        for (i, fixed) in &s.fixed {
-            let i = *i;
-            let mut x = remaining.clone();
-            // x[i] = remaining[i] \ fixed; remaining[i] = remaining[i] ∩ fixed.
-            x[i].minus(fixed);
-            remaining[i].and_assign(fixed);
-            if !x[i].is_empty() {
-                result.hcs.push(x);
-            }
-        }
+        self.remove_slice_with(s, |h| result.hcs.push(h));
         result
     }
 
@@ -312,6 +320,77 @@ impl SearchSpace {
             }
             force_back = false;
             current -= 1;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reference_slice(hc: &Hc, s: &Slice) -> Vec<Hc> {
+        let mut out = Vec::new();
+        let mut remaining = hc.clone();
+        for (i, fixed) in &s.fixed {
+            let mut x = remaining.clone();
+            x[*i].minus(fixed);
+            remaining[*i].and_assign(fixed);
+            if !x[*i].is_empty() { out.push(x); }
+        }
+        out
+    }
+
+    fn reference_point(hc: &Hc, p: &Point) -> Vec<Hc> {
+        let mut out = Vec::new();
+        let mut remaining = hc.clone();
+        for (i, &v) in p.iter().enumerate() {
+            if remaining[i].has_other_than(v) {
+                let mut x = remaining.clone();
+                x[i].erase(v);
+                out.push(x);
+            }
+            remaining[i].assign_singleton(v);
+        }
+        out
+    }
+
+    #[test]
+    fn splits_preserve_the_exact_piece_sequence() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+        for case in 0..2048 {
+            let dim = (next() % 12 + 1) as usize;
+            let width = (next() % 4 + 1) as usize * 64;
+            let axes: Vec<_> = (0..dim).map(|_| {
+                let mut set = IntegerSet::new();
+                for _ in 0..next() % 40 { set.insert((next() as usize % width) as Index); }
+                set
+            }).collect();
+            let hc = Hc::new(axes.clone());
+            let mut slice = Slice::new();
+            let mut point = Vec::new();
+            for (i, axis) in axes.iter().enumerate() {
+                if next() & 1 == 0 {
+                    let mut fixed = if next() & 1 == 0 { axis.clone() } else { IntegerSet::new() };
+                    // Include values outside the live set and across word boundaries.
+                    for _ in 0..next() % 40 { fixed.insert((next() as usize % width) as Index); }
+                    slice.fix_axis(i, fixed);
+                }
+                point.push((next() as usize % (hc.k * 64)) as Index);
+            }
+            let expected = reference_slice(&hc, &slice);
+            let mut got = Vec::new();
+            hc.clone().into_remove_slice_with(&slice, |h| got.push(h));
+            assert_eq!(got, expected, "slice case {case}");
+            assert_eq!(hc.remove_slice(&slice).hcs, expected);
+            let expected = reference_point(&hc, &point);
+            let mut got = Vec::new();
+            hc.clone().into_remove_point_with(&point, |h| got.push(h));
+            assert_eq!(got, expected, "point case {case}");
+            assert_eq!(hc.remove_point(&point).hcs, expected);
+            let mut copy = Hc::new(vec![IntegerSet::range(512)]);
+            copy.clone_from(&hc);
+            assert_eq!(copy, hc);
         }
     }
 }
