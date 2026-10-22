@@ -57,3 +57,39 @@ uncommitted bucketed TT). Items marked (v) were checked by hand against the code
 
 Aborted-iteration handling, PV-node TT (no cut), exact integer NNUE inference with reference
 tests, sparse affine on non-zero inputs, eval cache per side to move.
+
+## D. Status (2026-10-23)
+
+Bug fixes: 4000-game non-regression SPRTs on GitHub (10+0.1, mixed.g), merged when Elo + error >= 0.
+Techniques: 8775-game SPRTs, merged when Elo - error > 0 (removals as non-regressions).
+
+| Item | Outcome |
+| --- | --- |
+| A1 excluded action per node | merged e27b350 (-0.6 +/- 6.9) |
+| A2 double null | merged 64e4b23 (+0.4 +/- 7.6) |
+| A3 terminal with stale TT action | merged 727c91e (+1.8 +/- 7.5) |
+| A4 fail-low upper bound after pruning | rejected: always storing the upper bound hid the k7/p*n6 puzzle mate |
+| A5 exact with skipped actions | merged 593c8f0 as a lower bound |
+| A6 fail-low keeps the TT action | merged 2eb8d4d, reverted 7bb8125: hid the puzzle mate |
+| A7 history colour | merged 1a1eafd (+0.2 +/- 9.3) |
+| A8 dead checks_left | removed eed4fca (behavior-identical) |
+| A9 quiet by summed score | merged 2aad730 (-1.6 +/- 7.2) |
+| A10 qsearch clamp / in-check leaf | clamp merged 604fc14 (+3.9 +/- 6.8); fail-low in check hid the puzzle mate, kept static eval; MAX_PLY in check: maxply_check queued |
+| A11 K_DEF / DEF_BOARD | computed once 42a5bd5 (behavior-identical) |
+| A12 falling-eval units | merged 7fc2ea4 (-3.3 +/- 9.0) |
+| A13 TT ageing / proofs / locks | buckets 850269b, follow-ups ff150fc (-4.1 +/- 7.2), lock waits 91266f8 |
+| Mate distance pruning | merged d8cc8fa (-1.0 +/- 5.1, by request) |
+| History gravity and malus | merged 26786d2 (+4.8 +/- 6.7, by request) |
+| Improving RFP at every depth | rejected: suite 254 vs 261 mates |
+| TT eval refinement | skipped: built on the rejected improving code |
+| Null reduction by depth and excess | rejected (-4.6 +/- 6.5) |
+| LMR history term | rejected (+2.3 +/- 6.3) |
+| Quiet futility | rejected (+0.7 +/- 6.6) |
+| Singular multi-cut / negative ext. | rejected (-5.8 +/- 6.7) |
+| Razoring | rejected: lost 33 suite mates |
+| Aspiration re-centring | rejected (-9.2 +/- 8.0, local SPRT) |
+| Sacrifice rule removal | merged 24962cb (+4.3 +/- 5.9) |
+| Capturing travels at the root | v1 -13.7; v2 (searched last) merged 3c3853b (+0.2 +/- 5.2) |
+| NNUE: board cache by key, chess terms memoized | 1549b8f, 9ad5aea (speed, oracle-identical) |
+| NNUE past boards retrained | merged e2c166c (+25.2 +/- 9.5) |
+| Queued | maxply_check, singular_double, corr_history, capture_history, order_traits, time_stable (GitHub); policy_net, lmp_grow, tt_cut_slack, lmr_research (local) |
