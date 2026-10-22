@@ -734,6 +734,11 @@ pub trait TermSource {
         None
     }
     fn past_put(&mut self, _key: u64, _v: [i32; 2]) {}
+    /// The standard-chess terms of board `b` (`chess::board_chess`), memoized where the terms
+    /// are.
+    fn chess(&mut self, b: &Board, w: i32, h: i32) -> BoardChess {
+        chess::board_chess(b, w, h)
+    }
 }
 
 /// Terms computed on every request.
@@ -749,6 +754,8 @@ impl TermSource for Direct {
 pub struct TermCache {
     size: (i32, i32),
     slots: Vec<(Board, bool, BoardTerms)>,
+    /// Each slot's standard-chess terms, once asked for (`chess`).
+    chess: Vec<Option<BoardChess>>,
     past: Vec<(u64, [i32; 2])>,
 }
 
@@ -757,8 +764,21 @@ impl Default for TermCache {
         TermCache {
             size: (0, 0),
             slots: vec![(Board::default(), false, BoardTerms::ZERO); 1 << 12],
+            chess: vec![None; 1 << 12],
             past: vec![(0, [0; 2]); 1 << 14],
         }
+    }
+}
+
+impl TermCache {
+    #[inline]
+    fn slot(&self, b: &Board) -> usize {
+        let mut k = 0x9e3779b97f4a7c15u64;
+        for x in b.raw_bbs() {
+            k = (k ^ x).wrapping_mul(0xbf58476d1ce4e5b9);
+            k ^= k >> 29;
+        }
+        (k >> 52) as usize & (self.slots.len() - 1)
     }
 }
 
@@ -778,17 +798,21 @@ impl TermSource for TermCache {
             self.size = (w, h);
             self.slots.iter_mut().for_each(|e| e.1 = false);
         }
-        let mut k = 0x9e3779b97f4a7c15u64;
-        for x in b.raw_bbs() {
-            k = (k ^ x).wrapping_mul(0xbf58476d1ce4e5b9);
-            k ^= k >> 29;
-        }
-        let i = (k >> 52) as usize & (self.slots.len() - 1);
+        let i = self.slot(b);
         let e = &mut self.slots[i];
         if !e.1 || e.0 != *b {
             *e = (*b, true, board_terms(b, w, h));
+            self.chess[i] = None;
         }
-        &e.2
+        &self.slots[i].2
+    }
+    fn chess(&mut self, b: &Board, w: i32, h: i32) -> BoardChess {
+        let i = self.slot(b);
+        // Only a slot holding this very board (its terms were just asked for) keeps them.
+        if self.size != (w, h) || !self.slots[i].1 || self.slots[i].0 != *b {
+            return chess::board_chess(b, w, h);
+        }
+        *self.chess[i].get_or_insert_with(|| chess::board_chess(b, w, h))
     }
 }
 
@@ -819,6 +843,8 @@ pub fn sides_with(s: &State, src: &mut impl TermSource) -> Sides {
         let (t, c) = s.get_timeline_end(l);
         let b = s.board(l, t, c);
         let active = l >= amin && l <= amax;
+        // (Before the terms: those borrow the source for the rest of the iteration.)
+        let bc = (active && chess_on).then(|| src.chess(b, w, h));
         let bt = src.terms(b, w, h);
         if let Some(a) = atts.get_mut((l - l_min) as usize) {
             *a = [bt.att[0], bt.att[1], bt.att_nr[0], bt.att_nr[1]];
@@ -832,8 +858,7 @@ pub fn sides_with(s: &State, src: &mut impl TermSource) -> Sides {
                     sd.extra[c][i] += bt.extra[c][i];
                 }
             }
-            if chess_on {
-                let bc: BoardChess = chess::board_chess(b, w, h);
+            if let Some(bc) = bc {
                 for d in 0..2 {
                     for k in 0..chess::NG {
                         sd.chess[d][k] += bc.v[d][k];
