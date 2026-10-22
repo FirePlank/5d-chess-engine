@@ -2170,6 +2170,11 @@ impl BestFirstCursor {
         &self.last
     }
 
+    /// Per axis, each coordinate's ordering score.
+    pub fn scores(&self) -> &[Vec<i32>] {
+        &self.heap.scores
+    }
+
     /// Enumerate `ss` (of the context `info`) from the start under the current ordering.
     pub fn restart(&mut self, info: &HcInfo, ss: SearchSpace) {
         self.limit_below = 0;
