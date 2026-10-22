@@ -48,9 +48,14 @@ fn main() {
         }
         for (model, path) in args[6..].iter().enumerate() {
             assert!(e.set_option("EvalFile", &OptionValue::Str(path.clone())));
-            for warm in 0..2 {
+            for warm in 0..3 {
                 println!("pos {pos} model {model} warm {warm}");
-                let best = e.find_best_move(&state, &limits, &stop, &mut |m| println!("{}", report(&m)));
+                let mut run_limits = limits.clone();
+                if warm == 2 {
+                    run_limits.resume = true;
+                    run_limits.depth = limits.depth.map(|d| d.saturating_add(1));
+                }
+                let best = e.find_best_move(&state, &run_limits, &stop, &mut |m| println!("{}", report(&m)));
                 if skill == 8 {
                     println!("nodes {} score {} proven {} best {}", e.last_search_nodes(), e.last_score(),
                              e.last_proven(), best.map_or_else(|| "none".into(), |m| m.to_string()));
