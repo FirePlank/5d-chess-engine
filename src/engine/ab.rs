@@ -1359,7 +1359,7 @@ impl AlphaBeta {
     /// (branching, or touching optional boards). A check with no evasion within
     /// `TRAVEL_MATE_STEPS` hypercuboids is a mate; travels tried are pushed to `checks`.
     #[allow(clippy::too_many_arguments)]
-    fn travel_mate(&mut self, s: &mut State, info: &mut HcInfo, ss: &SearchSpace, scratch: &mut OrderScratch, mut checks: Option<&mut Vec<MoveSeq>>, completions: usize, steps: Option<u32>) -> Option<MoveSeq> {
+    fn travel_mate(&mut self, s: &mut State, info: &mut HcInfo, ss: &SearchSpace, scratch: &mut OrderScratch, mut checks: Option<&mut Vec<MoveSeq>>, mut captures: Option<&mut Vec<MoveSeq>>, completions: usize, steps: Option<u32>) -> Option<MoveSeq> {
         let dim = info.dimension();
         let fba = info.first_branch_axis();
         let present = s.get_present();
@@ -1400,10 +1400,30 @@ impl AlphaBeta {
         }
         info.materialize_branch(s);
         let info: &HcInfo = info;
+        // With `captures` asked for (the root), capturing travels are kept too: one moving the
+        // present back is an action alone, which the root's enumeration reaches only after every
+        // action creating no timeline. They get one legal completion each and no mate test.
+        let capture: Vec<bool> = travels
+            .iter()
+            .map(|&(_, _, n, i)| {
+                captures.is_some()
+                    && match if n < fba { if let Entry::Arriving { m, .. } = info.entry(n, i) { Some(*m) } else { None } } else { info.branch_departure(i).map(|b| b.0) } {
+                        Some(m) => mover_victim(s, &m).1 != NO_PIECE,
+                        None => false,
+                    }
+            })
+            .collect();
         let mut det = CheckDetector::new(info, s, scratch);
-        travels.retain(|&(_, _, n, i)| det.gives_check(n, i));
+        let kept: Vec<((usize, Index, usize, Index), bool)> = travels
+            .iter()
+            .zip(&capture)
+            .filter_map(|(&t, &c)| {
+                let check = det.gives_check(t.2, t.3);
+                (check || c).then_some((t, check))
+            })
+            .collect();
         det.finish(scratch);
-        for &(fa, dep, n, i) in &travels {
+        for &((fa, dep, n, i), check) in &kept {
             // The travel plus a few legal moves on the other required boards. Search every
             // hypercuboid holding it: legal completions need not lie in the first.
             let mut space = Vec::new();
@@ -1430,6 +1450,12 @@ impl AlphaBeta {
             let mut probe = BestFirstCursor::default();
             self.start_actions(s, info, &mut probe, scratch, SearchSpace::from_vec(space), false);
             probe.set_budget(steps);
+            if !check {
+                if let (Some(c), Some(act)) = (captures.as_deref_mut(), probe.next(info, s)) {
+                    c.push(act);
+                }
+                continue;
+            }
             for k in 0..completions {
                 if interrupted() {
                     return None;
@@ -2791,7 +2817,7 @@ impl AlphaBeta {
         if ply <= TRAVEL_MATE_PLY {
             let mate = {
                 let NodeBufs { info, order, .. } = &mut *nb;
-                self.travel_mate(s, info, &ss, order, if ply == 1 { Some(&mut tchecks) } else { None }, TRAVEL_MATE_COMPLETIONS, None)
+                self.travel_mate(s, info, &ss, order, if ply == 1 { Some(&mut tchecks) } else { None }, None, TRAVEL_MATE_COMPLETIONS, None)
             };
             if let Some(act) = mate {
                 self.bufs.push(nb);
@@ -3645,6 +3671,7 @@ impl AlphaBeta {
         // boards, late-ordered checking travels (`travel_mate`, which also become root actions),
         // then a scan of every legal action, checks first.
         let mut travel_checks: Vec<MoveSeq> = Vec::new();
+        let mut travel_captures: Vec<MoveSeq> = Vec::new();
         let scan_start = Instant::now();
         let (budget, recheck) = self.root_mate_budget(plan.as_ref());
         self.mate_recheck = recheck;
@@ -3656,7 +3683,7 @@ impl AlphaBeta {
             let probed = self
                 .lone_travel_mate(&mut s, &hc)
                 .or_else(|| self.future_mate_in_one(&mut s, &hc, &ss, &mut scratch))
-                .or_else(|| self.travel_mate(&mut s, &mut hc, &ss, &mut scratch, Some(&mut travel_checks), ROOT_TRAVEL_MATE_COMPLETIONS, Some(ROOT_PROBE_STEPS)));
+                .or_else(|| self.travel_mate(&mut s, &mut hc, &ss, &mut scratch, Some(&mut travel_checks), Some(&mut travel_captures), ROOT_TRAVEL_MATE_COMPLETIONS, Some(ROOT_PROBE_STEPS)));
             match probed {
                 Some(m) => (Some(m), None),
                 None => match self.root_mate_scan(&mut s, &mut hc, &ss, &mut scratch, &budget) {
@@ -3754,6 +3781,13 @@ impl AlphaBeta {
             }
         }
         roots.sort_by(|a, b| b.0.cmp(&a.0));
+        // Capturing travels of that kind too, after every other action: never left out, but
+        // searched last (reduced like other late actions), as most of them only lose material.
+        for a in travel_captures {
+            if !roots.iter().any(|r| r.1 == a) {
+                roots.push((i32::MIN / 2, a));
+            }
+        }
         // The probe's mate is a root action, searched first: every depth's line (and a
         // resumed search) has it.
         if let Some(m) = &future_mate {
