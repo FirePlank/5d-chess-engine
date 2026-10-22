@@ -59,13 +59,6 @@ const SING_DEPTH: i32 = 4;
 const SING_MARGIN: i32 = 100;
 const LMR_MIN_DEPTH: i32 = 3;
 const LMR_MIN_INDEX: usize = 4;
-/// Board-rank pruning (`board_ranks`): from this many actions searched, a quiet action that
-/// plays two or more boards and gives no check is skipped at non-PV nodes when the ranks of
-/// its moves in their boards' orders sum to this much per board or more. (Measured at
-/// many-timeline nodes: such actions are four in ten of those searched there and give 0.3% of
-/// their cutoffs.)
-const BOARD_RANK_MIN_INDEX: usize = 8;
-const RANK_PER_BOARD: u32 = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
 const ROOT_LMR_MIN_INDEX: usize = 6;
@@ -2198,23 +2191,6 @@ impl AlphaBeta {
         out
     }
 
-    /// Whether the last action `cursor` found plays two or more boards and its moves' ranks in
-    /// their boards' orders sum to `RANK_PER_BOARD` per board or more.
-    fn weak_on_boards(cursor: &BestFirstCursor) -> bool {
-        let scores = cursor.scores();
-        let (mut ranks, mut boards) = (0u32, 0u32);
-        for (n, &c) in cursor.last_point().iter().enumerate() {
-            // Coordinate 0 is the null move (a board left unplayed).
-            if c == 0 {
-                continue;
-            }
-            let Some(&v) = scores.get(n).and_then(|a| a.get(c as usize)) else { return false };
-            boards += 1;
-            ranks += scores[n].iter().filter(|&&x| x > v).count() as u32;
-        }
-        boards >= 2 && ranks >= RANK_PER_BOARD * boards
-    }
-
     fn is_tactical(s: &State, act: &MoveSeq) -> bool {
         let h = s.get_board_size().1;
         act.iter().any(|m| {
@@ -2753,7 +2729,7 @@ impl AlphaBeta {
                 if searched >= cap && !checks_left && !Self::mated_cap(&mut cap, &mut cap_raised, best) {
                     break;
                 }
-                let mut batch: Vec<(i32, MoveSeq, bool)> = Vec::with_capacity(BATCH);
+                let mut batch: Vec<(i32, MoveSeq)> = Vec::with_capacity(BATCH);
                 let size = batch_size;
                 batch_size = (2 * batch_size).min(BATCH);
                 while batch.len() < size {
@@ -2802,13 +2778,12 @@ impl AlphaBeta {
                                 skipped = true;
                                 continue;
                             }
-                            let weak = !pv && Self::weak_on_boards(&nb.cursor);
-                            batch.push((self.action_score(s, &act, ply), act, weak));
+                            batch.push((self.action_score(s, &act, ply), act));
                         }
                     }
                 }
                 batch.sort_by(|a, b| b.0.cmp(&a.0));
-                for (sc, act, weak) in batch {
+                for (sc, act) in batch {
                     // (`action_score` adds no check bonus: a sum of captures on several boards
                     // reached it, which let those combinations past the cap.)
                     checks_left = false;
@@ -2829,12 +2804,6 @@ impl AlphaBeta {
                         if !ic {
                             r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
                         }
-                    }
-                    if weak && quiet && searched >= BOARD_RANK_MIN_INDEX && !*child_check.get_or_insert_with(|| self.in_check(s)) {
-                        s.unmake(mark);
-                        self.sac_line = sac_line;
-                        skipped = true;
-                        continue;
                     }
                     let mut v;
                     let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act) + ext;
