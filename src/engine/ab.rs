@@ -808,15 +808,16 @@ fn exchange_loss(b: &Board, to: i32, player: bool, mover_value: i32) -> i32 {
 }
 
 #[inline]
-fn history_index_of(mover: Piece, m: &FullMove) -> usize {
+/// History slot of a move by `black` (or white) of piece kind `mover` (colour-normalized).
+fn history_index_of(mover: Piece, m: &FullMove, black: bool) -> usize {
     let pc = mover as usize;
     let d = m.to - m.from;
     let k = (pc * 64 + m.to.xy() as usize) * 16 + (((d.t() + 2).clamp(0, 3)) * 4 + (d.l().signum() + 1)) as usize;
-    k & 0xffff
+    (k & 0xffff) | (black as usize) << 16
 }
 
 fn history_index(s: &State, m: &FullMove) -> usize {
-    history_index_of(mover_victim(s, m).0, m)
+    history_index_of(mover_victim(s, m).0, m, s.get_present().1)
 }
 
 /// Whether a semimove gives check: anything on its result board attacking an enemy royal
@@ -917,7 +918,7 @@ impl<'a> CheckDetector<'a> {
 struct PhysStatic {
     /// Score without the history value and the check bonus.
     base: i32,
-    history: u16,
+    history: u32,
     capture: bool,
     /// Gives check on its own board.
     physical_check: bool,
@@ -982,7 +983,7 @@ impl AlphaBeta {
             local_vals: super::local::values_from(&hce[hce::fi::MAT_A..hce::fi::MAT_A + 10]),
             hce,
             tt,
-            history: vec![0; 1 << 16],
+            history: vec![0; 2 << 16],
             killers: vec![[None, None]; MAX_PLY + 1],
             qkillers: vec![None; MAX_PLY + 1],
             nodes: 0,
@@ -1132,7 +1133,7 @@ impl AlphaBeta {
         if mover == KING_W || mover == COMMON_KING_W {
             base -= 200;
         }
-        PhysStatic { base, history: history_index_of(mover, m) as u16, capture: victim != NO_PIECE, physical_check: has_physical_check(b, !s.get_present().1) }
+        PhysStatic { base, history: history_index_of(mover, m, s.get_present().1) as u32, capture: victim != NO_PIECE, physical_check: has_physical_check(b, !s.get_present().1) }
     }
 
     fn coord_score(&self, s: &State, info: &HcInfo, n: usize, i: Index, checks: &mut Option<CheckDetector>, history: Option<i32>) -> i32 {
@@ -1147,7 +1148,7 @@ impl AlphaBeta {
                 if victim != NO_PIECE {
                     sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
                 } else {
-                    sc += history.unwrap_or_else(|| self.history[history_index_of(mover, m)]).clamp(-5000, 5000);
+                    sc += history.unwrap_or_else(|| self.history[history_index_of(mover, m, s.get_present().1)]).clamp(-5000, 5000);
                 }
                 if (mover == PAWN_W || mover == BRAWN_W) && m.to.y() == promotion_rank(s.get_board_size().1, s.get_present().1) {
                     sc += 9000;
@@ -1213,7 +1214,7 @@ impl AlphaBeta {
                 hist.resize(u[n].max().map(|i| i as usize + 1).unwrap_or(0), 0);
                 for i in u[n].iter() {
                     if let Some((m, mover)) = info.branch_arrival(i) {
-                        hist[i as usize] = self.history[history_index_of(mover, &m)];
+                        hist[i as usize] = self.history[history_index_of(mover, &m, s.get_present().1)];
                     }
                 }
                 sc.push(self.coord_score(s, info, n, 0, &mut detector, None));
@@ -2237,7 +2238,7 @@ impl AlphaBeta {
             if victim != NO_PIECE {
                 sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
             } else {
-                sc += self.history[history_index_of(mover, m)].clamp(-5000, 5000) / 4;
+                sc += self.history[history_index_of(mover, m, s.get_present().1)].clamp(-5000, 5000) / 4;
             }
             if m.from.tl() != m.to.tl() && victim == NO_PIECE {
                 sc -= 300;
