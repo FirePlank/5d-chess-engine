@@ -1,7 +1,7 @@
 {
-  "name": "nnue_deep210_w30",
-  "old": "8147bad",
-  "games": 8775,
+  "name": "sac_nodes_v2",
+  "old": "d2a8490",
+  "games": 4000,
   "shards": 39,
   "tc": "tc 10+0.1",
   "elo0": 0,
