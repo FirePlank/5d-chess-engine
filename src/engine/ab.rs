@@ -2593,9 +2593,13 @@ impl AlphaBeta {
     /// attack would never be searched); with depth to spare, the first one of a line is also
     /// searched deeper, as at the root.
     fn sac_child(&self, s: &State, act: &MoveSeq, depth: i32, ply: usize) -> (i32, Option<bool>) {
-        // Off: the search finds these sacrifices without the rule (non-regression test).
-        let _ = (s, act, depth, ply);
-        (0, self.sac_line)
+        let _ = ply;
+        if depth > NMP_MIN_DEPTH && act.iter().any(|m| super::sac::is_sac_travel(s, m)) {
+            let ext = if depth >= 6 && self.sac_line.is_none() { SAC_ROOT_EXT } else { 0 };
+            (ext, Some(!s.player()))
+        } else {
+            (0, self.sac_line)
+        }
     }
 
     fn search_child(&mut self, s: &mut State, mark: Mark, first: bool, depth: i32, ply: usize, alpha: i32, beta: i32, pv: bool) -> i32 {
@@ -3880,7 +3884,7 @@ impl AlphaBeta {
         // The checking sacrifices by time travel among the root actions (`sac::is_sac_travel`).
         let mut sig: Vec<FullMove> = Vec::new();
         for m in roots.iter().flat_map(|r| r.1.iter()) {
-            if false && !sig.contains(m) && super::sac::is_sac_travel(root, m) {
+            if !sig.contains(m) && super::sac::is_sac_travel(root, m) {
                 sig.push(*m);
             }
         }
