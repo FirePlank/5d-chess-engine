@@ -2625,7 +2625,8 @@ impl AlphaBeta {
             return 0;
         }
         if ply >= MAX_PLY {
-            return self.static_eval(s);
+            // In check the static evaluation means nothing: a draw score, as Stockfish.
+            return if known_check.unwrap_or_else(|| self.in_check(s)) { 0 } else { self.static_eval(s) };
         }
         self.quiets[ply].clear();
         // Mate distance pruning: no line from here mates sooner than a mate already in hand,
