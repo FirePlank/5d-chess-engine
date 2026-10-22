@@ -609,14 +609,11 @@ impl Cache {
         self.flags.iter_mut().for_each(|f| *f = 0);
     }
 
+    /// The slot of the board at (`l`, `t`, `c`) of `s`: from the board key the multiverse keeps
+    /// (an entry still matches only the very board, so the key only places it).
     #[inline]
-    fn slot(b: &Board, h: i32) -> usize {
-        let mut k = 0x9e3779b97f4a7c15u64 ^ h as u64;
-        for x in b.raw_bbs() {
-            k = (k ^ x).wrapping_mul(0xbf58476d1ce4e5b9);
-            k ^= k >> 29;
-        }
-        (k >> (64 - Self::BITS)) as usize
+    fn slot(s: &State, l: i32, t: i32, c: bool) -> usize {
+        (s.multiverse().key_of(l, t, c).wrapping_mul(0x9e3779b97f4a7c15) >> (64 - Self::BITS)) as usize
     }
 
     /// The embedding of latest board `bi` of `s` (boards of height `h`) for side to move `stm`.
@@ -630,7 +627,7 @@ impl Cache {
             self.accs = vec![0; n * 2 * m.acc];
             self.embs = vec![0; n * 2 * m.emb];
         }
-        let i = Self::slot(b, h);
+        let i = Self::slot(s, bi.l, bi.t, bi.c);
         let bit = 2u8 << stm as u8;
         let hit = self.flags[i] & 1 != 0 && self.keys[i] == (*b, h);
         if !hit || self.flags[i] & bit == 0 {
@@ -646,7 +643,7 @@ impl Cache {
                 for _ in 0..UPDATE_BACK {
                     (t, c) = if c { (t, false) } else { (t - 1, true) };
                     let Some(p) = s.get_board_ptr(bi.l, t, c) else { break };
-                    let j = Self::slot(p, h);
+                    let j = Self::slot(s, bi.l, t, c);
                     if self.flags[j] & 1 != 0 && self.keys[j] == (*p, h) {
                         from = Some((p, j));
                         break;
