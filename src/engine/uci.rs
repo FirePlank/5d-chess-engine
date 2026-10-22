@@ -81,7 +81,7 @@ pub fn run(engine: AlphaBeta) {
                 out("option name MateVerify type string default auto");
                 out("option name Skill Level type spin default 8 min 1 max 8");
                 out("option name EvalFile type string default <empty>");
-                out("option name EvalBlend type spin default 65 min 0 max 100");
+                out("option name EvalBlend type spin default 80 min 0 max 100");
                 out("5duciok");
             }
             "isready" => out("readyok"),
