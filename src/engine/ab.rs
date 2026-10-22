@@ -66,9 +66,6 @@ const LMR_MIN_INDEX: usize = 4;
 /// their cutoffs.)
 const BOARD_RANK_MIN_INDEX: usize = 8;
 const RANK_PER_BOARD: u32 = 4;
-/// Deepest node where board-rank pruning skips an action; deeper, the action is searched one
-/// ply shallower instead, so a quiet multi-board move a mate needs is still found with time.
-const BOARD_RANK_MAX_DEPTH: i32 = 4;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
 const ROOT_LMR_MIN_INDEX: usize = 6;
@@ -2833,17 +2830,11 @@ impl AlphaBeta {
                             r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
                         }
                     }
-                    // Never while every action searched so far loses to a mate (a skipped one may
-                    // escape it) or a mate is at stake in the window (it may run through one).
-                    let mates = best <= -MATE + 1000 || alpha.abs() >= MATE - 1000 || beta.abs() >= MATE - 1000;
-                    if weak && quiet && !mates && searched >= BOARD_RANK_MIN_INDEX && !*child_check.get_or_insert_with(|| self.in_check(s)) {
-                        if depth <= BOARD_RANK_MAX_DEPTH {
-                            s.unmake(mark);
-                            self.sac_line = sac_line;
-                            skipped = true;
-                            continue;
-                        }
-                        r = (r + 1).min(depth - 2);
+                    if weak && quiet && searched >= BOARD_RANK_MIN_INDEX && !*child_check.get_or_insert_with(|| self.in_check(s)) {
+                        s.unmake(mark);
+                        self.sac_line = sac_line;
+                        skipped = true;
+                        continue;
                     }
                     let mut v;
                     let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act) + ext;
