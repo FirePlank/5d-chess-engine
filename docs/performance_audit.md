@@ -3,8 +3,9 @@
 Updated 2026-10-22. **The benchmark repair is complete; implementation experiments
 are underway, one candidate at a time.**
 
-Eleven experiments preserved the oracle but did not establish a combined speed gain;
-their patches were reverted, including local capture caching at longer budgets.
+Eleven experiments preserved the oracle. Reduced HC copying was restored and
+accepted at the user's direction after its process-cycle retest; ten other
+patches remain reverted, including local capture caching at longer budgets.
 The fresh-HCE zero-gain shortcut also failed its NPS and process-cycle comparisons.
 The runner now optionally records Windows process cycles per node alongside NPS;
 actual ETW hardware-counter recording was denied by this session's privileges.

@@ -15,7 +15,7 @@ Student-t intervals over pair log ratios. Root preparation is included. No SPRT.
 | Candidate | Main gain | Timeline gain | Combined gain (95% interval) | Decision |
 |---|---:|---:|---|---|
 | Checking-source masks instead of cached move lists | −0.66% | −0.76% | −0.69% (−3.94% to +2.66%) | Reverted; gain not established |
-| Fewer HC copies (24-pair confirmation) | +0.42% | −3.03% | −1.14% (−4.48% to +2.32%) | Reverted; gain not confirmed |
+| Fewer HC copies (24-pair confirmation) | +0.42% | −3.03% | −1.14% (−4.48% to +2.32%) | Initially reverted; later restored at user direction after cycle retest |
 | Reuse node action batches | −0.44% | −1.25% | −0.82% (−1.80% to +0.17%) | Reverted; timeline regression |
 | Cache compound-reach queries | −4.70% | +0.90% | −2.24% (−4.50% to +0.07%) | Reverted; main-corpus regression |
 | Cache complete local capture gains (24-pair confirmation) | +1.98% | +0.59% | +1.44% (−0.72% to +3.65%) | Reverted; gain not established |
@@ -189,3 +189,14 @@ no engine patch was restored or accepted from this screen.
 Raw outputs: `target/perf-series/05-local-cycle-retest.json`,
 `02-hc-cycle-retest.json`, and `10-region-cycle-retest.json`. Converted cycle/node
 intervals and per-suite summaries are saved in `quick-cycle-retests-summary.json`.
+
+At the user's direction, reduced HC copying is now accepted despite the remaining
+measurement uncertainty. It removes the redundant clone of an owned HC before
+splitting, skips slice differences known to be empty, and reuses clone-from
+storage. A fresh release build on current main passed all 108 tests (two existing
+ignores), the exact 17,691-line ordered action dump and perft oracle above, and
+all full-corpus search checks in `target/perf-series/12-hc-accepted-oracle.json`.
+The latter two-pair run validates the rebuilt executable; the six-pair retest
+above remains the adoption evidence, not a proven confidence-bound speed claim.
+Subsequent experiments compare against this HC-enabled baseline, with the same
+frozen network and blend 65.
