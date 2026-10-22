@@ -8,7 +8,7 @@ use crate::core::state::State;
 
 use super::chess::{self, BoardChess};
 
-pub const NF: usize = 115;
+pub const NF: usize = 126;
 
 /// The standard-chess terms are only worked out with at most this many active timelines (their
 /// fade is zero beyond).
@@ -106,17 +106,20 @@ pub mod fi {
     /// Own royals that left a timeline: active boards without an own royal and the enemy pieces
     /// on them (white's minus black's).
     pub const KL: usize = 93;
+    /// What closes the lines to own royals, and time-travel checks onto past boards
+    /// (`ex::RAY_PAWN` ..= `ex::PAST_CHECK_SAFE`), white's minus black's.
+    pub const RAY: usize = 95;
     /// Standard-chess terms of the active boards (`chess`): material, piece-square tables, pawn
     /// structure, pieces, threats, king safety, mobility; white's minus black's, in centipawns of
     /// Peras' scale, faded with the number of active timelines (`FADE`).
-    pub const CH: usize = 95;
+    pub const CH: usize = 106;
     /// Piece counts (pawn, knight, bishop, rook, queen) faded with the same factor: weights
     /// that take the standard material values over from `MAT_A` on few timelines.
-    pub const CH_MF: usize = 102;
+    pub const CH_MF: usize = 113;
     /// Fade factors by number of active timelines 1..8 (8: and more); weights only (the
     /// features are 0).
-    pub const FADE: usize = 107;
-    pub const END: usize = 115;
+    pub const FADE: usize = 118;
+    pub const END: usize = 126;
 }
 
 pub const FEATURE_NAMES: [&str; NF] = [
@@ -135,6 +138,8 @@ pub const FEATURE_NAMES: [&str; NF] = [
     "tl_lost", "to_move", "zone_mand_stm", "zone_mand_opp",
     "def_hot", "def_board", "travel_hot",
     "kingless", "kl_swarm",
+    "ray_pawn", "ray_piece", "ray_tied", "ray5_open1", "ray5_open2", "ray5_open3", "ray5_pawn", "ray5_piece",
+    "ray5_tied", "past_check", "past_check_safe",
     "ch_mat", "ch_psqt", "ch_pawn", "ch_piece", "ch_threat", "ch_king", "ch_mob",
     "chm_pawn", "chm_knight", "chm_bishop", "chm_rook", "chm_queen",
     "fade1", "fade2", "fade3", "fade4", "fade5", "fade6", "fade7", "fade8",
@@ -262,6 +267,12 @@ pub fn tuned_weights() -> Weights {
         ("travel_hot", -129.1),
         ("kingless", -171.3),
         ("kl_swarm", -313.5),
+        // Lines to own royals: closed by a pawn rather than a piece (which is then tied to it),
+        // and time-travel checks onto past boards (tuned with the rest fixed).
+        ("ray_pawn", 48.0),
+        ("ray_piece", -13.4),
+        ("past_check", -4.2),
+        ("past_check_safe", -3.3),
         // Standard-chess terms (`chess`), fitted to Peras on single-timeline positions; the weights
         // scale their groups (Peras centipawns to internal units) and fade1..8 fade them with the number
         // of active timelines (beyond `CHESS_MAX_LINES` they are not worked out at all).
@@ -522,7 +533,28 @@ pub mod ex {
     pub const KINGLESS: usize = 28;
     /// Enemy non-pawn pieces on those boards.
     pub const KL_SWARM: usize = 29;
-    pub const COUNT: usize = 30;
+    // What closes the lines to own royals. On the active boards (rays to the edge): the first own
+    // piece on a ray is a pawn, or another piece; that piece with an enemy slider behind it on
+    // the ray (it is tied there).
+    pub const RAY_PAWN: usize = 30;
+    pub const RAY_PIECE: usize = 31;
+    pub const RAY_TIED: usize = 32;
+    /// Lines through time and timelines into own royals (up to three boards out, `royal_5d`)
+    /// that no own piece closes, whether or not an enemy slider stands on them yet: by the
+    /// number of axes (1, 2, 3 or more).
+    pub const RAY5_OPEN: usize = 33;
+    /// Those lines closed first by an own pawn, by another own piece, and by another own piece
+    /// with an enemy slider behind it.
+    pub const RAY5_PAWN: usize = 36;
+    pub const RAY5_PIECE: usize = 37;
+    pub const RAY5_TIED: usize = 38;
+    /// Time-travel landings onto past boards of own royals that check one there (along an open
+    /// line or a knight's leap), and those no other own piece defends.
+    pub const PAST_CHECK: usize = 39;
+    pub const PAST_CHECK_SAFE: usize = 40;
+    pub const COUNT: usize = 41;
+    /// The terms the NNUE's dense inputs take (the ones before the ray terms).
+    pub const NNUE_COUNT: usize = 41;
 }
 
 /// Squares within king distance 2.
@@ -575,6 +607,9 @@ fn board_extra(b: &Board, extra: &mut [[i32; ex::COUNT]; 2], w: i32, h: i32, att
         }
         for k in marked_pos(b.royal() & me) {
             f[ex::DEF_BOARD] += (king_attack(k) & att_nr[c]).count_ones() as i32;
+        }
+        for k in marked_pos(b.royal() & me) {
+            king_rays(b, k, me, them, w, h, f);
         }
         if b.royal() & me == 0 {
             f[ex::KINGLESS] += 1;
@@ -630,6 +665,36 @@ fn board_extra(b: &Board, extra: &mut [[i32; ex::COUNT]; 2], w: i32, h: i32, att
                 let file = sq & 7;
                 f[ex::F7_BROUTE] += (bishops & pmask(file + 8 * my_back) != 0 && b.lpawn() & me & pmask(file + 8 * (my_back - dy)) == 0) as i32;
             }
+        }
+    }
+}
+
+/// `ex::RAY_PAWN` ..= `ex::RAY_TIED` of the royal on `k` (pieces `me`, enemy `them`).
+fn king_rays(b: &Board, k: i32, me: Bitboard, them: Bitboard, w: i32, h: i32, f: &mut [i32; ex::COUNT]) {
+    let (pawns, orth, diag) = (b.lpawn(), b.lrook(), b.lbishop());
+    for (i, &(dx, dy)) in ORTH.iter().chain(DIAG.iter()).enumerate() {
+        let sliders = if i < 4 { orth } else { diag } & them;
+        let (mut x, mut y) = ((k & 7) + dx, (k >> 3) + dy);
+        let mut blocker = false;
+        while x >= 0 && y >= 0 && x < w && y < h {
+            let z = pmask(x + 8 * y);
+            if blocker {
+                if b.occupied() & z != 0 {
+                    f[ex::RAY_TIED] += (sliders & z != 0) as i32;
+                    break;
+                }
+            } else if me & z != 0 {
+                if pawns & z != 0 {
+                    f[ex::RAY_PAWN] += 1;
+                    break;
+                }
+                f[ex::RAY_PIECE] += 1;
+                blocker = true;
+            } else if them & z != 0 {
+                break;
+            }
+            x += dx;
+            y += dy;
         }
     }
 }
@@ -728,14 +793,17 @@ pub fn board_terms(b: &Board, w: i32, h: i32) -> BoardTerms {
     t
 }
 
+/// `past_line`'s counts.
+type Past = [i32; 4];
+
 /// Where `sides` gets each board's terms.
 pub trait TermSource {
     fn terms(&mut self, b: &Board, w: i32, h: i32) -> &BoardTerms;
     /// Memoized `past_line` results by `past_key`.
-    fn past_get(&mut self, _key: u64) -> Option<[i32; 2]> {
+    fn past_get(&mut self, _key: u64) -> Option<Past> {
         None
     }
-    fn past_put(&mut self, _key: u64, _v: [i32; 2]) {}
+    fn past_put(&mut self, _key: u64, _v: Past) {}
 }
 
 /// Terms computed on every request.
@@ -751,7 +819,7 @@ impl TermSource for Direct {
 pub struct TermCache {
     size: (i32, i32),
     slots: Vec<(Board, bool, BoardTerms)>,
-    past: Vec<(u64, [i32; 2])>,
+    past: Vec<(u64, Past)>,
 }
 
 impl Default for TermCache {
@@ -759,19 +827,19 @@ impl Default for TermCache {
         TermCache {
             size: (0, 0),
             slots: vec![(Board::default(), false, BoardTerms::ZERO); 1 << 12],
-            past: vec![(0, [0; 2]); 1 << 14],
+            past: vec![(0, [0; 4]); 1 << 14],
         }
     }
 }
 
 impl TermSource for TermCache {
     #[inline]
-    fn past_get(&mut self, key: u64) -> Option<[i32; 2]> {
+    fn past_get(&mut self, key: u64) -> Option<Past> {
         let e = &self.past[(key >> 50) as usize];
         if e.0 == key && key != 0 { Some(e.1) } else { None }
     }
     #[inline]
-    fn past_put(&mut self, key: u64, v: [i32; 2]) {
+    fn past_put(&mut self, key: u64, v: Past) {
         self.past[(key >> 50) as usize] = (key, v);
     }
     #[inline]
@@ -1061,19 +1129,24 @@ fn spread1(r: Bitboard) -> Bitboard {
 }
 
 /// Squares next to enemy royals on line `l`'s past boards where attacker `c` can land:
-/// [undefended by other enemy pieces, and of those, also covered by `c`].
+/// [undefended by other enemy pieces, and of those, also covered by `c`]; then the landings
+/// that check an enemy royal there from where they land (along an open line or a knight's
+/// leap): [all, undefended by other enemy pieces].
 /// Landings from other timelines are ignored.
-fn past_line(g: &Geo, l: i32, c: bool) -> [i32; 2] {
-    let mut past = [0i32; 2];
+fn past_line(g: &Geo, l: i32, c: bool) -> Past {
+    let mut past = [0i32; 4];
     // The latest board (`at(l, src_v(end, c))`) and the past boards before it.
     let tl = g.m.timeline(l);
     let Some(b0) = tl.boards.last() else { return past };
     let vs = src_v(tl.end(), c);
     let mine = b0.hostile(!c);
-    // The line's past boards and the landing squares next to an enemy royal on them.
+    // The line's past boards, the landing squares next to an enemy royal on them, and the
+    // squares that check one: along orthogonals, diagonals, by a knight's leap.
     let mut boards: [&Board; 8] = [b0; 8];
     let mut zone = [0u64; 8];
+    let mut chk = [[0u64; 3]; 8];
     let mut hits = [0u64; 8];
+    let mut checks = [0u64; 8];
     let mut n = 0;
     let mut zones = 0;
     while n < 8 {
@@ -1084,29 +1157,46 @@ fn past_line(g: &Geo, l: i32, c: bool) -> [i32; 2] {
         let b = &tl.boards[k as usize];
         boards[n] = b;
         let r = b.royal() & b.hostile(c);
-        zone[n] = spread1(r) & !r & !b.friendly(c);
-        zones |= zone[n];
+        let free = !b.friendly(c);
+        zone[n] = spread1(r) & !r & free;
+        for q in marked_pos(r) {
+            chk[n][0] |= rook_attack(q, b.occupied()) & free;
+            chk[n][1] |= bishop_attack(q, b.occupied()) & free;
+            chk[n][2] |= knight_attack(q) & free;
+        }
+        zones |= zone[n] | chk[n][0] | chk[n][1] | chk[n][2];
         n += 1;
     }
     if zones == 0 {
         return past;
     }
     let comp = [b0.lrook() & mine, b0.lbishop() & mine, b0.lunicorn() & mine];
+    let queens = b0.queen() & mine;
     if comp.iter().any(|&x| x != 0) {
         for (j, &(sx, sy)) in XY9.iter().enumerate() {
-            let mut pos = comp[(sx != 0) as usize + (sy != 0) as usize];
-            // Only pieces on the line back from some zone square can land on one.
+            let class = (sx != 0) as usize + (sy != 0) as usize;
+            let mut pos = comp[class];
+            // Only pieces on the line back from some target square can land on one.
             if pos & fill(zones, BACK_FILL[j]) == 0 {
                 continue;
             }
+            // Queens among them also check along the other kind of line once they land.
+            let mut posq = pos & queens;
             let st = STEP9[j];
             for k in 0..n {
                 pos = step(pos, st);
+                posq = step(posq, st);
                 if pos == 0 {
                     break;
                 }
                 hits[k] |= pos & zone[k];
+                checks[k] |= match class {
+                    0 | 1 => pos & chk[k][class] | posq & chk[k][1 - class],
+                    // Triagonal movers: only queens check on the board they land on.
+                    _ => posq & (chk[k][0] | chk[k][1]),
+                };
                 pos &= !boards[k].occupied();
+                posq &= pos;
             }
         }
     }
@@ -1115,18 +1205,23 @@ fn past_line(g: &Geo, l: i32, c: bool) -> [i32; 2] {
         for &(dx, dy, dt) in &KN_PAST {
             let k = (-dt - 1) as usize;
             if k < n {
-                hits[k] |= shift_xy(kn, dx, dy) & zone[k];
+                let t = shift_xy(kn, dx, dy);
+                hits[k] |= t & zone[k];
+                checks[k] |= t & chk[k][2];
             }
         }
     }
     // Squares no other enemy piece defends, and those `c` also covers there.
     for k in 0..n {
-        if hits[k] != 0 {
-            let weak = hits[k] & !side_attacks(boards[k], !c).attacks_nr;
+        if hits[k] | checks[k] != 0 {
+            let def = side_attacks(boards[k], !c).attacks_nr;
+            let weak = hits[k] & !def;
             if weak != 0 {
                 past[0] += weak.count_ones() as i32;
                 past[1] += (weak & side_attacks(boards[k], c).attacks).count_ones() as i32;
             }
+            past[2] += checks[k].count_ones() as i32;
+            past[3] += (checks[k] & !def).count_ones() as i32;
         }
     }
     past
@@ -1187,7 +1282,7 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
     let (w, h) = s.get_board_size();
     let g = Geo { m: s.multiverse(), lo, hi };
     // Time travel into the past: walk every source line's pieces backwards.
-    let mut past = [[0i32; 2]; 2];
+    let mut past = [[0i32; 4]; 2];
     for l in lo..=hi {
         for (ci, pc) in past.iter_mut().enumerate() {
             let c = ci == 1;
@@ -1200,14 +1295,17 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
                     p
                 }
             };
-            pc[0] += p[0];
-            pc[1] += p[1];
+            for i in 0..4 {
+                pc[i] += p[i];
+            }
         }
     }
     for (ci, pc) in past.iter().enumerate() {
         let f = &mut sd.side[1 - ci];
         f[si::TRAVEL_PAST] += pc[0];
         f[si::TRAVEL_BACKED] += pc[1];
+        sd.extra[1 - ci][ex::PAST_CHECK] += pc[2];
+        sd.extra[1 - ci][ex::PAST_CHECK_SAFE] += pc[3];
     }
     // Latest boards: lines to the enemy royals and landings next to them.
     let mut royals_active = [false; 2];
@@ -1263,6 +1361,9 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
             let mut sp = 0u64;
             let mut now = [0i32; 2];
             let mut open = [0i32; 3];
+            // Lines into the royal however many enemy sliders stand on them: open, or what closes
+            // them first (`ex::RAY5_OPEN` ..= `ex::RAY5_TIED`).
+            let mut pot = [0i32; 6];
             let mut count_landing = |t: Bitboard, sp: &mut Bitboard| {
                 *sp |= t;
                 let weak = t & !def_nr;
@@ -1324,13 +1425,11 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
                 }
             }
             for (di, &(sl, st)) in [(-1i32, 0i32), (1, 0), (-1, -1), (1, -1)].iter().enumerate() {
-                if walk[di] == 0 {
-                    continue;
-                }
                 // Boards up to three timelines out from the target in this (timeline, time)
                 // direction: blockers and the attacker's movable pieces by axis count.
                 let mut occ = [0u64; 3];
                 let mut block = [0u64; 3];
+                let mut pawns = [0u64; 3];
                 let mut att = [[0u64; 4]; 3];
                 let mut n = 0;
                 let mut reg = land | r;
@@ -1341,6 +1440,7 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
                     let Some(b1) = g.at(l1, v1) else { break };
                     occ[n] = b1.occupied();
                     block[n] = b1.friendly(!c);
+                    pawns[n] = b1.lpawn() & block[n];
                     reg = spread1(reg);
                     if v1 == src_v(g.end(l1), c) {
                         let mine = b1.hostile(!c);
@@ -1349,7 +1449,25 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
                     }
                     n += 1;
                 }
-                if near == 0 {
+                if n >= 2 {
+                    for (j, &(sx, sy)) in XY9.iter().enumerate() {
+                        let axes = (sl != 0) as usize + (st != 0) as usize + (sx != 0) as usize + (sy != 0) as usize;
+                        let (mut xp, mut xq) = (r, 0u64);
+                        for k in 0..n {
+                            xp = step(xp, BACK9[j]);
+                            xq = step(xq, BACK9[j]);
+                            pot[5] += (xq & att[k][axes - 1]).count_ones() as i32;
+                            xq &= !occ[k];
+                            let (pw, pc) = (xp & pawns[k], xp & block[k] & !pawns[k]);
+                            pot[3] += pw.count_ones() as i32;
+                            pot[4] += pc.count_ones() as i32;
+                            xq |= pc;
+                            xp &= !block[k];
+                        }
+                        pot[axes.min(3) - 1] += xp.count_ones() as i32;
+                    }
+                }
+                if walk[di] == 0 || near == 0 {
                     continue;
                 }
                 let mut any = [0u64; 4];
@@ -1404,6 +1522,9 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
             f[si::OPEN_ORTH5] += open[0];
             f[si::OPEN_DIAG5] += open[1];
             f[si::OPEN_MULTI5] += open[2];
+            for (i, v) in pot.into_iter().enumerate() {
+                sd.extra[d][ex::RAY5_OPEN + i] += v;
+            }
             let hit = att_c | sp;
             let weak = (zone & !def_nr & hit).count_ones() as i32;
             f[si::WEAK_SQ] += weak;
@@ -1507,6 +1628,9 @@ pub fn features_from(sd: &Sides, s: &State, checks: bool) -> Features {
     f[fi::DEF + 2] = e(ex::TRAVEL_HOT);
     f[fi::KL] = e(ex::KINGLESS);
     f[fi::KL + 1] = e(ex::KL_SWARM);
+    for k in 0..=ex::PAST_CHECK_SAFE - ex::RAY_PAWN {
+        f[fi::RAY + k] = e(ex::RAY_PAWN + k);
+    }
     for k in 0..=si::INACTIVE_ROYAL_ATT - si::TRAVEL_PAST {
         f[fi::DANGER_5D + k] = d(si::TRAVEL_PAST + k);
     }
@@ -1941,10 +2065,13 @@ mod royal_tests {
             royal_5d(s, &mut a, &mut cache, &atts);
             royal_5d_ref(s, &mut b, &mut cache_ref, &atts, None);
             royal_5d(s, &mut c, &mut Direct(BoardTerms::ZERO), &atts);
-            assert!(a.side == b.side && a.extra == b.extra && b.side == c.side && b.extra == c.extra, "position {i}");
+            // The reference predates the potential lines (`ex::RAY5_OPEN` ..): those are compared
+            // between the fast paths only.
+            let pre = |x: &Sides| [x.extra[0][..ex::RAY5_OPEN].to_vec(), x.extra[1][..ex::RAY5_OPEN].to_vec()];
+            assert!(a.side == b.side && pre(&a) == pre(&b) && b.side == c.side && a.extra == c.extra, "position {i}");
             let mut e = zero();
             royal_5d_ref(s, &mut e, &mut cache_ref, &atts, Some(&mut old));
-            assert!(e.side == b.side && e.extra == b.extra, "position {i}");
+            assert!(e.side == b.side && pre(&e) == pre(&b), "position {i}");
             for (k, n) in nonzero.iter_mut().enumerate() {
                 *n += (b.side[0][si::TRAVEL_PAST + k] | b.side[1][si::TRAVEL_PAST + k] != 0) as usize;
             }
