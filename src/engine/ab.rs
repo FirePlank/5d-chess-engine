@@ -3065,7 +3065,14 @@ impl AlphaBeta {
             // (A cutoff has set `proven`; an abort returns 0.)
             return v;
         }
-        if searched == 0 && generated == 0 && tt_action.is_none() {
+        // A singular test whose excluded action was the only one: nothing else holds (as in
+        // Stockfish, the action is singular).
+        if searched == 0 && excl_node {
+            self.proven = false;
+            return alpha;
+        }
+        // No legal action (a remembered one that failed validation was not one either).
+        if searched == 0 && generated == 0 {
             return self.terminal_score(s, ply);
         }
         if searched == 0 {
