@@ -2444,9 +2444,7 @@ impl AlphaBeta {
                     gain += super::local::capture_gain(s.board(l, t, c), c, height, &self.local_vals);
                 }
             }
-            // (The gains of many boards are summed: kept within the evaluation range, never a
-            // mate score.)
-            return (stand + gain).clamp(-EVAL_MAX, EVAL_MAX);
+            return stand + gain;
         }
         // In check: the evasion that failed high here last first, before building the rest.
         let mut best = -INF;
