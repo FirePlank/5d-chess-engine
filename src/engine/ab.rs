@@ -2733,6 +2733,13 @@ impl AlphaBeta {
                         }
                         if v < sb {
                             tt_ext = 1;
+                        } else if sb >= beta {
+                            // Multi-cut: without the remembered action the node still beats beta.
+                            self.proven = false;
+                            return sb;
+                        } else if sc >= beta {
+                            // Not singular, but expected to cut: the remembered action a ply less.
+                            tt_ext = -1;
                         }
                     }
             }
