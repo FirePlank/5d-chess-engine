@@ -635,6 +635,8 @@ pub struct AlphaBeta {
     /// Singular-extension search: the TT action it excludes and the key of its node.
     excluded: Option<MoveSeq>,
     excl_key: u64,
+    /// The ply right after a null move (no second null move there).
+    null_child: usize,
     /// Per-node buffers, reused down the recursion.
     #[allow(clippy::vec_box)] // popped and pushed per node: moving a pointer, not the buffers
     bufs: Vec<Box<NodeBufs>>,
@@ -991,6 +993,7 @@ impl AlphaBeta {
             proven: false,
             excluded: None,
             excl_key: 0,
+            null_child: usize::MAX,
             bufs: Vec::new(),
             terms: Box::default(),
             phys_static: std::cell::RefCell::new(Vec::new()),
@@ -2654,10 +2657,12 @@ impl AlphaBeta {
                     return e;
                 }
             }
-            if depth >= NMP_MIN_DEPTH && self.sac_line != Some(s.player()) && Self::has_null_material(s) && self.static_eval(s) >= beta {
+            if depth >= NMP_MIN_DEPTH && self.null_child != ply && self.sac_line != Some(s.player()) && Self::has_null_material(s) && self.static_eval(s) >= beta {
                 let r = NMP_R + depth / NMP_DIV;
                 let mark = s.make_null();
+                let null_child = std::mem::replace(&mut self.null_child, ply + 1);
                 let v = -self.negamax(s, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
+                self.null_child = null_child;
                 s.unmake(mark);
                 if self.aborted {
                     return 0;
