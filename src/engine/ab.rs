@@ -2625,13 +2625,6 @@ impl AlphaBeta {
         if ply >= MAX_PLY {
             return self.static_eval(s);
         }
-        // Mate distance pruning: no line from here mates sooner than a mate already in hand,
-        // nor is mated later than mated right now (Stockfish, Apeiron).
-        let beta = beta.min(MATE - ply as i32 - 1);
-        alpha = alpha.max(-(MATE - ply as i32));
-        if alpha >= beta {
-            return alpha;
-        }
         let alpha0 = alpha;
         let key = s.hash();
         let mut tt_action: Option<MoveSeq> = None;
