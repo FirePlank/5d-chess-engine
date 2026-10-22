@@ -2782,9 +2782,7 @@ impl AlphaBeta {
                 }
                 batch.sort_by(|a, b| b.0.cmp(&a.0));
                 for (sc, act) in batch {
-                    // (`action_score` adds no check bonus: a sum of captures on several boards
-                    // reached it, which let those combinations past the cap.)
-                    checks_left = false;
+                    checks_left = sc >= CHECK_BONUS;
                     if searched >= cap && !checks_left && !Self::mated_cap(&mut cap, &mut cap_raised, best) {
                         skipped = true;
                         break;
