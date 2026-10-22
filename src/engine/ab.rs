@@ -297,9 +297,19 @@ struct TtEntry {
     bound: Bound,
     /// A mate `score` is proven (see `AlphaBeta::proven`).
     proven: bool,
+    /// The search that last wrote it (`TtTable::new_search`), for replacement.
+    generation: u8,
     score: i32,
     action: MoveSeq,
 }
+
+/// Slots per bucket: a position may sit in any slot of its bucket, and a store replaces the
+/// bucket's least valuable entry (shallow, or from an older search), so the deep entries of
+/// the lines a search keeps returning to survive the many shallow ones that pass through
+/// (several threads write several times as many). As in HydroChess and Stockfish: an entry
+/// a probe uses becomes current again, and a store of the same position keeps a much deeper
+/// bound of this search (whose mate bounds decay a ply each time, so a stale one gives way).
+const TT_BUCKET: usize = 4;
 
 /// One table slot: an entry and its lock. All-zero bytes are an empty, unlocked slot.
 struct TtSlot {
@@ -315,6 +325,8 @@ struct TtTable {
     slots: Vec<TtSlot>,
     /// Some stored action spilled to the heap (entries then need dropping one by one).
     spilled: AtomicBool,
+    /// Counts searches (`new_search`): stamped on the entries they write.
+    generation: std::sync::atomic::AtomicU8,
 }
 
 // SAFETY: an entry is only accessed by the thread holding its slot's lock.
@@ -326,8 +338,9 @@ impl TtTable {
         Self::with_len(((mb << 20) / 64).next_power_of_two())
     }
 
-    /// An empty table of `n` slots.
+    /// An empty table of `n` slots (at least one bucket's worth).
     fn with_len(n: usize) -> Self {
+        let n = n.max(TT_BUCKET);
         let layout = std::alloc::Layout::array::<TtSlot>(n).expect("tt size");
         // SAFETY: an all-zero `TtSlot` is valid (unlocked, empty bound, empty inline action),
         // and the block is allocated with the layout `Vec` uses for this capacity.
@@ -338,40 +351,106 @@ impl TtTable {
             }
             Vec::from_raw_parts(p, n, n)
         };
-        TtTable { slots, spilled: AtomicBool::new(false) }
+        TtTable { slots, spilled: AtomicBool::new(false), generation: std::sync::atomic::AtomicU8::new(0) }
     }
 
     fn len(&self) -> usize {
         self.slots.len()
     }
 
-    /// Run `f` on the entry for `key` under its slot's lock: None when the slot holds
-    /// another position or another thread holds the lock.
+    /// A new search starts: entries written before it count as older when replacing.
+    fn new_search(&self) {
+        self.generation.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The slots of `key`'s bucket.
+    #[inline]
+    fn bucket(&self, key: u64) -> &[TtSlot] {
+        let first = (key as usize) & (self.slots.len() / TT_BUCKET - 1);
+        &self.slots[first * TT_BUCKET..(first + 1) * TT_BUCKET]
+    }
+
+    /// Run `f` on the entry for `key` under its slot's lock: None when no slot of its bucket
+    /// holds the position (or the one that does is locked by another thread).
     #[inline]
     fn probe<R>(&self, key: u64, f: impl FnOnce(&TtEntry) -> R) -> Option<R> {
-        let slot = &self.slots[(key as usize) & (self.slots.len() - 1)];
-        if slot.lock.swap(true, Ordering::Acquire) {
-            return None;
+        let mut f = Some(f);
+        for slot in self.bucket(key) {
+            if slot.lock.swap(true, Ordering::Acquire) {
+                continue;
+            }
+            // SAFETY: the lock gives this thread exclusive access to the entry.
+            let e = unsafe { &mut *slot.entry.get() };
+            let r = if e.bound != Bound::Empty && e.key == key {
+                e.generation = self.generation.load(Ordering::Relaxed);
+                f.take().map(|f| f(e))
+            } else {
+                None
+            };
+            slot.lock.store(false, Ordering::Release);
+            if r.is_some() {
+                return r;
+            }
         }
-        // SAFETY: the lock gives this thread exclusive access to the entry.
-        let e = unsafe { &*slot.entry.get() };
-        let r = if e.bound != Bound::Empty && e.key == key { Some(f(e)) } else { None };
-        slot.lock.store(false, Ordering::Release);
-        r
+        None
     }
 
     fn store(&self, key: u64, depth: i32, bound: Bound, score: i32, proven: bool, action: &MoveSeq) {
-        let slot = &self.slots[(key as usize) & (self.slots.len() - 1)];
+        let generation = self.generation.load(Ordering::Relaxed);
+        let bucket = self.bucket(key);
+        // The slot holding the position if any, else the least valuable: empty first, then the
+        // shallowest counting each search of age as `TT_AGE_PLIES` plies.
+        let (mut target, mut target_value, mut same) = (None, i32::MAX, false);
+        for (i, slot) in bucket.iter().enumerate() {
+            if slot.lock.swap(true, Ordering::Acquire) {
+                continue;
+            }
+            // SAFETY: the lock gives this thread exclusive access to the entry.
+            let e = unsafe { &*slot.entry.get() };
+            let value = if e.bound == Bound::Empty {
+                i32::MIN
+            } else {
+                // A proven mate is worth more than any depth.
+                e.depth as i32 + 3 - generation.wrapping_sub(e.generation) as i32 + if e.proven && e.score.abs() >= MATE - 1000 { 1000 } else { 0 }
+            };
+            let hit = e.bound != Bound::Empty && e.key == key;
+            slot.lock.store(false, Ordering::Release);
+            if hit {
+                (target, same) = (Some(i), true);
+                break;
+            }
+            if value < target_value {
+                (target, target_value) = (Some(i), value);
+            }
+        }
+        let Some(i) = target else { return };
+        let slot = &bucket[i];
         if slot.lock.swap(true, Ordering::Acquire) {
             return;
         }
         // SAFETY: the lock gives this thread exclusive access to the entry.
         let e = unsafe { &mut *slot.entry.get() };
-        if e.bound == Bound::Empty || e.key != key || depth as i16 >= e.depth - 1 || bound == Bound::Exact {
+        // The same position keeps a much deeper bound of this search unless this one is exact;
+        // it takes the new action, and a kept mate bound loses a ply.
+        let keep = same && e.key == key && e.generation == generation && bound != Bound::Exact && depth + 2 * (bound == Bound::Exact) as i32 <= e.depth as i32 - 4;
+        // A proven mate of the position stays until another proof replaces it: an unproven
+        // result, however deep, may only have missed the line.
+        let proof_kept = same && e.key == key && e.proven && e.score.abs() >= MATE - 1000 && !proven;
+        if proof_kept {
+        } else if keep {
+            e.action.assign(action);
+            if e.action.spilled() && !self.spilled.load(Ordering::Relaxed) {
+                self.spilled.store(true, Ordering::Relaxed);
+            }
+            if e.depth >= 5 && e.bound != Bound::Exact && e.score.abs() >= MATE - 1000 {
+                e.depth -= 1;
+            }
+        } else {
             e.key = key;
             e.depth = depth as i16;
             e.bound = bound;
             e.proven = proven;
+            e.generation = generation;
             e.score = score;
             e.action.assign(action);
             if e.action.spilled() && !self.spilled.load(Ordering::Relaxed) {
@@ -2541,7 +2620,9 @@ impl AlphaBeta {
         let excl_node = self.excluded.is_some() && key == self.excl_key;
         let probe = self.tt.probe(key, |e| {
             let sc = mate_from_tt(e.score, ply);
-            if !pv && e.depth as i32 >= depth && !(excl_node) {
+            // A proven mate holds at any depth (see `AlphaBeta::proven`).
+            let proven_mate = e.proven && sc.abs() >= MATE - 1000;
+            if !pv && (e.depth as i32 >= depth || proven_mate) && !(excl_node) {
                 let cut = match e.bound {
                     Bound::Exact => true,
                     Bound::Lower => sc >= beta,
@@ -2602,8 +2683,6 @@ impl AlphaBeta {
         // a mated score made of the actions the cap let in claims mates the side to move
         // escapes (see `mated_cap`).
         let mut cap_raised = false;
-        // Checking actions (ordered first) are never cut by the cap: mating lines run through them.
-        let mut checks_left = true;
 
         // Remembered actions first, before paying for the action space: the TT action,
         // then the killers.
@@ -2750,7 +2829,7 @@ impl AlphaBeta {
         let mut batch_size = 1;
         let outcome: Option<i32> = 'search: {
             while !exhausted {
-                if searched >= cap && !checks_left && !Self::mated_cap(&mut cap, &mut cap_raised, best) {
+                if searched >= cap && !Self::mated_cap(&mut cap, &mut cap_raised, best) {
                     break;
                 }
                 let mut batch: Vec<(i32, MoveSeq, bool)> = Vec::with_capacity(BATCH);
@@ -2811,10 +2890,7 @@ impl AlphaBeta {
                 }
                 batch.sort_by(|a, b| b.0.cmp(&a.0));
                 for (sc, act, weak) in batch {
-                    // (`action_score` adds no check bonus: a sum of captures on several boards
-                    // reached it, which let those combinations past the cap.)
-                    checks_left = false;
-                    if searched >= cap && !checks_left && !Self::mated_cap(&mut cap, &mut cap_raised, best) {
+                    if searched >= cap && !Self::mated_cap(&mut cap, &mut cap_raised, best) {
                         skipped = true;
                         break;
                     }
@@ -3461,6 +3537,7 @@ impl AlphaBeta {
     }
 
     fn find_best_move_full(&mut self, root: &State, limits: &Limits, stop: &AtomicBool, info: &mut dyn FnMut(String)) -> Option<Action> {
+        self.tt.new_search();
         if self.own_book {
             let book = super::book::Book::theory();
             if let Some(m) = book.choose(root, super::book::random_seed()) {
