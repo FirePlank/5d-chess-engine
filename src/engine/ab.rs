@@ -2062,7 +2062,9 @@ impl AlphaBeta {
                 b.actions = 1 << 22;
                 b.steps = 1 << 24;
                 recheck = 1 << 16;
-                b.deadline = Some(now + ms(ROOT_SCAN_ANALYSIS_MS));
+                // A fixed movetime spends at most a quarter of it here, as a game does: with a
+                // thousand root actions the whole second would leave no time for depth 1.
+                b.deadline = Some(now + game_cap.map_or(ms(ROOT_SCAN_ANALYSIS_MS), |c| c.min(ms(ROOT_SCAN_ANALYSIS_MS))));
             }
             MateVerify::Millis(n) => {
                 b.actions = 1 << 22;
