@@ -92,4 +92,37 @@ Techniques: 8775-game SPRTs, merged when Elo - error > 0 (removals as non-regres
 | Capturing travels at the root | v1 -13.7; v2 (searched last) merged 3c3853b (+0.2 +/- 5.2) |
 | NNUE: board cache by key, chess terms memoized | 1549b8f, 9ad5aea (speed, oracle-identical) |
 | NNUE past boards retrained | merged e2c166c (+25.2 +/- 9.5) |
-| Queued | maxply_check, singular_double, corr_history, capture_history, order_traits, time_stable (GitHub); policy_net, lmp_grow, tt_cut_slack, lmr_research (local) |
+| Sacrifice rule dead code | removed 5749f08 (oracle-identical) |
+| A10 MAX_PLY in check scores a draw | merged 207ab37 (-1.1 +/- 5.2, non-regression) |
+| Singular double extension | rejected (-8.7 +/- 6.6) |
+| Correction history | rejected (-2.7 +/- 6.9) |
+| Capture history | rejected: +6.6 +/- 6.7, rerun -2.3 +/- 6.8 (both: about +2.2 +/- 4.8) |
+| Static ordering traits (escape, threat, develop) | rejected (-8.5 +/- 7.2) |
+| Learned move-ordering net (policy.rs) | rejected (-5.0 +/- 6.3, local); better offline ranking (MRR 0.42 vs 0.34) does not pay for itself |
+| Time: less once the best action is stable | rejected: +6.0 +/- 6.1, rerun -0.3 +/- 6.1 |
+| ProbCut (remembered capture) | rejected (-8.6 +/- 7.0) |
+| LMP cap grows with depth | rejected (-3.5 +/- 5.5, local, inconclusive at 8775 games) |
+| TT cut a ply short for fail-lows | rejected (-2.0 +/- 6.6; also hid the puzzle mate) |
+| Losing captures after killers (SEE split) | rejected (-0.2 +/- 6.7) |
+| NNUE retrained again (net_past3) | merged 4d23865 (+23.9 +/- 9.1) |
+| NNUE net_past4 | rejected (-17.7 +/- 9.2; the mate suite had flagged it, 257 vs 261) |
+| Residual net retrained on 377k recent games | rejected (+4.1 +/- 6.7) |
+| Queued | lmr_research (local) |
+
+Skipped, with the reason:
+
+- Null-move verification search: Stockfish runs it only from depth 14 (a depth gate), and
+  kairos already refuses null moves without two pieces on a board.
+- cutNode terms (null move, LMR, TT): kairos tracks no expected node type; every LMR and
+  pruning variant tried here lost or was flat, so the bookkeeping is not worth it now.
+- Static eval in the TT: the evaluation cache (`KnownCache`) already keeps it per position.
+- A real capture search in qsearch, qsearch TT: capture combinations across boards explode;
+  the per-board capture gain is the design. History pruning and SEE pruning: depth-gated
+  skips of the kind ruled out (no-depth-gates); the ordering half (SEE split) lost.
+- Continuation / countermove / pawn / low-ply history: needs a stack of parent actions; the
+  history family tried here (capture, correction) did not gain.
+- Root TT store, hashfull, prefetch: reporting or speed only; prefetch needs the child key
+  before the move, which 5D submit makes costly.
+- Aspiration fail-high depth reduction: tried earlier (ed6b324, reverted 3bc0b23).
+- movestogo: 5D games use increment clocks.
+- NNUE accumulator stack: boards are cached by multiverse key (1549b8f), which plays its role.
