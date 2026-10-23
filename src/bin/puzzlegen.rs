@@ -829,7 +829,78 @@ fn cook(e: &mut Engine, start: &State, solver: bool, win: bool, cfg: &Cfg, deadl
     if line.is_empty() {
         return None;
     }
+    let line = trim_line(e, start, &line, &keys, win, cfg);
     Some(Cooked { line, keys, final_score, ends_in_mate, root_margin, defender_replies })
+}
+
+/// `start` after every action of `line`, if all are legal.
+fn replay(start: &State, line: &[String]) -> Option<State> {
+    let mut s = start.clone();
+    for a in line {
+        s = play(&s, a)?;
+    }
+    Some(s)
+}
+
+/// The line without the moves it does not need. In 5D an action may also move on boards that
+/// need no move (an inactive timeline, one ahead of the present); the engine's line often does,
+/// for nothing. Each such move (never a key move) is dropped when the line still plays out the
+/// same without it (`line_holds`): a move that, say, keeps the present back or blocks a check
+/// stays. The defender's actions are trimmed the same way.
+fn trim_line(e: &mut Engine, start: &State, line: &[String], keys: &[Vec<String>], win: bool, cfg: &Cfg) -> Vec<String> {
+    let mut out = line.to_vec();
+    let Some(end) = replay(start, &out) else { return out };
+    let mate_end = mated(&end) == Some(true);
+    for k in 0..out.len() {
+        let ks: &[String] = if k % 2 == 0 { keys.get(k / 2).map_or(&[], |v| v.as_slice()) } else { &[] };
+        let toks: Vec<String> = out[k].split_whitespace().map(String::from).collect();
+        for t in toks.iter().filter(|t| !ks.contains(t)) {
+            let rest: Vec<&str> = out[k].split_whitespace().filter(|x| x != t).collect();
+            if rest.is_empty() {
+                continue;
+            }
+            let mut trial = out.clone();
+            trial[k] = rest.join(" ");
+            if line_holds(e, start, &trial, keys, win, mate_end, k, cfg) {
+                out = trial;
+            }
+        }
+    }
+    out
+}
+
+/// Whether `line` (changed at action `from`) still is the puzzle: every action legal, the same
+/// end (the mate, or still winning or holding), and every later solver turn the same idea (the
+/// engine's answer there has the stored key moves, as `same_next`).
+#[allow(clippy::too_many_arguments)]
+fn line_holds(e: &mut Engine, start: &State, line: &[String], keys: &[Vec<String>], win: bool, mate_end: bool, from: usize, cfg: &Cfg) -> bool {
+    let mut states = Vec::with_capacity(line.len());
+    let mut s = start.clone();
+    for a in line {
+        states.push(s.clone());
+        let Some(n) = play(&s, a) else { return false };
+        s = n;
+    }
+    if mate_end {
+        if mated(&s) != Some(true) {
+            return false;
+        }
+    } else {
+        // The solver played last: the defender is to move.
+        let Some(sc) = after_score(e, &s, cfg.key_nodes) else { return false };
+        if if win { !wins(sc) } else { sc < HOLD_FLOOR } {
+            return false;
+        }
+    }
+    for j in (from + 1..line.len()).filter(|j| j % 2 == 0) {
+        let Some(ks) = keys.get(j / 2).filter(|ks| !ks.is_empty()) else { continue };
+        let same = solver_turn(e, &states[j], win, cfg.cook_nodes / 2, cfg.key_nodes / 2)
+            .is_some_and(|t| t.0.keys.len() == ks.len() && ks.iter().all(|k| t.0.keys.contains(k)));
+        if !same {
+            return false;
+        }
+    }
+    true
 }
 
 /// Walk the start back while the solver's earlier turn is already the only winning idea.
@@ -1691,9 +1762,11 @@ fn texts(a: &kairos::core::action::MoveSeq) -> String {
 ///   - `variants`: other right actions found, each with the defender's best reply to it, and
 ///     whether the next step's key moves still apply after that reply (`same_next`; if not,
 ///     the site judges the following step with the engine).
+///
+/// The line is exported trimmed (`trim_line`: no move it does not need), or as stored when the
+/// trimmed line fails the checks below.
 fn site_puzzle(e: &mut Engine, p: &Json, cfg: &Cfg) -> Option<Json> {
-    let timeouts = e.timeouts;
-    let mut cur = position_from_uci(p.get("position").str()?).ok()?;
+    let start = position_from_uci(p.get("position").str()?).ok()?;
     let win = p.get("outcome").str()? == "win";
     let line: Vec<String> = p.get("solution").arr().iter().filter_map(|x| x.str().map(String::from)).collect();
     let keys: Vec<Vec<String>> = p
@@ -1702,6 +1775,25 @@ fn site_puzzle(e: &mut Engine, p: &Json, cfg: &Cfg) -> Option<Json> {
         .iter()
         .map(|k| k.arr().iter().filter_map(|x| x.str().map(String::from)).collect())
         .collect();
+    let trimmed = trim_line(e, &start, &line, &keys, win, cfg);
+    if trimmed != line {
+        if let Some(j) = site_line(e, p, cfg, &start, &trimmed, &keys, false) {
+            TRIMMED.fetch_add(1, Ordering::Relaxed);
+            return Some(j);
+        }
+    }
+    site_line(e, p, cfg, &start, &line, &keys, true)
+}
+
+/// Puzzles exported with a trimmed line.
+static TRIMMED: AtomicUsize = AtomicUsize::new(0);
+
+/// `site_puzzle` for one line; `count`: a failed deep check counts in `DEEP_FAILED`.
+#[allow(clippy::too_many_arguments)]
+fn site_line(e: &mut Engine, p: &Json, cfg: &Cfg, start: &State, line: &[String], keys: &[Vec<String>], count: bool) -> Option<Json> {
+    let timeouts = e.timeouts;
+    let mut cur = start.clone();
+    let win = p.get("outcome").str()? == "win";
     let nodes = cfg.key_nodes * 2;
     let mut steps: Vec<Json> = Vec::new();
     for (i, ks) in keys.iter().enumerate() {
@@ -1719,10 +1811,21 @@ fn site_puzzle(e: &mut Engine, p: &Json, cfg: &Cfg) -> Option<Json> {
         }
         let kmoves: Vec<FullMove> = ks.iter().filter_map(|k| parse_move(k)).collect();
         if cfg.deep_nodes > 0 && !deep_step_ok(e, &cur, win, &kmoves, cfg.deep_nodes) {
-            DEEP_FAILED.fetch_add(1, Ordering::Relaxed);
+            if count {
+                DEEP_FAILED.fetch_add(1, Ordering::Relaxed);
+            }
             return None;
         }
         let reference = after_score(e, &child, nodes)?;
+        // The opponent's own search after the answer, a root search (which looks for a mate in
+        // one exhaustively) where the mining saw the answer one ply down: it must agree that the
+        // answer wins, or holds.
+        if if win { !wins(reference) } else { reference < HOLD_FLOOR } {
+            if count {
+                DEEP_FAILED.fetch_add(1, Ordering::Relaxed);
+            }
+            return None;
+        }
         let all: Vec<_> = e.ab.node_order(&cur, ROOT_COUNT_CAP).into_iter().filter(|a| kmoves.iter().all(|m| a.contains(m))).collect();
         let mut variants: Vec<Json> = Vec::new();
         let (mut tried, mut bad) = (0usize, 0usize);
@@ -1764,8 +1867,23 @@ fn site_puzzle(e: &mut Engine, p: &Json, cfg: &Cfg) -> Option<Json> {
         cur = play(&child, &r)?;
     }
     if e.timeouts != timeouts {
-        DEEP_FAILED.fetch_add(1, Ordering::Relaxed);
+        if count {
+            DEEP_FAILED.fetch_add(1, Ordering::Relaxed);
+        }
         return None;
+    }
+    // "newTimeline" was tagged from the stored line: a trimmed one may create none.
+    let mut themes: Vec<Json> = p.get("themes").arr().to_vec();
+    let mut s = start.clone();
+    let mut branches = false;
+    for (k, a) in line.iter().enumerate() {
+        let n = play(&s, a)?;
+        let ((lo0, hi0), (lo1, hi1)) = (s.get_lines_range(), n.get_lines_range());
+        branches |= k % 2 == 0 && hi1 - lo1 > hi0 - lo0;
+        s = n;
+    }
+    if !branches {
+        themes.retain(|t| t.str() != Some("newTimeline"));
     }
     Some(obj![
         ("id", p.get("id").clone()),
@@ -1773,11 +1891,11 @@ fn site_puzzle(e: &mut Engine, p: &Json, cfg: &Cfg) -> Option<Json> {
         ("rating_deviation", p.get("rating_deviation").clone()),
         ("side", p.get("side").clone()),
         ("outcome", p.get("outcome").clone()),
-        ("themes", p.get("themes").clone()),
+        ("themes", Json::Arr(themes)),
         ("position", p.get("position").clone()),
         ("mate_in", p.get("features").get("mate_in").clone()),
         ("ends_in_mate", p.get("features").get("ends_in_mate").clone()),
-        ("solution", p.get("solution").clone()),
+        ("solution", Json::Arr(line.iter().map(|a| Json::from(a.clone())).collect())),
         ("verified_nodes", cfg.deep_nodes as usize),
         ("steps", Json::Arr(steps)),
     ])
@@ -1828,7 +1946,16 @@ fn export_site(cfg: &Cfg, site: &Path) {
         body.push('\n');
     }
     let _ = std::fs::write(site, body);
-    println!("{} of {} puzzles exported to {} ({} judged by key moves alone, {} with a list of answers; {} failed the deep check)", done.len(), puzzles.len(), site.display(), keys_ok, partial, DEEP_FAILED.load(Ordering::Relaxed));
+    println!(
+        "{} of {} puzzles exported to {} ({} judged by key moves alone, {} with a list of answers; {} with a trimmed line; {} failed the deep check)",
+        done.len(),
+        puzzles.len(),
+        site.display(),
+        keys_ok,
+        partial,
+        TRIMMED.load(Ordering::Relaxed),
+        DEEP_FAILED.load(Ordering::Relaxed)
+    );
 }
 
 fn main() {
