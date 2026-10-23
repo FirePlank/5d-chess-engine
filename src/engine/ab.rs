@@ -676,6 +676,8 @@ pub struct AlphaBeta {
     /// `OwnBook`: play a book action (`book::Book::theory`) without searching when the root
     /// is a book position with one.
     own_book: bool,
+    /// Root actions playing any of these moves are not searched (`set_root_exclude`).
+    root_exclude: Vec<FullMove>,
     /// How far the search for a checkmate in one goes (`MateVerify`).
     mate_verify: MateVerify,
     /// Hypercuboids an escape search that ran out of `TRAVEL_MATE_STEPS` may go on to (0: none;
@@ -1015,6 +1017,7 @@ impl AlphaBeta {
             threads: 1,
             multipv: 1,
             own_book: false,
+            root_exclude: Vec::new(),
             mate_verify: MateVerify::Auto,
             mate_recheck: 0,
             escapes: Vec::new(),
@@ -3504,6 +3507,16 @@ impl AlphaBeta {
     }
 
     /// Nodes the last search visited, over all its threads.
+    /// Search only the root actions that play none of `moves` (puzzle analysis: how the
+    /// position fares without a move); empty restores every action.
+    pub fn set_root_exclude(&mut self, moves: &[FullMove]) {
+        self.root_exclude = moves.to_vec();
+    }
+
+    fn root_excluded(&self, act: &MoveSeq) -> bool {
+        !self.root_exclude.is_empty() && act.iter().any(|m| self.root_exclude.contains(m))
+    }
+
     pub fn last_search_nodes(&self) -> u64 {
         self.nodes + self.helper_nodes
     }
@@ -3651,6 +3664,7 @@ impl AlphaBeta {
             }
         };
         self.mate_recheck = 0;
+        let future_mate = future_mate.filter(|m| !self.root_excluded(m));
         // An analysis (no clock) is told how far the search for a mate in one went.
         if !plan.as_ref().is_some_and(|p| p.clock) && future_mate.is_none() && !interrupted() {
             match scan_end {
@@ -3721,6 +3735,7 @@ impl AlphaBeta {
                 }
             }
         }
+        roots.retain(|r| !self.root_excluded(&r.1));
         if roots.is_empty() {
             return None;
         }
@@ -3734,7 +3749,7 @@ impl AlphaBeta {
         // that moves the present back, so that it is an action alone, comes after every action
         // creating none) is searched as a root action: it can start a mate in more than one.
         for a in travel_checks {
-            if !roots.iter().any(|r| r.1 == a) {
+            if !roots.iter().any(|r| r.1 == a) && !self.root_excluded(&a) {
                 roots.push((self.action_score(root, &a, 0), a));
             }
         }
@@ -3742,7 +3757,7 @@ impl AlphaBeta {
         // Capturing travels of that kind too, after every other action: never left out, but
         // searched last (reduced like other late actions), as most of them only lose material.
         for a in travel_captures {
-            if !roots.iter().any(|r| r.1 == a) {
+            if !roots.iter().any(|r| r.1 == a) && !self.root_excluded(&a) {
                 roots.push((i32::MIN / 2, a));
             }
         }
