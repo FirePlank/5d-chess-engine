@@ -20,7 +20,9 @@ const INVALID: Index = Index::MAX;
 #[derive(Clone, Copy, Debug)]
 /// Moves carry their white-normalized moving and captured piece kinds.
 pub enum Entry {
-    Physical { m: FullMove, b: Board, mover: Piece, victim: Piece },
+    /// `promo`: the piece a promoting pawn becomes when not the position's default
+    /// (`NO_PIECE` otherwise); each allowed piece is its own entry.
+    Physical { m: FullMove, b: Board, mover: Piece, victim: Piece, promo: Piece },
     /// `idx` is the paired departure coordinate on axis `fa`.
     Arriving { m: FullMove, b: Board, idx: Index, fa: u32, mover: Piece, victim: Piece },
     Departing { from: Vec4, b: Board },
@@ -544,6 +546,10 @@ fn gen_physical_entries(s: &State, source: &Board, p0: Vec4, player: bool, rs: R
             } else {
                 nb.transfer(pos, sq);
             }
+            // The pieces a promotion may give: the default, then the others the position
+            // allows (custom positions), each its own entry.
+            let mut promos = [NO_PIECE; 8];
+            let mut n_promos = 1;
             if pawn && q.y() == promotion_rank(size_y, player) {
                 let promotion = s
                     .normalize_promotion(super::action::ExtMove::new(m, NO_PIECE))
@@ -551,6 +557,12 @@ fn gen_physical_entries(s: &State, source: &Board, p0: Vec4, player: bool, rs: R
                     .unwrap_or(NO_PIECE);
                 if promotion != NO_PIECE {
                     nb.set_piece(sq, if player { to_black(promotion) } else { promotion });
+                    for p in super::promotion::allowed_promotions(s.get_promotion_options()) {
+                        if p != promotion && n_promos < promos.len() {
+                            promos[n_promos] = p;
+                            n_promos += 1;
+                        }
+                    }
                 }
             }
             let safe = if !needs_test {
@@ -567,7 +579,13 @@ fn gen_physical_entries(s: &State, source: &Board, p0: Vec4, player: bool, rs: R
                     let v = source.kind(sq);
                     if v == NO_PIECE && (mover == PAWN_W || mover == BRAWN_W) && dx != 0 { source.kind(ppos(q.x(), from.y())) } else { v }
                 };
-                locs.push(Entry::Physical { m, b: nb, mover, victim });
+                locs.push(Entry::Physical { m, b: nb, mover, victim, promo: NO_PIECE });
+                // (The promoted piece's kind cannot change the mover's own royal safety.)
+                for &p in &promos[1..n_promos] {
+                    let mut b = nb;
+                    b.set_piece(sq, if player { to_black(p) } else { p });
+                    locs.push(Entry::Physical { m, b, mover, victim, promo: p });
+                }
             }
         }
     }
@@ -1688,14 +1706,20 @@ impl HcInfo {
 
     pub fn to_action(&self, p: &Point) -> MoveSeq {
         let mut mvs = MoveSeq::new();
-        for &(_, i) in &self.line_axes {
-            match self.entry(i, p[i]) {
-                Entry::Physical { m, .. } | Entry::Arriving { m, .. } => mvs.push(*m),
-                _ => {}
-            }
-        }
+        // Lines in ascending order for white, descending for black.
+        let mut push = |e: &Entry| match e {
+            Entry::Physical { m, promo, .. } => mvs.push_promo(*m, *promo),
+            Entry::Arriving { m, .. } => mvs.push(*m),
+            _ => {}
+        };
         if self.player {
-            mvs.reverse();
+            for &(_, i) in self.line_axes.iter().rev() {
+                push(self.entry(i, p[i]));
+            }
+        } else {
+            for &(_, i) in &self.line_axes {
+                push(self.entry(i, p[i]));
+            }
         }
         mvs
     }

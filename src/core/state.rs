@@ -260,6 +260,16 @@ impl State {
         }
     }
 
+    /// `apply_move`, promoting to `promo` when it is not `NO_PIECE` (the default).
+    #[inline]
+    pub fn apply_promo<const UNSAFE: bool>(&mut self, fm: FullMove, promo: Piece) -> bool {
+        if promo == NO_PIECE {
+            self.apply_move::<UNSAFE>(fm)
+        } else {
+            self.apply_ext::<UNSAFE>(ExtMove::new(fm, promo))
+        }
+    }
+
     pub fn apply_ext<const UNSAFE: bool>(&mut self, mv: ExtMove) -> bool {
         let ExtMove { fm, promote_to } = mv;
         let p = fm.from;
