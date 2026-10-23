@@ -13,6 +13,9 @@ on:
       deep_nodes:
         description: Nodes of the deep check (0 skips it)
         default: "3000000"
+      only:
+        description: "Run just these shards (comma separated), e.g. 6,8,38"
+        default: ""
       data_ref:
         description: Branch holding puzzles/puzzles.jsonl
         default: puzzle-data
@@ -30,7 +33,12 @@ jobs:
       shards: ${{ steps.m.outputs.shards }}
     steps:
       - id: m
-        run: echo "shards=$(jq -nc --argjson n ${{ inputs.shards }} '[range(1; $n + 1)]')" >> "$GITHUB_OUTPUT"
+        run: |
+          if [ -n "${{ inputs.only }}" ]; then
+            echo "shards=[${{ inputs.only }}]" >> "$GITHUB_OUTPUT"
+          else
+            echo "shards=$(jq -nc --argjson n ${{ inputs.shards }} '[range(1; $n + 1)]')" >> "$GITHUB_OUTPUT"
+          fi
 
   build:
     runs-on: ubuntu-24.04
