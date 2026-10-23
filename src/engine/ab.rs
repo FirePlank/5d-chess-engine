@@ -144,6 +144,9 @@ const ROOT_EFFORT_SCALE: f64 = 0.75;
 /// it beats beta by RFP_MARGIN per ply.
 const RFP_DEPTH: i32 = 2;
 const RFP_MARGIN: i32 = 250;
+/// ProbCut: from this depth, the margin over beta a remembered capture must clear.
+const PROBCUT_DEPTH: i32 = 5;
+const PROBCUT_MARGIN: i32 = 300;
 /// Null move (a pass, i.e. a phantom turn): at non-PV nodes from this depth, when the static
 /// eval is at least beta, search the pass with depth reduced by NMP_R + depth / NMP_DIV.
 const NMP_MIN_DEPTH: i32 = 3;
@@ -2695,6 +2698,29 @@ impl AlphaBeta {
                 }
             }
         }
+
+        // ProbCut: a remembered capture that clears beta by PROBCUT_MARGIN in a search four
+        // plies shallower almost surely clears it in a full one (Stockfish, Apeiron).
+        if !pv && depth >= PROBCUT_DEPTH && beta.abs() < MATE - 1000 && !excl_node
+            && let Some(ta) = tt_action.clone()
+            && Self::is_tactical(s, &ta)
+            && !known_check.unwrap_or_else(|| self.in_check(s)) {
+                let pb = beta + PROBCUT_MARGIN;
+                // An entry deep enough already says the capture falls short.
+                let short = self.tt.probe(key, |e| e.depth as i32 >= depth - 3 && mate_from_tt(e.score, ply) < pb).unwrap_or(false);
+                if !short && let Some(mark) = Self::make_checked(s, &ta) {
+                    let v = -self.negamax(s, depth - 4, ply + 1, -pb, -pb + 1, false);
+                    s.unmake(mark);
+                    if self.aborted {
+                        return 0;
+                    }
+                    if v >= pb && v.abs() < MATE - 1000 {
+                        self.proven = false;
+                        self.tt_store(key, depth - 3, Bound::Lower, v, false, &ta);
+                        return v - PROBCUT_MARGIN;
+                    }
+                }
+            }
 
         let mut best = -INF;
         let mut best_action = MoveSeq::new();
