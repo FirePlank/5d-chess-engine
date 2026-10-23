@@ -1,8 +1,8 @@
 {
-  "name": "sac_nodes_v2",
-  "old": "d2a8490",
+  "name": "travel_mate_jumps",
+  "old": "526dcb3a7eea3df8746c3b31ceec76439b96eb1d",
   "games": 4000,
-  "shards": 39,
+  "shards": 40,
   "tc": "tc 10+0.1",
   "elo0": 0,
   "elo1": 5,
@@ -10,5 +10,6 @@
   "old_args": "",
   "base": "self",
   "book": "data/books/mixed.g",
-  "max_seconds": 840
+  "max_seconds": 840,
+  "threads": 1
 }
