@@ -72,6 +72,8 @@ jobs:
         with:
           name: puzzlegen
       - name: Export shard
+        # (bash with pipefail: a puzzlegen that dies fails the shard, not only tee's exit)
+        shell: bash
         run: |
           chmod +x puzzlegen
           mkdir -p games/puzzles
