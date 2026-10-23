@@ -5,6 +5,7 @@ use super::json::Json;
 use super::pgn;
 use super::tree::{parse_lan_moves, Game, ROOT};
 use crate::core::multiverse::TimelineLayout;
+use crate::core::promotion::{format_promotions, PromotionOptions};
 use crate::core::state::State;
 use crate::core::variants::{default_variant, position_from_uci, state_from_setup, Sign, VariantSetup};
 use crate::obj;
@@ -14,7 +15,11 @@ pub const VARIANTS: [&str; 44] = crate::core::variants::VARIANT_NAMES;
 
 /// The 5DUCI `position` argument for a setup.
 pub fn setup_to_uci(v: &VariantSetup) -> String {
-    let mut s = format!("size {}x{} {} fen", v.size_x, v.size_y, if v.even { "even" } else { "odd" });
+    let mut s = format!("size {}x{} {}", v.size_x, v.size_y, if v.even { "even" } else { "odd" });
+    if v.promotions != PromotionOptions::QUEEN {
+        s += &format!(" promotions {}", format_promotions(v.promotions));
+    }
+    s += " fen";
     let layout = if v.even { TimelineLayout::even() } else { TimelineLayout::odd() };
     for b in &v.boards {
         // Internal negative lines are written mirrored with a '-' sign.

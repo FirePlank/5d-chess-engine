@@ -25,6 +25,7 @@ Student-t intervals over pair log ratios. Root preparation is included. No SPRT.
 | Extract NNUE features once for both views | +1.19% | −1.75% | −0.13% (−1.72% to +1.48%) | Reverted; gain not established |
 | Bulk destination-region merge (24-pair confirmation) | −0.07% | −0.90% | −0.44% (−1.60% to +0.73%) | Reverted; gain not confirmed |
 | Fresh HCE proof of zero local gain (blend 65) | −1.54% | −0.33% | −1.02% (−2.30% to +0.27%) | Reverted; no gain in NPS or subsequent process-cycle run |
+| Check filter for timelines ending on the opponent's turn + per-departure discovered-check cache (2026-10-23) | +0.34% | −2.59% | −0.40% (−3.04% to +2.30%) | Not merged; mate-suite profile showed 27% of check scans skipped, but the filter's own cost offsets it |
 
 The source-mask experiment passed 108 tests (two existing ignores), a differential
 mask-versus-check-list test, and exact ordered action dumps across the perft,

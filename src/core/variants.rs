@@ -2,7 +2,7 @@
 
 use super::action::ExtMove;
 use super::multiverse::{Multiverse, TimelineLayout};
-use super::promotion::PromotionOptions;
+use super::promotion::{parse_promotions, PromotionOptions};
 use super::state::State;
 use super::vec4::Vec4;
 
@@ -247,6 +247,7 @@ pub fn position_from_uci(position: &str) -> Result<State, String> {
         return Ok(startpos());
     }
     let (mut m, mut n, mut even) = (0, 0, false);
+    let mut promotions = PromotionOptions::QUEEN;
     let fen: &str;
     if let Some(rest) = position.strip_prefix("size ") {
         match rest.find(" fen ") {
@@ -258,8 +259,17 @@ pub fn position_from_uci(position: &str) -> Result<State, String> {
                         m = a.parse().unwrap_or(0);
                         n = b.parse().unwrap_or(0);
                     }
-                if it.next() == Some("even") {
-                    even = true;
+                for tok in it.by_ref() {
+                    match tok {
+                        "even" => even = true,
+                        "promotions" => break,
+                        _ => {}
+                    }
+                }
+                // `promotions <pieces>`: the pieces pawns promote to (as 5dpgn's header: letters,
+                // or `*`); without it, the queen only.
+                if let Some(p) = it.next() {
+                    promotions = parse_promotions(p)?;
                 }
                 fen = &rest[fp + 5..];
             }
@@ -305,7 +315,7 @@ pub fn position_from_uci(position: &str) -> Result<State, String> {
         size_y: if n > 0 { n } else { 8 },
         boards,
         even,
-        promotions: PromotionOptions::QUEEN,
+        promotions,
     })
 }
 

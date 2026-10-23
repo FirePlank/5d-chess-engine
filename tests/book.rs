@@ -282,13 +282,13 @@ fn moves_that_transpose_into_the_book_are_listed_and_played() {
 
 #[test]
 fn an_exact_line_gives_a_transposed_history_known_moves_only() {
-    // Both orders reach the same board, but in `other` the f3 knight blocks a bishop travel on
-    // turn 1. The line is marked {exact}, so 4. Qxg4 is played only in the guide's order.
-    let guide = position("Standard - Turn Zero", "(0T1)e2e3 submit (0T1)g8f6 submit (0T2)g1f3 submit (0T2)f6g4 submit (0T3)f3g5 submit (0T3)f7f5 submit");
-    let other = position("Standard - Turn Zero", "(0T1)g1f3 submit (0T1)g8f6 submit (0T2)e2e3 submit (0T2)f6g4 submit (0T3)f3g5 submit (0T3)f7f5 submit");
+    // Both orders reach the same board, but in `other` the f3 knight was not there on turn 1.
+    // The line is marked {exact}, so 3. b3 is played only in the guide's order.
+    let guide = position("Standard - Turn Zero", "(0T1)g1f3 submit (0T1)g8f6 submit (0T2)e2e3 submit (0T2)c7c5 submit");
+    let other = position("Standard - Turn Zero", "(0T1)e2e3 submit (0T1)g8f6 submit (0T2)g1f3 submit (0T2)c7c5 submit");
     let b = Book::theory();
-    assert!(b.probe(&guide).unwrap().iter().any(|m| m.play && m.lan == "(0T4)d1g4"));
+    assert!(b.probe(&guide).unwrap().iter().any(|m| m.play && m.lan == "(0T3)b2b3"));
     let moves = b.probe(&other).expect("the book still knows the board");
-    assert!(moves.iter().all(|m| !m.play) && moves.iter().any(|m| m.lan == "(0T4)d1g4"));
+    assert!(moves.iter().all(|m| !m.play) && moves.iter().any(|m| m.lan == "(0T3)b2b3"), "{:?}", moves.iter().map(|m| (&m.lan, m.play)).collect::<Vec<_>>());
     assert!(b.choose(&other, 1).is_none());
 }
