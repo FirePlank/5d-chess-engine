@@ -14,6 +14,8 @@
 #        result is read from the games played so far),
 #        BOOK (openings from this G file of the repo, e.g. data/books/timelines4.g, each
 #        played with both colors; default: generated openings),
+#        THREADS (search threads of both engines, default 1; a runner then plays nproc/THREADS
+#        games at once),
 #        GH_RETRY_S (how long one GitHub call is retried through network errors, default 1800).
 #   Network trouble never stops it: every gh call has a timeout and is retried, a run whose
 #   status cannot be read is waited on (or past the time cap cancelled when GitHub answers
@@ -56,8 +58,8 @@ else
   [ "$PATCH" = "-" ] || git apply "$PATCH"
   jq -n --arg n "$NAME" --arg o "${OLD_SHA:-$BASE_SHA}" --arg tc "$TC" --argjson g "$GAMES" \
         --argjson e0 "$E0" --argjson e1 "$E1" --argjson sh "${SHARDS:-40}" \
-        --arg na "${NEW_ARGS:-}" --arg oa "${OLD_ARGS:-}" --arg b "${BASE:-self}" --arg bk "${BOOK:-}" --argjson ms "$(( ${MAX_MIN:-20} * 60 - 360 ))" \
-        '{name:$n, old:$o, games:$g, shards:$sh, tc:$tc, elo0:$e0, elo1:$e1, new_args:$na, old_args:$oa, base:$b, book:$bk, max_seconds:$ms}' \
+        --arg na "${NEW_ARGS:-}" --arg oa "${OLD_ARGS:-}" --arg b "${BASE:-self}" --arg bk "${BOOK:-}" --argjson ms "$(( ${MAX_MIN:-20} * 60 - 360 ))" --argjson th "${THREADS:-1}" \
+        '{name:$n, old:$o, games:$g, shards:$sh, tc:$tc, elo0:$e0, elo1:$e1, new_args:$na, old_args:$oa, base:$b, book:$bk, max_seconds:$ms, threads:$th}' \
         > .github/sprt.json
   git add -A && git commit -q -m "test: $NAME"
   SHA=$(git rev-parse HEAD)
