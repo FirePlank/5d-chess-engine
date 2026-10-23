@@ -1913,8 +1913,8 @@ mod royal_tests {
                     let (w, ss) = HcInfo::build_hc(&s);
                     for mv in w.search(&s, ss).take(kids) {
                         let mut t = s.clone();
-                        for (i, &m) in mv.iter().enumerate() {
-                            t.apply_promo::<true>(m, mv.promo(i));
+                        for &m in &mv {
+                            t.apply_move::<true>(m);
                         }
                         t.submit::<true>();
                         out.push(t);

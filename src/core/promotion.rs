@@ -40,22 +40,6 @@ pub fn can_promote_to(options: PromotionOptions, p: Piece) -> bool {
     o != PromotionOptions::NONE && options.0 & o.0 != 0
 }
 
-/// The promotion pieces `options` allows, the default first.
-pub fn allowed_promotions(options: PromotionOptions) -> impl Iterator<Item = Piece> {
-    PRIORITY.into_iter().filter(move |&p| can_promote_to(options, p))
-}
-
-/// A promotion piece as a 4-bit code (`MoveSeq` stores one per move): 0 is the position's
-/// default, otherwise 1 + its index in the default order.
-pub fn promo_code(p: Piece) -> u32 {
-    PRIORITY.iter().position(|&q| q == p).map(|i| i as u32 + 1).unwrap_or(0)
-}
-
-/// The piece of a `promo_code` (`NO_PIECE` for 0, the default).
-pub fn promo_piece(code: u32) -> Piece {
-    if code == 0 { NO_PIECE } else { PRIORITY.get(code as usize - 1).copied().unwrap_or(NO_PIECE) }
-}
-
 pub fn default_promote_to(options: PromotionOptions) -> Piece {
     for p in PRIORITY {
         if can_promote_to(options, p) {
