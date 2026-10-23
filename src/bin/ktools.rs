@@ -1185,6 +1185,29 @@ fn main() {
                 }
             }
         }
+        "uci2pgn" => {
+            // uci2pgn <position> <moves> [<more moves>]: the 5dpgn of a 5DUCI position and the
+            // actions ("... submit" each; the last list may leave its final action unsubmitted)
+            // played from it.
+            use kairos::core::action::{Action, ExtMove};
+            use kairos::core::variants::{apply_uci_moves, position_from_uci};
+            use kairos::web::pgn::{write_5dpgn_opts, PgnOptions};
+            use kairos::web::record::setup_of_state;
+            let mut s = position_from_uci(args.get(2).expect("position")).expect("position");
+            let setup = setup_of_state(&s);
+            let text = args[3..].join(" submit ");
+            let mut actions = Vec::new();
+            for chunk in text.split("submit").map(str::trim).filter(|c| !c.is_empty()) {
+                let ext: Vec<ExtMove> = chunk
+                    .split_whitespace()
+                    .map(|t| s.normalize_promotion(ExtMove::parse(t).expect("move")).expect("promotion"))
+                    .collect();
+                actions.push(Action::from_vector(&ext, &s));
+                apply_uci_moves(&mut s, &format!("{chunk} submit")).expect("play");
+            }
+            let opts = PgnOptions { short: false, mate: false };
+            writeln!(out, "{}", write_5dpgn_opts(&[], &setup, &actions, opts)).unwrap();
+        }
         "pgn2g" => {
             // pgn2g [all] <file.5dpgn>... : the "G" line of each game's main-line end ("all":
             // of every position along the main line).

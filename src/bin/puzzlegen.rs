@@ -19,6 +19,7 @@
 //!
 //!   puzzlegen [--games FILE...] [--out games/puzzles/puzzles.jsonl] [--threads N]
 //!             [--max-files N] [--max-games N] [--per-game N] [--dry-run] [--rate-only]
+//!             [--export site.jsonl]
 //!             [--screen-nodes N] [--verify-nodes N] [--key-nodes N] [--cook-nodes N]
 //!             [--defend-nodes N] [--rate-nodes N] [--budget-secs N]
 //!
@@ -140,6 +141,8 @@ struct Cfg {
     per_game: usize,
     dry_run: bool,
     rate_only: bool,
+    /// Write the site's puzzle file (see `export_site`) from `out` instead of mining.
+    export: Option<PathBuf>,
     screen_nodes: u64,
     verify_nodes: u64,
     key_nodes: u64,
@@ -160,6 +163,7 @@ impl Default for Cfg {
             per_game: 6,
             dry_run: false,
             rate_only: false,
+            export: None,
             screen_nodes: 60_000,
             verify_nodes: 400_000,
             key_nodes: 250_000,
@@ -185,6 +189,7 @@ fn parse_args() -> Cfg {
             "--per-game" => cfg.per_game = val().parse().unwrap_or(cfg.per_game),
             "--dry-run" => cfg.dry_run = true,
             "--rate-only" => cfg.rate_only = true,
+            "--export" => cfg.export = Some(PathBuf::from(val())),
             "--screen-nodes" => cfg.screen_nodes = val().parse().unwrap_or(cfg.screen_nodes),
             "--verify-nodes" => cfg.verify_nodes = val().parse().unwrap_or(cfg.verify_nodes),
             "--key-nodes" => cfg.key_nodes = val().parse().unwrap_or(cfg.key_nodes),
@@ -1570,6 +1575,169 @@ fn report(puzzles: &[Json], out: &Path) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// site export: equivalent answers and the replies to them
+// ---------------------------------------------------------------------------
+
+/// Most other actions playing a step's key moves that are tried as equivalent answers.
+const VARIANT_CAP: usize = 24;
+
+/// The solver's score after playing into `child` (the defender to move): `MATE_CP` when the
+/// defender is mated, `None` when stalemated.
+fn after_score(e: &mut Engine, child: &State, nodes: u64) -> Option<i32> {
+    match mated(child) {
+        Some(true) => return Some(MATE_CP),
+        Some(false) => return None,
+        None => {}
+    }
+    e.search(child, nodes, 1, &[]).lines.first().map(|l| -l.score)
+}
+
+/// Whether an answer scoring `mine` keeps what the puzzle's own answer (`reference`) does.
+fn keeps_outcome(mine: i32, reference: i32, win: bool) -> bool {
+    if win {
+        mine >= reference || (!is_mate_win(reference) && wins(mine))
+    } else {
+        mine >= HOLD_FLOOR
+    }
+}
+
+fn texts(a: &kairos::core::action::MoveSeq) -> String {
+    a.iter().map(|m| m.to_string()).collect::<Vec<_>>().join(" ")
+}
+
+/// A stored puzzle as the site plays it. Besides the line, every solver step says how its
+/// answers are judged and what the defender plays back:
+///   - `accept`: "keys" when every action that plays all the key moves was found to keep the
+///     outcome (any such action is right), "list" when some did not (only `canonical` and the
+///     listed `variants` are right when `complete`, else the site's engine must judge), and
+///     "mates" for a mate in one with several mating actions (any mating action).
+///   - `variants`: other right actions found, each with the defender's best reply to it, and
+///     whether the next step's key moves still apply after that reply (`same_next`; if not,
+///     the site judges the following step with the engine).
+fn site_puzzle(e: &mut Engine, p: &Json, cfg: &Cfg) -> Option<Json> {
+    let mut cur = position_from_uci(p.get("position").str()?).ok()?;
+    let win = p.get("outcome").str()? == "win";
+    let line: Vec<String> = p.get("solution").arr().iter().filter_map(|x| x.str().map(String::from)).collect();
+    let keys: Vec<Vec<String>> = p
+        .get("key_moves")
+        .arr()
+        .iter()
+        .map(|k| k.arr().iter().filter_map(|x| x.str().map(String::from)).collect())
+        .collect();
+    let nodes = cfg.key_nodes * 2;
+    let mut steps: Vec<Json> = Vec::new();
+    for (i, ks) in keys.iter().enumerate() {
+        let canon = line.get(2 * i)?.clone();
+        let reply = line.get(2 * i + 1).cloned();
+        let child = play(&cur, &canon)?;
+        let mut step = vec![("canonical", Json::from(canon.clone())), ("keys", Json::Arr(ks.iter().map(|k| Json::from(k.clone())).collect()))];
+        if let Some(r) = &reply {
+            step.push(("reply", Json::from(r.clone())));
+        }
+        if ks.is_empty() {
+            step.push(("accept", Json::from("mates")));
+            steps.push(Json::Obj(step.into_iter().map(|(k, v)| (k.to_string(), v)).collect()));
+            break;
+        }
+        let kmoves: Vec<FullMove> = ks.iter().filter_map(|k| parse_move(k)).collect();
+        let reference = after_score(e, &child, nodes)?;
+        let all: Vec<_> = e.ab.node_order(&cur, ROOT_COUNT_CAP).into_iter().filter(|a| kmoves.iter().all(|m| a.contains(m))).collect();
+        let mut variants: Vec<Json> = Vec::new();
+        let (mut tried, mut bad) = (0usize, 0usize);
+        for a in all.iter().map(texts).filter(|t| *t != canon) {
+            if tried == VARIANT_CAP {
+                break;
+            }
+            tried += 1;
+            let Some(vc) = play(&cur, &a) else {
+                bad += 1;
+                continue;
+            };
+            if !after_score(e, &vc, nodes).is_some_and(|m| keeps_outcome(m, reference, win)) {
+                bad += 1;
+                continue;
+            }
+            let mut v = vec![("action", Json::from(a.clone()))];
+            if mated(&vc).is_none() {
+                let top = e.search(&vc, cfg.defend_nodes, 1, &[]).lines.first().map(|l| l.action.clone());
+                if let Some(r) = top {
+                    if let (Some(next), Some(nk)) = (play(&vc, &r), keys.get(i + 1)) {
+                        let same = solver_turn(e, &next, win, cfg.cook_nodes / 2, cfg.key_nodes / 2)
+                            .is_some_and(|t| t.0.keys.len() == nk.len() && nk.iter().all(|k| t.0.keys.contains(k)));
+                        v.push(("same_next", Json::from(same)));
+                    }
+                    v.push(("reply", Json::from(r)));
+                }
+            }
+            variants.push(Json::Obj(v.into_iter().map(|(k, v)| (k.to_string(), v)).collect()));
+        }
+        let complete = tried == all.len().saturating_sub(1);
+        step.push(("accept", Json::from(if bad == 0 { "keys" } else { "list" })));
+        step.push(("complete", Json::from(complete)));
+        step.push(("examined", Json::from(tried)));
+        step.push(("rejected", Json::from(bad)));
+        step.push(("variants", Json::Arr(variants)));
+        steps.push(Json::Obj(step.into_iter().map(|(k, v)| (k.to_string(), v)).collect()));
+        let Some(r) = reply else { break };
+        cur = play(&child, &r)?;
+    }
+    Some(obj![
+        ("id", p.get("id").clone()),
+        ("rating", p.get("rating").clone()),
+        ("rating_deviation", p.get("rating_deviation").clone()),
+        ("side", p.get("side").clone()),
+        ("outcome", p.get("outcome").clone()),
+        ("themes", p.get("themes").clone()),
+        ("position", p.get("position").clone()),
+        ("mate_in", p.get("features").get("mate_in").clone()),
+        ("ends_in_mate", p.get("features").get("ends_in_mate").clone()),
+        ("solution", p.get("solution").clone()),
+        ("steps", Json::Arr(steps)),
+    ])
+}
+
+/// Write `site` (one puzzle per line) from the stored puzzles.
+fn export_site(cfg: &Cfg, site: &Path) {
+    let text = std::fs::read_to_string(&cfg.out).unwrap_or_default();
+    let puzzles: Vec<Json> = text.lines().filter_map(|l| Json::parse(l).ok()).collect();
+    let next = AtomicUsize::new(0);
+    let done: Mutex<Vec<(usize, Json)>> = Mutex::new(Vec::new());
+    std::thread::scope(|sc| {
+        for _ in 0..cfg.threads {
+            sc.spawn(|| {
+                let mut e = Engine::new();
+                loop {
+                    let k = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(p) = puzzles.get(k) else { break };
+                    if let Some(j) = site_puzzle(&mut e, p, cfg) {
+                        done.lock().unwrap().push((k, j));
+                    }
+                    if (k + 1).is_multiple_of(25) {
+                        println!("  {} of {} exported", k + 1, puzzles.len());
+                    }
+                }
+            });
+        }
+    });
+    let mut done = done.into_inner().unwrap();
+    done.sort_by_key(|d| d.0);
+    let mut body = String::new();
+    let (mut keys_ok, mut partial) = (0usize, 0usize);
+    for (_, j) in &done {
+        let all_keys = j.get("steps").arr().iter().all(|s| s.get("accept").str() != Some("list"));
+        if all_keys {
+            keys_ok += 1;
+        } else {
+            partial += 1;
+        }
+        j.write(&mut body);
+        body.push('\n');
+    }
+    let _ = std::fs::write(site, body);
+    println!("{} of {} puzzles exported to {} ({} judged by key moves alone, {} with a list of answers)", done.len(), puzzles.len(), site.display(), keys_ok, partial);
+}
+
 fn main() {
     let cfg = parse_args();
     if let Some(dir) = cfg.out.parent() {
@@ -1578,6 +1746,10 @@ fn main() {
     if cfg.rate_only {
         let p = finalize(&cfg.out);
         report(&p, &cfg.out);
+        return;
+    }
+    if let Some(site) = &cfg.export {
+        export_site(&cfg, site);
         return;
     }
     let mut cands = scan(&cfg);
