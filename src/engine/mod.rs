@@ -4,7 +4,6 @@ pub mod chess;
 pub mod chess_tab;
 pub mod evalnet;
 pub mod hce;
-pub mod move_attrs;
 pub mod nnue;
 pub mod local;
 pub mod sac;
