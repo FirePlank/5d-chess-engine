@@ -23,6 +23,7 @@
 08f77e3b234154ad play 1 (0T19)e4d6 ; (0T19)Nd6+ | was play 10 | weight 10 -> 1 (loss 1074 cp)
 094ac4d56cecf69c play 2 (0T10)g5f7 ; (0T10)Nxf7 | was play 3 | weight 3 -> 2 (re-scout 2026-10-23, loss 45 cp)
 0976a576e0e91a94 play 3 (0T14)f5e6 ; (0T14)fxe6+ | was play 10 | weight 10 -> 3 (loss 36 cp)
+09c70d1867e2a7a7 know 0 (0T4)d1g4 ; (0T4)Qxg4 | was play 10 | demoted on review (re-scout 2026-10-23): loses 105 cp (+-34) against the best move (0T4)f1b5
 0aa80d338960abd8 play 1 (0T17)a5b7 ; (0T17)Nxb7 | was play 10 | weight 10 -> 1 (re-scout 2026-10-23, loss 60 cp)
 0abfb9ee2c391acb know 0 (0T17)h1f1 ; (0T17)Rf1 | was play 10 | demoted (re-scout 2026-10-23): loses 112 cp (+-18) against the best move
 0ba8df4d8191333c play 1 (0T15)g5e6 ; (0T15)Nxe6+ | was play 10 | weight 10 -> 1 (loss 1285 cp)
@@ -40,6 +41,7 @@
 12232ccc1e44f087 know 0 (0T21)c1c2 ; (0T21)Kc2 | was play 10 | demoted: loses 94 cp (+-34) against the best move
 123fc9c72f613ae0 know 0 (0T7)d1a4 ; (0T7)Qa4 | was play 10 | demoted (re-scout 2026-10-23): loses 146 cp (+-18) against the best move
 12f2bc21dea07267 play 1 (0T15)f3e5 ; (0T15)Ne5 | was play 10 | weight 10 -> 1 (re-scout 2026-10-23, loss 55 cp)
+12f9f560f37299e0 know 0 (0T3)d8a5 ; (0T3)Qa5+ | was play 10 | demoted on review (re-scout 2026-10-23): loses 90 cp (+-9) against the best move (0T3)e7e5
 1400b12052083a3b play 1 (0T12)d2c4 ; (0T12)Nc4 | was play 10 | weight 10 -> 1 (loss 55 cp)
 1424318ba854950c play 1 (0T13)e2f3 ; (0T13)Qf3 | was play 10 | weight 10 -> 1 (re-scout 2026-10-23, loss 54 cp)
 15a4f395ce77d16e know 0 (0T16)d3h3 ; (0T16)Qh3 | was play 10 | demoted (re-scout 2026-10-23): loses 263 cp (+-100) against the best move
@@ -206,6 +208,7 @@
 6f6e4a97f9feaead know 0 (0T14)a4c2 ; (0T14)Qc2 | was play 10 | demoted: loses 126 cp (+-43) against the best move
 6fc420880fcd58ab play 1 (0T16)f7d6 ; (0T16)Nd6+ | was play 10 | weight 10 -> 1 (loss 57 cp)
 702c12c2d6af9192 play 1 (1T7)g4c8 ; (1T7)Qxc8 | was play 10 | weight 10 -> 1 (re-scout 2026-10-23, loss 59 cp)
+70389cf457aba0fc know 0 (0T3)c1g5 ; (0T3)Bg5 | was play 10 | demoted on review (re-scout 2026-10-23): loses 60 cp (+-9) against the best move (0T3)b1c3
 70e6f3312c7d21e0 play 1 (0T19)c3b4 ; (0T19)cxb4 | was play 10 | weight 10 -> 1 (loss 130 cp)
 7150e6f47ccff16d play 2 (0T16)e3g3 ; (0T16)Qg3 | was play 10 | weight 10 -> 2 (re-scout 2026-10-23, loss 44 cp)
 734141b04360ef1f know 0 (0T14)f1h3 ; (0T14)Qh3 | was play 3 | demoted: loses 112 cp (+-11) against the best move
@@ -285,6 +288,7 @@
 9911028bf7c5919c play 2 (0T14)e2h5 ; (0T14)Qh5 | was play 10 | weight 10 -> 2 (re-scout 2026-10-23, loss 48 cp)
 99d46db32fb9d486 play 2 (0T16)b8a6 ; (0T16)Na6 | was play 10 | weight 10 -> 2 (re-scout 2026-10-23, loss 43 cp)
 9a656a370c22186a play 2 (0T11)d3e2 ; (0T11)Qe2 | was play 10 | weight 10 -> 2 (re-scout 2026-10-23, loss 49 cp)
+9b2beb55cf122cae know 0 (0T2)g1f3 ; (0T2)Nf3 | was play 10 | demoted on review (re-scout 2026-10-23): loses 90 cp (+-18) against the best move (0T2)d1h5
 9bdbd02d695734b8 play 3 (0T16)d5e6 ; (0T16)dxe6+ | was play 10 | weight 10 -> 3 (re-scout 2026-10-23, loss 38 cp)
 9d78fc56e832bfa5 play 1 (0T19)c3b4 ; (0T19)cxb4 | was play 10 | weight 10 -> 1 (loss 130 cp)
 9e0ed9a8bfcef19d know 0 (0T11)d3e2 ; (0T11)Qe2 | was play 10 | demoted: loses 168 cp (+-80) against the best move
@@ -296,6 +300,7 @@ a177f96cf87abc9c play 1 (0T14)d5e6 ; (0T14)dxe6 | was play 10 | weight 10 -> 1 (
 a1fe19eee1758f0b play 2 (0T13)c2e2 ; (0T13)Qe2 | was play 10 | weight 10 -> 2 (re-scout 2026-10-23, loss 42 cp)
 a214e325b0cd089d play 1 (0T20)b1d2 ; (0T20)Nd2 | was play 10 | weight 10 -> 1 (re-scout 2026-10-23, loss 66 cp)
 a21d0e2c52868010 know 0 (0T14)g5e6 ; (0T14)Nxe6+ | was play 10 | demoted: loses 139 cp (+-43) against the best move
+a2ec1a78da5ea6cc know 0 (0T3)f6g4 ; (0T3)Ng4 | was play 10 | demoted on review (re-scout 2026-10-23): loses 86 cp (+-11) against the best move (0T3)f6e4
 a336ba6abd431250 play 2 (0T14)d1f3 ; (0T14)Qf3 | was play 10 | weight 10 -> 2 (re-scout 2026-10-23, loss 41 cp)
 a371d3ae0b7440be play 2 (0T16)d2e4 ; (0T16)Ne4 | was play 10 | weight 10 -> 2 (loss 41 cp)
 a4cfb193888f90d4 play 2 (0T16)e3f4 ; (0T16)exf4 | was play 10 | weight 10 -> 2 (re-scout 2026-10-23, loss 45 cp)
