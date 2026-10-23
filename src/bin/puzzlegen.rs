@@ -617,10 +617,20 @@ fn action_moves(action: &str) -> Vec<(String, FullMove)> {
     action.split_whitespace().filter_map(|t| parse_move(t).map(|m| (t.to_string(), m))).collect()
 }
 
-/// `s` after `action` (and its submit), if legal.
+/// `s` after `action` (and its submit), if legal. A move from or onto a board that does not
+/// exist is no action (the rules would panic on it): a trimmed action can lose the move that
+/// made a timeline another of its moves plays on.
 fn play(s: &State, action: &str) -> Option<State> {
     let mut t = s.clone();
-    apply_uci_moves(&mut t, &format!("{action} submit")).ok()?;
+    let player = t.get_present().1;
+    for tok in action.split_whitespace() {
+        let m = parse_move(tok)?;
+        if t.get_board_ptr(m.from.l(), m.from.t(), player).is_none() || t.get_board_ptr(m.to.l(), m.to.t(), player).is_none() {
+            return None;
+        }
+        apply_uci_moves(&mut t, tok).ok()?;
+    }
+    apply_uci_moves(&mut t, "submit").ok()?;
     // The mover may not leave a royal capturable.
     if t.royal_capturable(t.get_present().1) {
         return None;
