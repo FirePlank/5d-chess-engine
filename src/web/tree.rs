@@ -24,6 +24,10 @@ pub struct Node {
     pub lan: String,
     /// The action in 5dpgn notation.
     pub san: String,
+    /// The action with every move's whole source square (`(0T2)Ng1f3`).
+    pub san_full: String,
+    /// Whether the mover had a single board to play on (a move's source board is then plain).
+    pub lone: bool,
     /// Part of the game's opening book (not chosen by an engine).
     pub book: bool,
     /// Engine score recorded with the action, from the mover's point of view.
@@ -61,7 +65,19 @@ pub fn searchable(s: &State) -> bool {
 
 /// 5dpgn of an action for display (short notation; mate symbols when affordable).
 pub fn action_san(s: &State, act: &Action) -> String {
-    pgn::action_to_pgn_opts(s, act, None, pgn::PgnOptions { short: true, mate: searchable(s) })
+    action_san_pair(s, act).0
+}
+
+/// `action_san` and the same action with each move's whole source square.
+pub fn action_san_pair(s: &State, act: &Action) -> (String, String) {
+    pgn::action_to_pgn_both(s, act, None, pgn::PgnOptions { short: true, mate: searchable(s) }, true)
+}
+
+/// Whether the side to move in `s` has one board to play on, so a move's source board needs no
+/// saying.
+pub fn lone_board(s: &State) -> bool {
+    let ts = s.get_timeline_status();
+    ts.mandatory.len() + ts.optional.len() <= 1
 }
 
 impl Status {
@@ -215,6 +231,8 @@ impl Game {
                 moves: Vec::new(),
                 lan: String::new(),
                 san: String::new(),
+                san_full: String::new(),
+                lone: false,
                 book: false,
                 eval: None,
                 comments: Vec::new(),
@@ -251,13 +269,16 @@ impl Game {
             return Ok(c);
         }
         let id = self.nodes.len();
-        let san = action_san(&ps, &act);
+        let (san, san_full) = action_san_pair(&ps, &act);
+        let lone = lone_board(&ps);
         self.nodes.push(Node {
             parent: Some(parent),
             children: Vec::new(),
             state,
             lan: action_lan(&ps, &act),
             san,
+            san_full,
+            lone,
             moves,
             book: false,
             eval: None,
@@ -363,6 +384,8 @@ impl Game {
                 ("children", n.children.clone()),
                 ("ply", n.ply),
                 ("san", n.san.as_str()),
+                ("sanFull", n.san_full.as_str()),
+                ("lone", n.lone),
                 ("lan", n.lan.as_str()),
                 ("book", n.book),
                 ("eval", n.eval),
@@ -491,10 +514,12 @@ impl Game {
         }
         // The draft's moves in short 5dpgn, as the move list writes them.
         let mut draft_san = Vec::with_capacity(draft.len());
+        let mut draft_full = Vec::with_capacity(draft.len());
         let mut ds = self.nodes[id].state.clone();
         for &m in draft {
             branches.extend(branch_of(&ds, &m));
             draft_san.push(Json::from(pgn::move_to_pgn_short(&ds, &m)));
+            draft_full.push(Json::from(pgn::move_to_pgn(&ds, &m)));
             let _ = apply_draft_move(&mut ds, m);
         }
         let branches: Vec<Json> = branches
@@ -529,6 +554,8 @@ impl Game {
             ("branches", Json::Arr(branches)),
             ("draft", Json::Arr(draft.iter().map(move_json).collect())),
             ("draftSan", Json::Arr(draft_san)),
+            ("draftSanFull", Json::Arr(draft_full)),
+            ("lone", lone_board(&self.nodes[id].state)),
             ("presentMoved", present_ok),
             ("canSubmit", can_submit),
             ("submitError", submit_error),
