@@ -1219,9 +1219,10 @@
 # with no defence set up; 3...c6 allows a forced mate with piece sacrifices.
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. e4 / Nf6 2. d4 / Nxe4 {know} 3. Qf3 {play 10} / Nf6 {know} 4. Qb3 {play 10}
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. e4 / Nf6 2. d4 / Nxe4 3. Qf3 / c6 {know} 4. Qxf7+ {play 10} / Kxf7 {know} 5. Bc4+ {play 10} / d5 {know} 6. Bxd5+ {play 10} / Qxd5 {know} 7. Bf4 {play 10}
-# 3. c3 c6 (751-754, the mainline): 4. Bg5 Bg4 (768-774); 4. e5, the Hindemith variation, is losing
-# for White after Bf5 and the bishop travel to f2 (755-767).
-[Board "Standard - Turn Zero"] [Mode "5D"] 1. e4 / Nf6 2. d4 / d5 3. c3 / c6 4. Bg5 {play 5} / Bg4 {play 10}
+# 3. c3 c6 (751-754, the mainline): 4. Bg5 Bg4 (768-774), known but not recommended (expert review,
+# 2026-10-23); 4. e5, the Hindemith variation, is losing for White after Bf5 and the bishop travel to
+# f2 (755-767).
+[Board "Standard - Turn Zero"] [Mode "5D"] 1. e4 / Nf6 2. d4 / d5 3. c3 / c6 4. Bg5 {know} / Bg4 {know}
 [Board "Standard - Turn Zero"] [Mode "5D"] 1. e4 / Nf6 2. d4 / d5 3. c3 / c6 4. e5 {know} / Bf5 {play 10} 5. Be3 {play 10} / (0T5)Bf5>>(0T2)f2 {play 10}
 # 2...e6 (777-800): White is in grave danger after 3. c3 Ng4 (the f2 sacrifice); 3. Bg5 is the
 # defence. After 3...c5/c6 White plays b4 against Qa5#; after 3...h6 the bishop goes to h4.
