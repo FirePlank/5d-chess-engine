@@ -17,6 +17,7 @@
 //! Scores are the engine's reported centipawns (`engine::report_cp`): +100 is about a 75%
 //! expected score in these games (scripts/eval_calibration.py), +250 about 95%.
 //!
+//!   (PUZZLEGEN_TRACE=1 prints the engine's info lines; PUZZLEGEN_SEARCH_SECS sets the stuck-search limit.)
 //!   puzzlegen [--games FILE...] [--out games/puzzles/puzzles.jsonl] [--threads N]
 //!             [--max-files N] [--max-games N] [--per-game N] [--dry-run] [--rate-only]
 //!             [--export site.jsonl [--shard I/N] [--deep-nodes N]]
@@ -487,6 +488,8 @@ struct Searched {
 
 struct Engine {
     ab: AlphaBeta,
+    /// Searches the watchdog stopped (see `search_limit`): their scores are not trusted.
+    timeouts: usize,
 }
 
 impl Engine {
@@ -494,7 +497,7 @@ impl Engine {
         let mut ab = AlphaBeta::new();
         ab.set_option("Hash", &OptionValue::Int(16));
         ab.set_option("Threads", &OptionValue::Int(1));
-        Engine { ab }
+        Engine { ab, timeouts: 0 }
     }
 
     /// Search `s` to `nodes` with `multipv` lines, the root actions playing any of `exclude` left
@@ -504,9 +507,39 @@ impl Engine {
         self.ab.set_root_exclude(exclude);
         self.ab.new_game();
         let stop = AtomicBool::new(false);
+        let finished = AtomicBool::new(false);
+        let timed_out = AtomicBool::new(false);
         let mut infos: Vec<String> = Vec::new();
         let limits = Limits { nodes: Some(nodes), ..Default::default() };
-        let best = self.ab.find_best_move(s, &limits, &stop, &mut |l| infos.push(l));
+        let trace = std::env::var_os("PUZZLEGEN_TRACE").is_some();
+        let limit = search_limit(nodes);
+        // A node limit is only checked between nodes: some node of a position with many
+        // timelines can take minutes to enumerate. The watchdog stops such a search.
+        let best = std::thread::scope(|sc| {
+            sc.spawn(|| {
+                let t0 = Instant::now();
+                while !finished.load(Ordering::Relaxed) {
+                    if t0.elapsed() >= limit {
+                        timed_out.store(true, Ordering::Relaxed);
+                        stop.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            });
+            let b = self.ab.find_best_move(s, &limits, &stop, &mut |l| {
+                if trace {
+                    eprintln!("    info {}", l.chars().take(160).collect::<String>());
+                }
+                infos.push(l)
+            });
+            finished.store(true, Ordering::Relaxed);
+            b
+        });
+        if timed_out.load(Ordering::Relaxed) {
+            self.timeouts += 1;
+            eprintln!("search stopped after {:.0}s ({} nodes asked)", limit.as_secs_f64(), nodes);
+        }
         self.ab.set_root_exclude(&[]);
         let mut lines: Vec<(i32, usize, Line)> = Vec::new();
         let mut by_depth: Vec<(i32, String)> = Vec::new();
@@ -533,6 +566,13 @@ impl Engine {
         }
         Searched { lines: out, by_depth }
     }
+}
+
+/// The longest a search of `nodes` may take: far above its usual time (an ordinary position
+/// searches 20k+ nodes a second), so only a stuck node trips it.
+fn search_limit(nodes: u64) -> Duration {
+    let base: u64 = std::env::var("PUZZLEGEN_SEARCH_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(30);
+    Duration::from_secs(base + nodes / 20_000)
 }
 
 fn score_of(internal: i32, proven: bool) -> i32 {
@@ -643,8 +683,9 @@ mod rej {
     pub const COOK_FAILED: usize = 4;
     pub const TRIVIAL: usize = 5;
     pub const UNSOUND: usize = 6;
-    pub const OK: usize = 7;
-    pub const N: usize = 8;
+    pub const TIMEOUT: usize = 7;
+    pub const OK: usize = 8;
+    pub const N: usize = 9;
     pub static COUNTS: [AtomicUsize; N] = [const { AtomicUsize::new(0) }; N];
     pub static SRC_SEEN: [AtomicUsize; 3] = [const { AtomicUsize::new(0) }; 3];
     pub static SRC_OK: [AtomicUsize; 3] = [const { AtomicUsize::new(0) }; 3];
@@ -660,6 +701,7 @@ mod rej {
             "cook produced nothing",
             "trivial recapture",
             "failed soundness check",
+            "a search was stopped (stuck)",
             "accepted",
         ];
         println!("\ncandidate outcomes:");
@@ -1344,6 +1386,7 @@ fn standalone(s: &State) -> Option<String> {
 
 fn solve(e: &mut Engine, c: &Cand, cfg: &Cfg) -> Option<Json> {
     let deadline = Instant::now() + cfg.budget;
+    let timeouts = e.timeouts;
     let s = state_at(&c.game, c.ply)?;
     let solver = s.get_present().1;
     if active_pieces(&s) < MIN_PIECES || count_actions(&s, 2) < 2 || material_lead(&s, solver) > MAX_LEAD {
@@ -1419,6 +1462,10 @@ fn solve(e: &mut Engine, c: &Cand, cfg: &Cfg) -> Option<Json> {
         f.mate_in = (cooked.keys.len() as i32 - 1) + (MATE_CP - cooked.final_score);
     }
     let th = themes(&start, &cooked.line, &cooked.keys, &f, win, cooked.final_score);
+    if e.timeouts != timeouts {
+        rej::hit(rej::TIMEOUT);
+        return None;
+    }
     rej::hit(rej::OK);
     let id = format!("{:016x}", start.hash());
     let game_moves: String = c.game.actions[..ply].iter().map(|a| format!("{a} submit")).collect::<Vec<_>>().join(" ");
@@ -1645,6 +1692,7 @@ fn texts(a: &kairos::core::action::MoveSeq) -> String {
 ///     whether the next step's key moves still apply after that reply (`same_next`; if not,
 ///     the site judges the following step with the engine).
 fn site_puzzle(e: &mut Engine, p: &Json, cfg: &Cfg) -> Option<Json> {
+    let timeouts = e.timeouts;
     let mut cur = position_from_uci(p.get("position").str()?).ok()?;
     let win = p.get("outcome").str()? == "win";
     let line: Vec<String> = p.get("solution").arr().iter().filter_map(|x| x.str().map(String::from)).collect();
@@ -1714,6 +1762,10 @@ fn site_puzzle(e: &mut Engine, p: &Json, cfg: &Cfg) -> Option<Json> {
         steps.push(Json::Obj(step.into_iter().map(|(k, v)| (k.to_string(), v)).collect()));
         let Some(r) = reply else { break };
         cur = play(&child, &r)?;
+    }
+    if e.timeouts != timeouts {
+        DEEP_FAILED.fetch_add(1, Ordering::Relaxed);
+        return None;
     }
     Some(obj![
         ("id", p.get("id").clone()),
