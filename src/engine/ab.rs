@@ -140,8 +140,6 @@ const CHECK_BONUS: i32 = 30_000;
 /// the best action stable, starts no next depth past this share of the usual time.
 const ROOT_EFFORT_HIGH: f64 = 0.9;
 const ROOT_EFFORT_SCALE: f64 = 0.75;
-/// Time factor once the best action has stood for four depths.
-const TIME_STABLE: f64 = 0.75;
 /// Reverse futility pruning: at non-PV nodes up to this depth, return the static eval when
 /// it beats beta by RFP_MARGIN per ply.
 const RFP_DEPTH: i32 = 2;
@@ -3893,8 +3891,6 @@ impl AlphaBeta {
         let mut lines: Vec<PvLine> = resume.map_or_else(Vec::new, |r| r.lines.clone());
         // Clock stability: decaying count of best-action changes and running average score.
         let mut changes = 0.0f64;
-        // The depth the best action last changed at (`time_stable`).
-        let mut last_change = 0;
         let mut avg_score: Option<i32> = None;
         // Lazy SMP: odd helpers skip depth 1 and run a depth ahead, so the threads diverge
         // and fill the table at a spread of depths instead of re-walking the same iteration.
@@ -4090,12 +4086,6 @@ impl AlphaBeta {
             let mut on_free = false;
             if let Some(p) = plan.filter(|p| p.clock) {
                 changes = changes / 2.0 + if depth > 1 && best != prev_best { 1.0 } else { 0.0 };
-                if depth > 1 && best != prev_best {
-                    last_change = depth;
-                }
-                // A best action unchanged for four depths or more needs less time (Stockfish's
-                // time reduction by the depth the best move last changed).
-                let stable = if depth - last_change >= 4 { TIME_STABLE } else { 1.0 };
                 let falling = avg_score.map_or(1.0, |a| (1.0 + (a - best_score) as f64 / (150.0 * 48.0)).clamp(0.75, 1.6));
                 avg_score = Some(avg_score.map_or(best_score, |a| (a + best_score) / 2));
                 let instability = (0.8 + 0.6 * changes).min(2.0);
@@ -4103,7 +4093,7 @@ impl AlphaBeta {
                 // started past half the target.
                 // One action taking nearly all the nodes of a stable search is settled.
                 let settled = if effort > ROOT_EFFORT_HIGH && changes < 0.5 { ROOT_EFFORT_SCALE } else { 1.0 };
-                if elapsed * 1000.0 > p.target(falling, instability) * 0.5 * settled * stable {
+                if elapsed * 1000.0 > p.target(falling, instability) * 0.5 * settled {
                     if elapsed * 1000.0 >= p.free as f64 {
                         break;
                     }
