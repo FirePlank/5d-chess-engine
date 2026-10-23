@@ -2646,7 +2646,9 @@ impl AlphaBeta {
             let sc = mate_from_tt(e.score, ply);
             // A proven mate holds at any depth (see `AlphaBeta::proven`).
             let proven_mate = e.proven && sc.abs() >= MATE - 1000;
-            if !pv && (e.depth as i32 >= depth || proven_mate) && !(excl_node) {
+            // An entry a ply short still cuts when its score is at most beta (Stockfish: a
+            // fail-low bound one ply shallower rarely turns into a fail-high).
+            if !pv && (e.depth as i32 + (sc <= beta) as i32 >= depth || proven_mate) && !(excl_node) {
                 let cut = match e.bound {
                     Bound::Exact => true,
                     Bound::Lower => sc >= beta,
