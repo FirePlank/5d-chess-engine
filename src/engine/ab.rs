@@ -1008,7 +1008,7 @@ impl AlphaBeta {
             known: KnownCache::new(),
             nnue: super::nnue::embedded(),
             nnue_cache: Box::default(),
-            nnue_blend: 65,
+            nnue_blend: 75,
             last_score: 0,
             last_proven: false,
             resume: None,
