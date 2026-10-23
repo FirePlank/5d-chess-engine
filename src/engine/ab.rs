@@ -152,10 +152,6 @@ const NMP_DIV: i32 = 4;
 const DEFAULT_HASH_MB: usize = 64;
 /// Static evaluations are kept within +-EVAL_MAX, well clear of mate scores.
 const EVAL_MAX: i32 = 20000;
-/// Static ordering bonuses of quiet traits (`phys_static`), fitted to played moves.
-const ORDER_ESCAPE: i32 = 1000;
-const ORDER_THREAT: i32 = 1400;
-const ORDER_DEVELOP: i32 = 1900;
 /// History entries stay within plus or minus this (gravity, `on_cutoff`).
 const HISTORY_MAX: i32 = 16384;
 
@@ -1141,22 +1137,6 @@ impl AlphaBeta {
         }
         if mover == KING_W || mover == COMMON_KING_W {
             base -= 200;
-        }
-        // Traits fitted to the moves played in SPRT games (scripts/policy/train_attrs.py): a
-        // piece leaving an attack, a move attacking an enemy piece worth more than the mover,
-        // and a minor piece leaving its back rank are played far more often than the rest.
-        let player = s.get_present().1;
-        let src = s.board(m.from.l(), m.from.t(), player);
-        if src.attacks_to(m.from.xy()) & src.hostile(player) != 0 {
-            base += ORDER_ESCAPE;
-        }
-        let mv = piece_value(mover);
-        if marked_pos(b.hostile(player) & !b.royal()).any(|e| piece_value(b.kind(e)) > mv && b.attacks_to(e) & pmask(m.to.xy()) != 0) {
-            base += ORDER_THREAT;
-        }
-        let back = if player { s.get_board_size().1 - 1 } else { 0 };
-        if (mover == KNIGHT_W || mover == BISHOP_W) && m.from.y() == back && m.to.y() != back {
-            base += ORDER_DEVELOP;
         }
         PhysStatic { base, history: history_index_of(mover, m, s.get_present().1) as u32, capture: victim != NO_PIECE, physical_check: has_physical_check(b, !s.get_present().1) }
     }
