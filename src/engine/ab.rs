@@ -2267,14 +2267,7 @@ impl AlphaBeta {
         for m in act {
             let (mover, victim) = mover_victim(s, m);
             if victim != NO_PIECE {
-                // A capture of a smaller piece on a square the opponent attacks likely loses
-                // the difference: after the killers, with the quiet actions.
-                let losing = piece_value(victim) < piece_value(mover) && m.from.tl() == m.to.tl() && {
-                    let c = s.get_present().1;
-                    let b = s.board(m.to.l(), m.to.t(), c);
-                    b.attacks_to(m.to.xy()) & b.hostile(c) != 0
-                };
-                sc += if losing { piece_value(victim) - piece_value(mover) } else { 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10 };
+                sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
             } else {
                 sc += self.history[history_index_of(mover, m, s.get_present().1)] / 3 / 4;
             }
