@@ -152,10 +152,6 @@ const NMP_DIV: i32 = 4;
 const DEFAULT_HASH_MB: usize = 64;
 /// Static evaluations are kept within +-EVAL_MAX, well clear of mate scores.
 const EVAL_MAX: i32 = 20000;
-/// Correction history: slots per side, fixed-point grain, largest correction learned.
-const CORR_SIZE: usize = 1 << 14;
-const CORR_GRAIN: i32 = 16;
-const CORR_LIMIT: i32 = 1000;
 /// History entries stay within plus or minus this (gravity, `on_cutoff`).
 const HISTORY_MAX: i32 = 16384;
 
@@ -649,9 +645,6 @@ pub struct AlphaBeta {
     excl_key: u64,
     /// The ply right after a null move (no second null move there).
     null_child: usize,
-    /// Correction history: by side to move and pawn-structure key (`corr_key`), how far the
-    /// search's result lay from the static evaluation (times `CORR_GRAIN`, averaged).
-    corr: Vec<i32>,
     /// Quiet actions searched at each ply's node so far (penalized when another one cuts).
     quiets: Vec<Vec<MoveSeq>>,
     /// Per-node buffers, reused down the recursion.
@@ -1007,7 +1000,6 @@ impl AlphaBeta {
             excluded: None,
             excl_key: 0,
             null_child: usize::MAX,
-            corr: vec![0; 2 * CORR_SIZE],
             quiets: vec![Vec::new(); MAX_PLY + 1],
             bufs: Vec::new(),
             terms: Box::default(),
@@ -2337,28 +2329,6 @@ impl AlphaBeta {
         boards >= 2 && ranks >= per_board * boards
     }
 
-    /// The correction history slot of `s`: its side to move and the pawns of the active lines'
-    /// latest boards (by line).
-    fn corr_index(s: &State) -> usize {
-        let (amin, amax) = s.get_active_range();
-        let mut k = 0x9e3779b97f4a7c15u64;
-        for l in amin..=amax {
-            let (t, c) = s.get_timeline_end(l);
-            let b = s.board(l, t, c);
-            for x in [b.lpawn() & b.friendly(false), b.lpawn() & b.friendly(true), l as u64] {
-                k = (k ^ x).wrapping_mul(0xbf58476d1ce4e5b9);
-                k ^= k >> 29;
-            }
-        }
-        (k as usize & (CORR_SIZE - 1)) + CORR_SIZE * s.get_present().1 as usize
-    }
-
-    /// The static evaluation corrected by the correction history (`corr`).
-    fn corrected_eval(&mut self, s: &State) -> i32 {
-        let e = self.static_eval(s);
-        (e + self.corr[Self::corr_index(s)] / CORR_GRAIN).clamp(-EVAL_MAX, EVAL_MAX)
-    }
-
     fn is_tactical(s: &State, act: &MoveSeq) -> bool {
         let h = s.get_board_size().1;
         act.iter().any(|m| {
@@ -2485,7 +2455,7 @@ impl AlphaBeta {
             return self.static_eval(s);
         }
         if !in_check {
-            let stand = self.corrected_eval(s);
+            let stand = self.static_eval(s);
             if stand >= beta {
                 return stand;
             }
@@ -2703,12 +2673,12 @@ impl AlphaBeta {
 
         if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| self.in_check(s)) {
             if depth <= RFP_DEPTH {
-                let e = self.corrected_eval(s);
+                let e = self.static_eval(s);
                 if e - RFP_MARGIN * depth >= beta {
                     return e;
                 }
             }
-            if depth >= NMP_MIN_DEPTH && self.null_child != ply && Self::has_null_material(s) && self.corrected_eval(s) >= beta {
+            if depth >= NMP_MIN_DEPTH && self.null_child != ply && Self::has_null_material(s) && self.static_eval(s) >= beta {
                 let r = NMP_R + depth / NMP_DIV;
                 let mark = s.make_null();
                 let null_child = std::mem::replace(&mut self.null_child, ply + 1);
@@ -3134,18 +3104,6 @@ impl AlphaBeta {
             Bound::Exact
         };
         let proven = mate_proven(best, best_proven, all_proven);
-        // The correction history learns from a quiet node's result where its bound says on which
-        // side of the static evaluation the truth lies (Stockfish, Apeiron, Peras).
-        if best.abs() < MATE - 1000 && !Self::is_tactical(s, &best_action) && !self.in_check(s) {
-            let raw = self.static_eval(s);
-            if bound == Bound::Exact || (bound == Bound::Lower && best > raw) || (bound == Bound::Upper && best < raw) {
-                let i = Self::corr_index(s);
-                let w = (4 * depth).clamp(1, 64);
-                let target = (best - raw).clamp(-CORR_LIMIT, CORR_LIMIT) * CORR_GRAIN;
-                let h = &mut self.corr[i];
-                *h = (*h * (256 - w) + target * w) / 256;
-            }
-        }
         // A fail-low with actions the action cap left unsearched bounds nothing: one of those
         // might score higher (e.g. the only mating move), and a stored "at most" would poison
         // deeper searches of this node.
