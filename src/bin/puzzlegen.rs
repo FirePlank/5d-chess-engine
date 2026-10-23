@@ -19,7 +19,7 @@
 //!
 //!   puzzlegen [--games FILE...] [--out games/puzzles/puzzles.jsonl] [--threads N]
 //!             [--max-files N] [--max-games N] [--per-game N] [--dry-run] [--rate-only]
-//!             [--export site.jsonl]
+//!             [--export site.jsonl [--shard I/N] [--deep-nodes N]]
 //!             [--screen-nodes N] [--verify-nodes N] [--key-nodes N] [--cook-nodes N]
 //!             [--defend-nodes N] [--rate-nodes N] [--budget-secs N]
 //!
@@ -143,6 +143,10 @@ struct Cfg {
     rate_only: bool,
     /// Write the site's puzzle file (see `export_site`) from `out` instead of mining.
     export: Option<PathBuf>,
+    /// With `export`: only puzzle `i` of every `n` (shard `i` of `n`, counting from 1).
+    shard: Option<(usize, usize)>,
+    /// With `export`: nodes of the deep check that every solver step still has one idea (0: off).
+    deep_nodes: u64,
     screen_nodes: u64,
     verify_nodes: u64,
     key_nodes: u64,
@@ -164,6 +168,8 @@ impl Default for Cfg {
             dry_run: false,
             rate_only: false,
             export: None,
+            shard: None,
+            deep_nodes: 3_000_000,
             screen_nodes: 60_000,
             verify_nodes: 400_000,
             key_nodes: 250_000,
@@ -190,6 +196,15 @@ fn parse_args() -> Cfg {
             "--dry-run" => cfg.dry_run = true,
             "--rate-only" => cfg.rate_only = true,
             "--export" => cfg.export = Some(PathBuf::from(val())),
+            "--deep-nodes" => cfg.deep_nodes = val().parse().unwrap_or(cfg.deep_nodes),
+            "--shard" => {
+                let v = val();
+                cfg.shard = v.split_once('/').and_then(|(i, n)| Some((i.parse().ok()?, n.parse().ok()?))).filter(|&(i, n)| i >= 1 && i <= n);
+                if cfg.shard.is_none() {
+                    eprintln!("--shard wants I/N with 1 <= I <= N");
+                    std::process::exit(2);
+                }
+            }
             "--screen-nodes" => cfg.screen_nodes = val().parse().unwrap_or(cfg.screen_nodes),
             "--verify-nodes" => cfg.verify_nodes = val().parse().unwrap_or(cfg.verify_nodes),
             "--key-nodes" => cfg.key_nodes = val().parse().unwrap_or(cfg.key_nodes),
@@ -1593,6 +1608,20 @@ fn after_score(e: &mut Engine, child: &State, nodes: u64) -> Option<i32> {
     e.search(child, nodes, 1, &[]).lines.first().map(|l| -l.score)
 }
 
+/// Puzzles dropped by the deep check.
+static DEEP_FAILED: AtomicUsize = AtomicUsize::new(0);
+
+/// The deep check of a solver step, `nodes` a search: the position still wins (or holds) as
+/// before, and without any one key move no other idea does - the claim the mining made with
+/// much smaller searches.
+fn deep_step_ok(e: &mut Engine, s: &State, win: bool, keys: &[FullMove], nodes: u64) -> bool {
+    let Some(best) = e.search(s, nodes, 1, &[]).lines.first().cloned() else { return false };
+    if !valid(best.score, None) || win != wins(best.score) {
+        return false;
+    }
+    keys.iter().all(|k| valid(best.score, e.search(s, nodes, 1, &[*k]).lines.first().map(|l| l.score)))
+}
+
 /// Whether an answer scoring `mine` keeps what the puzzle's own answer (`reference`) does.
 fn keeps_outcome(mine: i32, reference: i32, win: bool) -> bool {
     if win {
@@ -1641,6 +1670,10 @@ fn site_puzzle(e: &mut Engine, p: &Json, cfg: &Cfg) -> Option<Json> {
             break;
         }
         let kmoves: Vec<FullMove> = ks.iter().filter_map(|k| parse_move(k)).collect();
+        if cfg.deep_nodes > 0 && !deep_step_ok(e, &cur, win, &kmoves, cfg.deep_nodes) {
+            DEEP_FAILED.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
         let reference = after_score(e, &child, nodes)?;
         let all: Vec<_> = e.ab.node_order(&cur, ROOT_COUNT_CAP).into_iter().filter(|a| kmoves.iter().all(|m| a.contains(m))).collect();
         let mut variants: Vec<Json> = Vec::new();
@@ -1693,6 +1726,7 @@ fn site_puzzle(e: &mut Engine, p: &Json, cfg: &Cfg) -> Option<Json> {
         ("mate_in", p.get("features").get("mate_in").clone()),
         ("ends_in_mate", p.get("features").get("ends_in_mate").clone()),
         ("solution", p.get("solution").clone()),
+        ("verified_nodes", cfg.deep_nodes as usize),
         ("steps", Json::Arr(steps)),
     ])
 }
@@ -1700,7 +1734,14 @@ fn site_puzzle(e: &mut Engine, p: &Json, cfg: &Cfg) -> Option<Json> {
 /// Write `site` (one puzzle per line) from the stored puzzles.
 fn export_site(cfg: &Cfg, site: &Path) {
     let text = std::fs::read_to_string(&cfg.out).unwrap_or_default();
-    let puzzles: Vec<Json> = text.lines().filter_map(|l| Json::parse(l).ok()).collect();
+    let mut puzzles: Vec<Json> = text.lines().filter_map(|l| Json::parse(l).ok()).collect();
+    if let Some((i, n)) = cfg.shard {
+        let mut k = 0;
+        puzzles.retain(|_| {
+            k += 1;
+            (k - 1) % n == i - 1
+        });
+    }
     let next = AtomicUsize::new(0);
     let done: Mutex<Vec<(usize, Json)>> = Mutex::new(Vec::new());
     std::thread::scope(|sc| {
@@ -1735,7 +1776,7 @@ fn export_site(cfg: &Cfg, site: &Path) {
         body.push('\n');
     }
     let _ = std::fs::write(site, body);
-    println!("{} of {} puzzles exported to {} ({} judged by key moves alone, {} with a list of answers)", done.len(), puzzles.len(), site.display(), keys_ok, partial);
+    println!("{} of {} puzzles exported to {} ({} judged by key moves alone, {} with a list of answers; {} failed the deep check)", done.len(), puzzles.len(), site.display(), keys_ok, partial, DEEP_FAILED.load(Ordering::Relaxed));
 }
 
 fn main() {
