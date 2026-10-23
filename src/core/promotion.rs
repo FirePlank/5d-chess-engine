@@ -75,6 +75,11 @@ pub fn parse_promotions(value: &str) -> Result<PromotionOptions, String> {
     Ok(PromotionOptions(result))
 }
 
+/// The allowed promotion pieces, one letter each in the default's order (never `*`).
+pub fn promotion_letters(o: PromotionOptions) -> String {
+    PRIORITY.iter().filter(|&&p| can_promote_to(o, p)).map(|&p| p as char).collect()
+}
+
 pub fn format_promotions(o: PromotionOptions) -> String {
     if o == PromotionOptions::NONE {
         return String::new();

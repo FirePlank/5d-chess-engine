@@ -513,6 +513,9 @@ impl Game {
             ("id", id),
             ("size", Json::Arr(vec![sx.into(), sy.into()])),
             ("even", s.multiverse().layout().is_even()),
+            // The pieces a pawn or brawn may promote to, one letter each, the engine's default
+            // first ("" when promotion is off).
+            ("promotions", crate::core::promotion::promotion_letters(s.get_promotion_options())),
             ("boards", Json::Arr(boards)),
             ("present", t),
             ("player", player as i32),
