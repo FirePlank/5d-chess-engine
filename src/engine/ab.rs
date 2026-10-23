@@ -645,6 +645,10 @@ pub struct AlphaBeta {
     excl_key: u64,
     /// The ply right after a null move (no second null move there).
     null_child: usize,
+    /// Capture history (indexed as `history`): how often a capture cut, for ordering captures.
+    cap_history: Vec<i32>,
+    /// Tactical actions searched at each ply's node so far (penalized when another one cuts).
+    tacticals: Vec<Vec<MoveSeq>>,
     /// Quiet actions searched at each ply's node so far (penalized when another one cuts).
     quiets: Vec<Vec<MoveSeq>>,
     /// Per-node buffers, reused down the recursion.
@@ -1000,6 +1004,8 @@ impl AlphaBeta {
             excluded: None,
             excl_key: 0,
             null_child: usize::MAX,
+            cap_history: vec![0; 2 << 16],
+            tacticals: vec![Vec::new(); MAX_PLY + 1],
             quiets: vec![Vec::new(); MAX_PLY + 1],
             bufs: Vec::new(),
             terms: Box::default(),
@@ -1151,7 +1157,7 @@ impl AlphaBeta {
                 // piece sink on their board, so best-first combinations avoid them.
                 let mut sc = -10 * exchange_loss(b, m.to.xy(), s.get_present().1, piece_value(mover));
                 if victim != NO_PIECE {
-                    sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
+                    sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10 + self.cap_history[history_index_of(mover, m, s.get_present().1)] / 4;
                 } else {
                     sc += history.unwrap_or_else(|| self.history[history_index_of(mover, m, s.get_present().1)]) / 3;
                 }
@@ -1255,6 +1261,8 @@ impl AlphaBeta {
                         let mut sc = p.base;
                         if !p.capture {
                             sc += self.history[p.history as usize] / 3;
+                        } else {
+                            sc += self.cap_history[p.history as usize] / 4;
                         }
                         if let Some(d) = detector.as_mut()
                             && (p.physical_check || d.reach_check(n, i)) {
@@ -2629,6 +2637,7 @@ impl AlphaBeta {
             return if known_check.unwrap_or_else(|| self.in_check(s)) { 0 } else { self.static_eval(s) };
         }
         self.quiets[ply].clear();
+        self.tacticals[ply].clear();
         // Mate distance pruning: no line from here mates sooner than a mate already in hand,
         // nor is mated later than mated right now (Stockfish, Apeiron).
         let beta = beta.min(MATE - ply as i32 - 1);
@@ -2956,6 +2965,8 @@ impl AlphaBeta {
                     }
                     if quiet {
                         self.quiets[ply].push(act.clone());
+                    } else {
+                        self.tacticals[ply].push(act.clone());
                     }
                     searched += 1;
                     all_proven &= self.proven;
@@ -3128,6 +3139,21 @@ impl AlphaBeta {
 
     fn on_cutoff(&mut self, s: &State, act: &MoveSeq, depth: i32, ply: usize) {
         if Self::is_tactical(s, act) {
+            // Capture history (Stockfish, Apeiron, Peras): the cutting action's captures get a
+            // bonus, the tactical actions searched before it here a malus, with gravity.
+            let bonus = (8 * depth * depth).min(4000);
+            let gravity = |h: &mut i32, b: i32| *h += b - *h * b.abs() / HISTORY_MAX;
+            let captures = |s: &State, a: &MoveSeq| a.iter().filter(|m| mover_victim(s, m).1 != NO_PIECE).map(|m| history_index(s, m)).collect::<Vec<_>>();
+            for i in captures(s, act) {
+                gravity(&mut self.cap_history[i], bonus);
+            }
+            let tried = std::mem::take(&mut self.tacticals[ply.min(MAX_PLY)]);
+            for q in tried.iter().filter(|q| *q != act) {
+                for i in captures(s, q) {
+                    gravity(&mut self.cap_history[i], -bonus);
+                }
+            }
+            self.tacticals[ply.min(MAX_PLY)] = tried;
             return;
         }
         // Gravity updates (Stockfish, Apeiron, Peras): a bonus to the cutting action's moves and
