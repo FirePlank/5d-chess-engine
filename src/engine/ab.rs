@@ -1385,10 +1385,7 @@ impl AlphaBeta {
                     let Some(b) = info.branch_departure(i) else { continue };
                     b
                 };
-                // Every travel onto an existing board (a jump between two boards that must be
-                // played too: its departure scores nothing in the node order, which sinks the
-                // action far past the node's cap), and the branching ones as before.
-                if n < fba || (wanted || optional.contains(&fa)) && (moves_back(&m) || mandatory.iter().all(|&a| a == fa || a == n)) {
+                if (wanted || optional.contains(&fa)) && (n >= fba && moves_back(&m) || mandatory.iter().all(|&a| a == fa || a == n)) {
                     travels.push((fa, dep, n, i));
                 }
             }
