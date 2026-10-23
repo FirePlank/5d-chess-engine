@@ -152,6 +152,8 @@ const NMP_DIV: i32 = 4;
 const DEFAULT_HASH_MB: usize = 64;
 /// Static evaluations are kept within +-EVAL_MAX, well clear of mate scores.
 const EVAL_MAX: i32 = 20000;
+/// Ordering points per unit of the fitted ordering logit (`move_attrs`).
+const ORDER_ATTR_SCALE: f32 = 500.0;
 /// History entries stay within plus or minus this (gravity, `on_cutoff`).
 const HISTORY_MAX: i32 = 16384;
 
@@ -1137,6 +1139,12 @@ impl AlphaBeta {
         }
         if mover == KING_W || mover == COMMON_KING_W {
             base -= 200;
+        }
+        // The fitted ordering terms (`move_attrs`): attributes that make a move likely the one
+        // played (check, escaping an attack, landing safely, ...) and per-piece square values.
+        if let Some(o) = super::move_attrs::embedded() {
+            let black = s.get_present().1;
+            base += (o.logit(s.board(m.from.l(), m.from.t(), black), b, m.from.xy(), m.to.xy(), mover, victim, black) * ORDER_ATTR_SCALE) as i32;
         }
         PhysStatic { base, history: history_index_of(mover, m, s.get_present().1) as u32, capture: victim != NO_PIECE, physical_check: has_physical_check(b, !s.get_present().1) }
     }
