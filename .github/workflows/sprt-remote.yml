@@ -40,6 +40,7 @@ jobs:
       base: ${{ steps.cfg.outputs.base }}
       book: ${{ steps.cfg.outputs.book }}
       max_seconds: ${{ steps.cfg.outputs.max_seconds }}
+      threads: ${{ steps.cfg.outputs.threads }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -65,6 +66,7 @@ jobs:
             echo "base=$(jq -r '.base // "self"' $c)"
             echo "book=$(jq -r '.book // ""' $c)"
             echo "max_seconds=$(jq -r '.max_seconds // 0' $c)"
+            echo "threads=$(jq -r '.threads // 1' $c)"
           } >> "$GITHUB_OUTPUT"
 
       - uses: Swatinem/rust-cache@v2
@@ -216,10 +218,15 @@ jobs:
           [ "$base" = self ] || old_args="${base#cpp:}"
           tc="${{ needs.setup.outputs.tc }}"
           book="${{ needs.setup.outputs.book }}"
+          # Threads per engine: both sides search with that many, and the runner plays as many
+          # games at once as its cores hold (one engine thinks at a time in a game).
+          th="${{ needs.setup.outputs.threads }}"
+          conc=$(( $(nproc) / th )); [ "$conc" -ge 1 ] || conc=1
+          topts=""; [ "$th" -gt 1 ] && topts="--new-option Threads=$th --base-option Threads=$th"
           ./bins/sprt --new "$PWD/bins/new-kairos ${{ needs.setup.outputs.new_args }}" \
             --base "$PWD/bins/old-kairos $old_args" ${book:+--book "$book"} \
             --${tc% *} ${tc#* } --elo0="${{ needs.setup.outputs.elo0 }}" --elo1="${{ needs.setup.outputs.elo1 }}" \
-            --concurrency "$(nproc)" --compact --seed "${{ matrix.shard }}" \
+            $topts --concurrency "$conc" --compact --seed "${{ matrix.shard }}" \
             --min-games "${{ needs.setup.outputs.per_shard }}" --max-games "${{ needs.setup.outputs.per_shard }}" \
             --max-seconds "${{ needs.setup.outputs.max_seconds }}" \
             --games-out "$G" | tail -12
