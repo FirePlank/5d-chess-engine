@@ -18,6 +18,7 @@ use crate::core::state::{Mark, State};
 use crate::misc::geometry::SearchSpace;
 use crate::misc::integer_set::{Index, IntegerSet};
 use crate::misc::ordering::{AxisOrders, HcOrdering};
+use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -289,12 +290,15 @@ enum Bound {
     Upper,
 }
 
-/// A table entry as a probe sees it.
+/// All-zero bytes are an empty entry.
 struct TtEntry {
+    key: u64,
     depth: i16,
     bound: Bound,
     /// A mate `score` is proven (see `AlphaBeta::proven`).
     proven: bool,
+    /// The search that last wrote it (`TtTable::new_search`), for replacement.
+    generation: u8,
     score: i32,
     action: MoveSeq,
 }
@@ -307,78 +311,23 @@ struct TtEntry {
 /// bound of this search (whose mate bounds decay a ply each time, so a stale one gives way).
 const TT_BUCKET: usize = 4;
 
-/// Moves of an action a slot holds; a longer action (eight or more boards) is stored without
-/// its action.
-const TT_MOVES: usize = 7;
-
-/// One table slot, lock-free: the entry packed into words written and read independently.
-/// `check` is the position's key xor every other word, so a slot that two threads wrote at
-/// once (or that was read mid-write) fails the key check and reads as a miss (Hyatt's
-/// lockless hashing; Apeiron). All-zero words are an empty slot.
+/// One table slot: an entry and its lock. All-zero bytes are an empty, unlocked slot.
 struct TtSlot {
-    check: AtomicU64,
-    /// Score (bits 0-31), depth (32-47), bound (48-49), proven (50), action length (51-53),
-    /// generation: the search that last wrote or used it (56-63).
-    meta: AtomicU64,
-    /// The action's moves (`FullMove`'s two squares), zero past its length.
-    moves: [AtomicU64; TT_MOVES],
-}
-
-#[inline]
-fn tt_meta(score: i32, depth: i16, bound: Bound, proven: bool, len: usize, generation: u8) -> u64 {
-    score as u32 as u64 | (depth as u16 as u64) << 32 | (bound as u64) << 48 | (proven as u64) << 50 | (len as u64) << 51 | (generation as u64) << 56
-}
-
-#[inline]
-fn tt_bound(meta: u64) -> Bound {
-    match (meta >> 48) & 3 {
-        0 => Bound::Empty,
-        1 => Bound::Exact,
-        2 => Bound::Lower,
-        _ => Bound::Upper,
-    }
-}
-
-#[inline]
-fn tt_generation(meta: u64) -> u8 {
-    (meta >> 56) as u8
-}
-
-#[inline]
-fn tt_depth(meta: u64) -> i16 {
-    (meta >> 32) as u16 as i16
-}
-
-/// The words of an action's moves (all zero for one too long to keep).
-#[inline]
-fn tt_moves(action: &MoveSeq) -> (usize, [u64; TT_MOVES]) {
-    let mut w = [0u64; TT_MOVES];
-    if action.len() > TT_MOVES {
-        return (0, w);
-    }
-    for (x, m) in w.iter_mut().zip(action.iter()) {
-        *x = m.from.0 as u64 | (m.to.0 as u64) << 32;
-    }
-    (action.len(), w)
+    /// Held while the entry is read or written, since actions may live on the heap (see
+    /// `acquire`).
+    lock: AtomicBool,
+    entry: UnsafeCell<TtEntry>,
 }
 
 impl TtSlot {
-    /// The slot's words and the key they belong to (meaningless when empty).
+    /// Take the slot's lock, waiting for another thread to let go of it (it is held only to
+    /// copy one entry): a probe or store skipping a held slot could miss the position or put a
+    /// second entry for it in the bucket.
     #[inline]
-    fn load(&self) -> (u64, u64, [u64; TT_MOVES]) {
-        let meta = self.meta.load(Ordering::Relaxed);
-        let moves: [u64; TT_MOVES] = std::array::from_fn(|i| self.moves[i].load(Ordering::Relaxed));
-        let key = self.check.load(Ordering::Relaxed) ^ meta ^ moves.iter().fold(0, |a, &x| a ^ x);
-        (key, meta, moves)
-    }
-
-    #[inline]
-    fn write(&self, key: u64, meta: u64, moves: &[u64; TT_MOVES]) {
-        self.meta.store(meta, Ordering::Relaxed);
-        for (w, &x) in self.moves.iter().zip(moves) {
-            w.store(x, Ordering::Relaxed);
+    fn acquire(&self) {
+        while self.lock.swap(true, Ordering::Acquire) {
+            std::hint::spin_loop();
         }
-        self.check.store(key ^ meta ^ moves.iter().fold(0, |a, &x| a ^ x), Ordering::Relaxed);
     }
 }
 
@@ -386,9 +335,15 @@ impl TtSlot {
 /// clearing it costs nothing until slots are used.
 struct TtTable {
     slots: Vec<TtSlot>,
+    /// Some stored action spilled to the heap (entries then need dropping one by one).
+    spilled: AtomicBool,
     /// Counts searches (`new_search`): stamped on the entries they write.
     generation: std::sync::atomic::AtomicU8,
 }
+
+// SAFETY: an entry is only accessed by the thread holding its slot's lock.
+unsafe impl Sync for TtTable {}
+unsafe impl Send for TtTable {}
 
 impl TtTable {
     fn new(mb: usize) -> Self {
@@ -399,8 +354,8 @@ impl TtTable {
     fn with_len(n: usize) -> Self {
         let n = n.max(TT_BUCKET);
         let layout = std::alloc::Layout::array::<TtSlot>(n).expect("tt size");
-        // SAFETY: an all-zero `TtSlot` is valid (atomics of zero: an empty slot), and the block
-        // is allocated with the layout `Vec` uses for this capacity.
+        // SAFETY: an all-zero `TtSlot` is valid (unlocked, empty bound, empty inline action),
+        // and the block is allocated with the layout `Vec` uses for this capacity.
         let slots = unsafe {
             let p = std::alloc::alloc_zeroed(layout) as *mut TtSlot;
             if p.is_null() {
@@ -408,7 +363,7 @@ impl TtTable {
             }
             Vec::from_raw_parts(p, n, n)
         };
-        TtTable { slots, generation: std::sync::atomic::AtomicU8::new(0) }
+        TtTable { slots, spilled: AtomicBool::new(false), generation: std::sync::atomic::AtomicU8::new(0) }
     }
 
     fn len(&self) -> usize {
@@ -427,22 +382,25 @@ impl TtTable {
         &self.slots[first * TT_BUCKET..(first + 1) * TT_BUCKET]
     }
 
-    /// Run `f` on the entry for `key`: None when no slot of its bucket holds the position.
+    /// Run `f` on the entry for `key` under its slot's lock: None when no slot of its bucket
+    /// holds the position (or the one that does is locked by another thread).
     #[inline]
     fn probe<R>(&self, key: u64, f: impl FnOnce(&TtEntry) -> R) -> Option<R> {
+        let mut f = Some(f);
         for slot in self.bucket(key) {
-            let (k, meta, moves) = slot.load();
-            let bound = tt_bound(meta);
-            if bound == Bound::Empty || k != key {
-                continue;
+            slot.acquire();
+            // SAFETY: the lock gives this thread exclusive access to the entry.
+            let e = unsafe { &mut *slot.entry.get() };
+            let r = if e.bound != Bound::Empty && e.key == key {
+                e.generation = self.generation.load(Ordering::Relaxed);
+                f.take().map(|f| f(e))
+            } else {
+                None
+            };
+            slot.lock.store(false, Ordering::Release);
+            if r.is_some() {
+                return r;
             }
-            let generation = self.generation.load(Ordering::Relaxed);
-            if tt_generation(meta) != generation {
-                slot.write(key, meta & !(0xff << 56) | (generation as u64) << 56, &moves);
-            }
-            let len = ((meta >> 51) & 7) as usize;
-            let action: MoveSeq = moves[..len.min(TT_MOVES)].iter().map(|&w| FullMove { from: crate::core::vec4::Vec4(w as u32), to: crate::core::vec4::Vec4((w >> 32) as u32) }).collect();
-            return Some(f(&TtEntry { depth: tt_depth(meta), bound, proven: (meta >> 50) & 1 != 0, score: meta as u32 as i32, action }));
         }
         None
     }
@@ -454,18 +412,20 @@ impl TtTable {
         // shallowest counting each search of age as `TT_AGE_PLIES` plies.
         let (mut target, mut target_value, mut same) = (None, i32::MAX, false);
         for (i, slot) in bucket.iter().enumerate() {
-            let (k, meta, _) = slot.load();
-            let empty = tt_bound(meta) == Bound::Empty;
-            let value = if empty {
+            slot.acquire();
+            // SAFETY: the lock gives this thread exclusive access to the entry.
+            let e = unsafe { &*slot.entry.get() };
+            let value = if e.bound == Bound::Empty {
                 i32::MIN
             } else {
                 // A search of age costs 8 plies, as in Stockfish and Apeiron; a proven mate of
                 // this search is worth more than any depth (an older one ages like the rest).
-                let age = generation.wrapping_sub(tt_generation(meta)) as i32;
-                let mate_proof = (meta >> 50) & 1 != 0 && (meta as u32 as i32).abs() >= MATE - 1000;
-                tt_depth(meta) as i32 + 3 - 8 * age + if age == 0 && mate_proof { 1000 } else { 0 }
+                let age = generation.wrapping_sub(e.generation) as i32;
+                e.depth as i32 + 3 - 8 * age + if age == 0 && e.proven && e.score.abs() >= MATE - 1000 { 1000 } else { 0 }
             };
-            if !empty && k == key {
+            let hit = e.bound != Bound::Empty && e.key == key;
+            slot.lock.store(false, Ordering::Release);
+            if hit {
                 (target, same) = (Some(i), true);
                 break;
             }
@@ -475,22 +435,45 @@ impl TtTable {
         }
         let Some(i) = target else { return };
         let slot = &bucket[i];
-        let (k, meta, _) = slot.load();
-        let same = same && k == key && tt_bound(meta) != Bound::Empty;
-        let (len, moves) = tt_moves(action);
-        let (e_depth, e_bound, e_proven, e_score) = (tt_depth(meta), tt_bound(meta), (meta >> 50) & 1 != 0, meta as u32 as i32);
+        slot.acquire();
+        // SAFETY: the lock gives this thread exclusive access to the entry.
+        let e = unsafe { &mut *slot.entry.get() };
         // The same position keeps a much deeper bound of this search unless this one is exact;
         // it takes the new action, and a kept mate bound loses a ply.
-        let keep = same && tt_generation(meta) == generation && bound != Bound::Exact && !proven && depth <= e_depth as i32 - 4;
+        let keep = same && e.key == key && e.generation == generation && bound != Bound::Exact && !proven && depth <= e.depth as i32 - 4;
         // A proven mate of the position stays until another proof replaces it: an unproven
         // result, however deep, may only have missed the line.
-        let proof_kept = same && e_proven && e_score.abs() >= MATE - 1000 && !proven;
+        let proof_kept = same && e.key == key && e.proven && e.score.abs() >= MATE - 1000 && !proven;
         if proof_kept {
         } else if keep {
-            let d = if e_depth >= 5 && e_bound != Bound::Exact && e_score.abs() >= MATE - 1000 { e_depth - 1 } else { e_depth };
-            slot.write(key, tt_meta(e_score, d, e_bound, e_proven, len, generation), &moves);
+            e.action.assign(action);
+            if e.action.spilled() && !self.spilled.load(Ordering::Relaxed) {
+                self.spilled.store(true, Ordering::Relaxed);
+            }
+            if e.depth >= 5 && e.bound != Bound::Exact && e.score.abs() >= MATE - 1000 {
+                e.depth -= 1;
+            }
         } else {
-            slot.write(key, tt_meta(score, depth as i16, bound, proven, len, generation), &moves);
+            e.key = key;
+            e.depth = depth as i16;
+            e.bound = bound;
+            e.proven = proven;
+            e.generation = generation;
+            e.score = score;
+            e.action.assign(action);
+            if e.action.spilled() && !self.spilled.load(Ordering::Relaxed) {
+                self.spilled.store(true, Ordering::Relaxed);
+            }
+        }
+        slot.lock.store(false, Ordering::Release);
+    }
+}
+
+impl Drop for TtTable {
+    fn drop(&mut self) {
+        if !*self.spilled.get_mut() {
+            // SAFETY: no entry owns heap memory, so nothing is leaked by skipping their drops.
+            unsafe { self.slots.set_len(0) };
         }
     }
 }
