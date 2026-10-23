@@ -1,6 +1,6 @@
 {
-  "name": "sac_nodes_v2",
-  "old": "d2a8490",
+  "name": "tech_tt_lockless_t4",
+  "old": "4f800c8",
   "games": 4000,
   "shards": 39,
   "tc": "tc 10+0.1",
@@ -10,5 +10,6 @@
   "old_args": "",
   "base": "self",
   "book": "data/books/mixed.g",
-  "max_seconds": 840
+  "max_seconds": 8640,
+  "threads": 4
 }
