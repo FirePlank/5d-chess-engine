@@ -36,7 +36,7 @@ fn the_search_underpromotes() {
         apply_uci_moves(&mut s, moves).unwrap();
         let mut lines = Vec::new();
         let best = AlphaBeta::new().find_best_move(&s, &Limits { depth: Some(depth), ..Default::default() }, &AtomicBool::new(false), &mut |l| lines.push(l));
-        (best.map(|a| a.to_string()), lines.into_iter().filter(|l| l.contains(" score ")).last().unwrap_or_default())
+        (best.map(|a| a.to_string()), lines.into_iter().rfind(|l| l.contains(" score ")).unwrap_or_default())
     };
     let (_, line) = search("promotions QRBN ", "", 6);
     assert!(line.contains("score mate 2"), "{line}");

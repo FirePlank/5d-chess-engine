@@ -3,8 +3,10 @@
 //! `play` actions are played; `know` actions are theory kept only for the positions they reach.
 
 use crate::core::action::Action;
+use crate::core::hypercuboid::HcInfo;
 use crate::core::perft::parse_g_line;
 use crate::core::state::State;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -25,12 +27,16 @@ pub struct BookMove {
     pub weight: u32,
 }
 
-/// A book position with the moves of each history reaching it, since past boards affect travels.
-/// Unknown histories get the moves the known ones agree on; on `{exact}` lines, as known only.
+/// A book position with the moves of each history reaching it, since past boards affect travels,
+/// checks through time and escapes from mate. Unknown histories get the moves the known ones agree
+/// on (on `{exact}` lines, as known only), each only if it does there what it does in the known
+/// histories (see `Book::valid_here`).
 #[derive(Default, Debug)]
 struct Entry {
     /// Moves by history (`State::hash`).
     exact: Vec<(u64, Vec<BookMove>)>,
+    /// The position line (a G line) of each history of `exact`, to replay its moves.
+    sources: Vec<String>,
     /// For a history the book does not know: the actions the known histories agree on (played if all
     /// play it, at the lowest weight), the others as known theory; all known if `exact_only`.
     merged: Vec<BookMove>,
@@ -65,6 +71,7 @@ impl Book {
                 let e = book.positions.entry(h).or_default();
                 if !e.exact.iter().any(|(x, _)| *x == hist) {
                     e.exact.push((hist, Vec::new()));
+                    e.sources.push(g.to_string());
                 }
                 cur = Some((h, hist, s));
             } else if line == "E" {
@@ -143,9 +150,61 @@ impl Book {
     }
 
     /// The opening's name at `s` ("Family: Variation: Line"), if the position carries one. A
-    /// game's opening is the last name found along it.
+    /// game's opening is the last name found along it. Reached by a move order the book does not
+    /// know, the name holds only if every book move does what it does in the book's order.
     pub fn opening_name(&self, s: &State) -> Option<&str> {
-        self.names.get(&s.frontier_hash()).map(|n| n.as_str())
+        let name = self.names.get(&s.frontier_hash())?;
+        match self.positions.get(&s.frontier_hash()) {
+            Some(e) if !e.exact.iter().any(|(x, _)| *x == s.hash()) => {
+                let all = if e.exact_only { e.exact.iter().flat_map(|(_, v)| v.iter()).cloned().collect() } else { e.merged.clone() };
+                (Self::same_situation(e, s) && self.valid_here(e, s, &all).len() == all.len()).then_some(name.as_str())
+            }
+            _ => Some(name.as_str()),
+        }
+    }
+
+    /// Whether the side to move in `s` stands as in the book's first history of `e`: in check or
+    /// not, mated or not (a mate in the book's order can be only a check in another).
+    fn same_situation(e: &Entry, s: &State) -> bool {
+        let situation = |s: &State| {
+            let (info, ss) = HcInfo::build_hc(s);
+            (s.has_phantom_check(), info.search(s, ss).next().is_none())
+        };
+        e.sources.first().and_then(|g| parse_g_line(g).ok()).is_none_or(|k| situation(&k) == situation(s))
+    }
+
+    /// What a book move does in `s`: whether it gives check, whether it mates, and the boards in
+    /// play after it (`None`: illegal there).
+    fn outcome(s: &State, m: &BookMove) -> Option<(bool, bool, u64)> {
+        let moves = crate::web::tree::parse_lan_moves(&m.lan).ok()?;
+        let child = crate::web::tree::play_action(s, &moves).ok()?;
+        let check = child.has_phantom_check();
+        let mate = check && {
+            let (info, ss) = HcInfo::build_hc(&child);
+            info.search(&child, ss).next().is_none()
+        };
+        Some((check, mate, child.frontier_hash()))
+    }
+
+    /// The moves of `moves` that do in `s` (a history the book does not know) what they do in
+    /// every known history of `e` that has them: past boards decide travels, checks through
+    /// time and escapes from mate, so another move order can turn a mate into a check or make a
+    /// move illegal.
+    fn valid_here(&self, e: &Entry, s: &State, moves: &[BookMove]) -> Vec<BookMove> {
+        let mut known: Vec<Option<State>> = vec![None; e.exact.len()];
+        moves
+            .iter()
+            .filter(|m| {
+                let Some(here) = Self::outcome(s, m) else { return false };
+                e.exact.iter().enumerate().filter(|(_, (_, v))| v.iter().any(|x| x.lan == m.lan)).all(|(i, _)| {
+                    if known[i].is_none() {
+                        known[i] = parse_g_line(&e.sources[i]).ok();
+                    }
+                    known[i].as_ref().and_then(|k| Self::outcome(k, m)) == Some(here)
+                })
+            })
+            .cloned()
+            .collect()
     }
 
     /// Number of named positions.
@@ -153,12 +212,17 @@ impl Book {
         self.names.len()
     }
 
-    /// All book actions (play and know) of `s`, if it is a book position.
-    pub fn probe(&self, s: &State) -> Option<&[BookMove]> {
+    /// All book actions (play and know) of `s`, if it is a book position. For a move order the
+    /// book does not know, only the actions that do there what they do in the book (`valid_here`).
+    pub fn probe(&self, s: &State) -> Option<Cow<'_, [BookMove]>> {
         let e = self.positions.get(&s.frontier_hash())?;
         let hist = s.hash();
-        let v = e.exact.iter().find(|(x, _)| *x == hist).map_or(&e.merged, |(_, v)| v);
-        Some(v.as_slice()).filter(|v| !v.is_empty())
+        let v: Cow<'_, [BookMove]> = match e.exact.iter().find(|(x, _)| *x == hist) {
+            Some((_, v)) => Cow::Borrowed(v.as_slice()),
+            None if !Self::same_situation(e, s) => return None,
+            None => Cow::Owned(self.valid_here(e, s, &e.merged)),
+        };
+        Some(v).filter(|v| !v.is_empty())
     }
 
     /// Non-book actions of `s` that transpose into a book position. Played at `TRANSPOSE_WEIGHT`
@@ -181,14 +245,14 @@ impl Book {
         let _ = c;
         let mut out = Vec::new();
         for (lan, pgn) in all.iter() {
-            if !lan.starts_with(&prefix) || own.is_some_and(|o| o.iter().any(|m| &m.lan == lan)) {
+            if !lan.starts_with(&prefix) || own.as_ref().is_some_and(|o| o.iter().any(|m| &m.lan == lan)) {
                 continue;
             }
             let Ok(moves) = crate::web::tree::parse_lan_moves(lan) else { continue };
             let Ok(child) = crate::web::tree::play_action(s, &moves) else { continue };
             let h = child.frontier_hash();
             let reached = self.probe(&child);
-            if reached.is_some() || self.names.contains_key(&h) {
+            if reached.is_some() || self.opening_name(&child).is_some() {
                 let play = reached.is_some_and(|v| v.iter().any(|m| m.play)) && !self.positions.get(&h).is_some_and(|e| e.exact_only);
                 out.push(BookMove {
                     action: Action::from_vector(&moves, s),

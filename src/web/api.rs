@@ -269,8 +269,8 @@ impl Api {
                     }
                 };
                 let trans = book.transpositions(&s);
-                let mut moves: Vec<&crate::engine::book::BookMove> =
-                    book.probe(&s).map(|v| v.iter().collect()).unwrap_or_default();
+                let own = book.probe(&s).map(|v| v.into_owned()).unwrap_or_default();
+                let mut moves: Vec<&crate::engine::book::BookMove> = own.iter().collect();
                 moves.extend(trans.iter());
                 moves.sort_by_key(|m| (!m.play, std::cmp::Reverse(m.weight)));
                 let list: Vec<Json> =

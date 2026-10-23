@@ -649,6 +649,7 @@ fn main() {
                 actions, with_future, 100.0 * with_future as f64 / actions.max(1) as f64, phys, dep, arr, optional_boards as f64 / actions.max(1) as f64).unwrap();
         }
         "bookeval" => bookeval(&args[2..], &mut out),
+        "bookexact" => bookexact(&args[2..], &mut out),
         "mate1recall" => mate1recall(&args[2..], &mut out),
         "matescan" => matescan(&args[2..], &mut out),
         "matekinds" => matekinds(&args[2..], &mut out),
@@ -3283,6 +3284,150 @@ fn matecheck(args: &[String], out: &mut impl Write) {
         }
     });
     writeln!(out, "cases {} | mate claimed {} | consistent {} | flagged cases by kind {:?} | proven claims undelivered {} | {} nodes/search, {:.0}s", total, claimed, clean, counts, proven_false, nodes, t0.elapsed().as_secs_f64()).unwrap();
+}
+
+/// `bookexact [book_file]`: book positions whose moves change with the move order reaching
+/// them. The book keys positions by the boards in play (`State::frontier_hash`), so another
+/// order of the same moves finds the same entry; but past boards decide travels, checks through
+/// time and escapes from mate. Every legal reordering of a line's own moves (each side's moves
+/// among themselves; lines of one-board moves only) that reaches the same boards with a history
+/// the book does not know is replayed, and each book move of the position compared: legal in
+/// both, the same check and mate, the same boards after it. A line listed needs `{exact}`.
+fn bookexact(args: &[String], out: &mut impl Write) {
+    use kairos::core::variants::apply_uci_moves;
+    use std::collections::{HashMap, HashSet};
+    let path = args.first().cloned().unwrap_or_else(|| "data/book_theory.txt".to_string());
+    let text = std::fs::read_to_string(&path).expect("book file");
+    struct Pos {
+        line: usize,
+        g: String,
+        exact: bool,
+        moves: Vec<(String, String)>,
+    }
+    let mut positions: Vec<Pos> = Vec::new();
+    for (n, l) in text.lines().enumerate() {
+        let l = l.trim();
+        if let Some(g) = l.strip_prefix("P ") {
+            positions.push(Pos { line: n + 1, g: g.to_string(), exact: false, moves: Vec::new() });
+        } else if l == "E" {
+            if let Some(p) = positions.last_mut() {
+                p.exact = true;
+            }
+        } else if let Some(m) = l.strip_prefix("m ") {
+            let (head, pgn) = m.split_once(';').unwrap_or((m, ""));
+            let lan = head.split_whitespace().skip(2).collect::<Vec<_>>().join(" ");
+            if let Some(p) = positions.last_mut() {
+                p.moves.push((lan, pgn.trim().to_string()));
+            }
+        }
+    }
+    let mut known: HashMap<u64, HashSet<u64>> = HashMap::new();
+    let mut exact_frontiers: HashSet<u64> = HashSet::new();
+    let states: Vec<Option<State>> = positions.iter().map(|p| parse_g_line(&p.g).ok()).collect();
+    for (p, s) in positions.iter().zip(&states) {
+        if let Some(s) = s {
+            known.entry(s.frontier_hash()).or_default().insert(s.hash());
+            if p.exact {
+                exact_frontiers.insert(s.frontier_hash());
+            }
+        }
+    }
+    // `s` after `action`, if legal (the mover leaves no royal capturable).
+    let play = |s: &State, action: &str| -> Option<State> {
+        let mut t = s.clone();
+        apply_uci_moves(&mut t, &format!("{action} submit")).ok()?;
+        (!t.royal_capturable(t.get_present().1)).then_some(t)
+    };
+    let outcome = |s: &State| -> (bool, bool) {
+        let (info, ss) = HcInfo::build_hc(s);
+        let none = info.search(s, ss).next().is_none();
+        let check = s.has_phantom_check();
+        (check, none && check)
+    };
+    let (mut checked, mut skipped, mut flagged) = (0usize, 0usize, 0usize);
+    let mut reported: HashSet<(u64, String)> = HashSet::new();
+    for (p, s) in positions.iter().zip(&states) {
+        let Some(s) = s else { continue };
+        let frontier = s.frontier_hash();
+        // Already only valid for its own order, or nothing to compare.
+        if exact_frontiers.contains(&frontier) || p.moves.is_empty() {
+            continue;
+        }
+        let Some((start_g, moves)) = p.g.split_once(" moves ") else { continue };
+        let actions: Vec<String> = moves.split("submit").map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect();
+        // One-board moves only (a travel's own target depends on the order), at most 7 a side.
+        if actions.iter().any(|a| a.split_whitespace().count() != 1 || a.matches('(').count() != 1) || actions.len() > 14 {
+            skipped += 1;
+            continue;
+        }
+        let Ok(start) = parse_g_line(start_g) else { continue };
+        checked += 1;
+        let first = start.get_present().1;
+        let sides: [Vec<&String>; 2] = [
+            actions.iter().enumerate().filter(|(i, _)| i % 2 == 0).map(|x| x.1).collect(),
+            actions.iter().enumerate().filter(|(i, _)| i % 2 == 1).map(|x| x.1).collect(),
+        ];
+        // Every legal reordering: the next action of the side to move from those it has left.
+        let mut alts: Vec<(State, Vec<String>)> = Vec::new();
+        let mut seen: HashSet<u64> = HashSet::new();
+        let mut stack: Vec<(State, [u32; 2], Vec<String>)> = vec![(start.clone(), [0, 0], Vec::new())];
+        while let Some((st, used, order)) = stack.pop() {
+            if alts.len() >= 64 {
+                break;
+            }
+            if order.len() == actions.len() {
+                if st.frontier_hash() == frontier && !known[&frontier].contains(&st.hash()) && seen.insert(st.hash()) {
+                    alts.push((st, order));
+                }
+                continue;
+            }
+            let side = usize::from(st.get_present().1 != first);
+            for (k, a) in sides[side].iter().enumerate() {
+                if used[side] >> k & 1 != 0 {
+                    continue;
+                }
+                // The same move from the same square on another turn: rename the turn.
+                let Some(rest) = a.split_once(')').map(|x| x.1) else { continue };
+                let renamed = format!("(0T{}){}", st.get_present().0, rest);
+                if let Some(next) = play(&st, &renamed) {
+                    let mut u = used;
+                    u[side] |= 1 << k;
+                    let mut o = order.clone();
+                    o.push(renamed);
+                    stack.push((next, u, o));
+                }
+            }
+        }
+        for (alt, order) in &alts {
+            for (lan, pgn) in &p.moves {
+                let a = play(s, lan);
+                let b = play(alt, lan);
+                let why = match (&a, &b) {
+                    (Some(_), None) => Some("illegal in this order".to_string()),
+                    (Some(x), Some(y)) => {
+                        let (ox, oy) = (outcome(x), outcome(y));
+                        if ox.1 != oy.1 {
+                            Some(format!("mate {} here, {} in the book's order", oy.1, ox.1))
+                        } else if ox.0 != oy.0 {
+                            Some(format!("check {} here, {} in the book's order", oy.0, ox.0))
+                        } else if x.frontier_hash() != y.frontier_hash() {
+                            Some("reaches other boards".to_string())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(why) = why
+                    && reported.insert((frontier, lan.clone()))
+                {
+                    flagged += 1;
+                    writeln!(out, "book line {}: {} ({}): {}\n  book order: {}\n  other order: {}", p.line, pgn, lan, why, actions.join(" "), order.join(" ")).unwrap();
+                }
+            }
+        }
+    }
+    writeln!(out, "{} positions checked ({} with travels or several boards skipped), {} moves that depend on the order", checked, skipped, flagged).unwrap();
 }
 
 /// `bookeval [nodes] [threads] [out.tsv] [max_secs] [depth_cap] [book_file]`: searches every

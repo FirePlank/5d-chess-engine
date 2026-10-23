@@ -260,7 +260,7 @@ fn transposed_move_orders_find_the_same_book_position() {
     // The Standard variant's start is not Turn Zero's.
     let std_start = book.probe(&position("Standard", ""));
     let t0_start = book.probe(&position("Standard - Turn Zero", "")).unwrap();
-    assert!(std_start.is_none_or(|m| m.len() != t0_start.len() || m.iter().zip(t0_start).any(|(x, y)| x.lan != y.lan || x.play != y.play)));
+    assert!(std_start.is_none_or(|m| m.len() != t0_start.len() || m.iter().zip(t0_start.iter()).any(|(x, y)| x.lan != y.lan || x.play != y.play)));
 }
 
 #[test]
@@ -291,4 +291,27 @@ fn an_exact_line_gives_a_transposed_history_known_moves_only() {
     let moves = b.probe(&other).expect("the book still knows the board");
     assert!(moves.iter().all(|m| !m.play) && moves.iter().any(|m| m.lan == "(0T3)b2b3"), "{:?}", moves.iter().map(|m| (&m.lan, m.play)).collect::<Vec<_>>());
     assert!(b.choose(&other, 1).is_none());
+}
+
+#[test]
+fn a_transposed_order_keeps_only_moves_that_still_do_the_same() {
+    // 3. Bd2 c6 4. c3 Qa5# is mate; reached by 3. c3 c6 4. Bd2 (the same boards, other past
+    // boards) Qa5 is only check, so neither the move nor the line's name (given to the position
+    // after Qa5) applies there.
+    let b = Book::theory();
+    let book_order = position("Standard - Turn Zero", "(0T1)g1f3 submit (0T1)g8f6 submit (0T2)d2d4 submit (0T2)d7d5 submit (0T3)c1d2 submit (0T3)c7c6 submit (0T4)c2c3 submit");
+    let other = position("Standard - Turn Zero", "(0T1)g1f3 submit (0T1)g8f6 submit (0T2)d2d4 submit (0T2)d7d5 submit (0T3)c2c3 submit (0T3)c7c6 submit (0T4)c1d2 submit");
+    assert_eq!(book_order.frontier_hash(), other.frontier_hash());
+    assert!(b.probe(&book_order).is_some_and(|m| m.iter().any(|m| m.lan == "(0T4)d8a5")));
+    let mated = |s: &kairos::core::state::State| {
+        let mut t = s.clone();
+        kairos::core::variants::apply_uci_moves(&mut t, "(0T4)d8a5 submit").unwrap();
+        t
+    };
+    assert!(b.opening_name(&mated(&book_order)).is_some_and(|n| n.contains("Qa5#")));
+    assert!(!b.probe(&other).is_some_and(|m| m.iter().any(|m| m.lan == "(0T4)d8a5")));
+    assert!(!b.opening_name(&mated(&other)).is_some_and(|n| n.contains("Qa5#")));
+    // Nor is 4. Bd2 offered after 3. c3 c6 as a way into that line.
+    let before = position("Standard - Turn Zero", "(0T1)g1f3 submit (0T1)g8f6 submit (0T2)d2d4 submit (0T2)d7d5 submit (0T3)c2c3 submit (0T3)c7c6 submit");
+    assert!(!b.transpositions(&before).iter().any(|m| m.lan == "(0T4)c1d2"));
 }
