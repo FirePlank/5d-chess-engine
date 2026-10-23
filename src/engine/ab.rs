@@ -446,7 +446,7 @@ impl TtTable {
         let proof_kept = same && e.key == key && e.proven && e.score.abs() >= MATE - 1000 && !proven;
         if proof_kept {
         } else if keep {
-            e.action.assign(action);
+            e.action.assign_seq(action);
             if e.action.spilled() && !self.spilled.load(Ordering::Relaxed) {
                 self.spilled.store(true, Ordering::Relaxed);
             }
@@ -460,7 +460,7 @@ impl TtTable {
             e.proven = proven;
             e.generation = generation;
             e.score = score;
-            e.action.assign(action);
+            e.action.assign_seq(action);
             if e.action.spilled() && !self.spilled.load(Ordering::Relaxed) {
                 self.spilled.store(true, Ordering::Relaxed);
             }
@@ -676,6 +676,8 @@ pub struct AlphaBeta {
     /// `OwnBook`: play a book action (`book::Book::theory`) without searching when the root
     /// is a book position with one.
     own_book: bool,
+    /// Root actions playing any of these moves are not searched (`set_root_exclude`).
+    root_exclude: Vec<FullMove>,
     /// How far the search for a checkmate in one goes (`MateVerify`).
     mate_verify: MateVerify,
     /// Hypercuboids an escape search that ran out of `TRAVEL_MATE_STEPS` may go on to (0: none;
@@ -1015,6 +1017,7 @@ impl AlphaBeta {
             threads: 1,
             multipv: 1,
             own_book: false,
+            root_exclude: Vec::new(),
             mate_verify: MateVerify::Auto,
             mate_recheck: 0,
             escapes: Vec::new(),
@@ -1126,7 +1129,7 @@ impl AlphaBeta {
     /// Ordering score of one HC coordinate; `history` overrides the history table's value.
     /// The board-only part of a physical coordinate's `coord_score`.
     fn phys_static(s: &State, info: &HcInfo, n: usize, i: Index) -> PhysStatic {
-        let Entry::Physical { m, b, mover, victim } = info.entry(n, i) else { unreachable!("physical coordinate") };
+        let Entry::Physical { m, b, mover, victim, .. } = info.entry(n, i) else { unreachable!("physical coordinate") };
         let (mover, victim) = (*mover, *victim);
         let mut base = -10 * exchange_loss(b, m.to.xy(), s.get_present().1, piece_value(mover));
         if victim != NO_PIECE {
@@ -1145,7 +1148,7 @@ impl AlphaBeta {
         match info.entry(n, i) {
             Entry::Null => -5,
             Entry::Departing { .. } => 0,
-            Entry::Physical { m, b, mover, victim } | Entry::Arriving { m, b, mover, victim, .. } => {
+            Entry::Physical { m, b, mover, victim, .. } | Entry::Arriving { m, b, mover, victim, .. } => {
                 let (mover, victim) = (*mover, *victim);
                 // Per-board exchange check on the result board: moves that hang the moved
                 // piece sink on their board, so best-first combinations avoid them.
@@ -1642,11 +1645,11 @@ impl AlphaBeta {
         let player = s.get_present().1;
         let mark = s.mark();
         let mut ok = true;
-        for &m in act {
+        for (i, &m) in act.iter().enumerate() {
             if s.get_board_ptr(m.from.l(), m.from.t(), player).is_none()
                 || s.get_timeline_end(m.from.l()) != (m.from.t(), player)
                 || s.get_board_ptr(m.to.l(), m.to.t(), player).is_none()
-                || !s.apply_move::<false>(m)
+                || !s.apply_promo::<false>(m, act.promo(i))
             {
                 ok = false;
                 break;
@@ -1947,8 +1950,8 @@ impl AlphaBeta {
             // board it leaves (a branch only once it is played).
             let Some(at) = act.iter().position(|&m| m == ma) else { continue };
             let mark = s.mark();
-            for &m in &act[..at] {
-                s.apply_move::<true>(m);
+            for (i, &m) in act[..at].iter().enumerate() {
+                s.apply_promo::<true>(m, act.promo(i));
             }
             let others = s.mark();
             let mut set = IntegerSet::singleton(pt[y]);
@@ -1986,13 +1989,13 @@ impl AlphaBeta {
         // (a royal, or an escape move's source). Changed squares lie on half-turns v and v + 1;
         // squares on different lines share a ray only when every nonzero offset equals k.
         let mark = s.mark();
-        for &m in act {
-            s.apply_move::<true>(m);
+        for (i, &m) in act.iter().enumerate() {
+            s.apply_promo::<true>(m, act.promo(i));
         }
         s.submit::<true>();
         if let Some(d) = escape {
-            for &m in d {
-                s.apply_move::<true>(m);
+            for (i, &m) in d.iter().enumerate() {
+                s.apply_promo::<true>(m, d.promo(i));
             }
             s.submit::<true>();
         }
@@ -2119,7 +2122,7 @@ impl AlphaBeta {
             REGION_STATS[1].fetch_add(1, Ordering::Relaxed);
             if !holds {
                 REGION_STATS[2].fetch_add(1, Ordering::Relaxed);
-                eprintln!("region broken: {} ({})", Action::from_moveseq(&a, s), if escape.is_some() { "escape" } else { "no check" });
+                eprintln!("region broken: {} ({})", Action::from_seq(&a, s), if escape.is_some() { "escape" } else { "no check" });
             }
         }
     }
@@ -2342,8 +2345,8 @@ impl AlphaBeta {
     fn make(s: &mut State, act: &MoveSeq) -> Mark {
         let _prof = crate::misc::prof::scope(7);
         let mark = s.mark();
-        for &m in act {
-            s.apply_move::<true>(m);
+        for (i, &m) in act.iter().enumerate() {
+            s.apply_promo::<true>(m, act.promo(i));
         }
         s.submit::<true>();
         mark
@@ -2368,7 +2371,7 @@ impl AlphaBeta {
             if i < 64 && s.get_timeline_end(m.to.l()) != (m.to.t(), player) {
                 branching |= 1 << i;
             }
-            if !s.apply_move::<false>(m) {
+            if !s.apply_promo::<false>(m, act.promo(i)) {
                 ok = false;
                 break;
             }
@@ -2385,8 +2388,8 @@ impl AlphaBeta {
     /// Owned copy of the position after `act` (for PV reporting).
     fn child(s: &State, act: &MoveSeq) -> State {
         let mut c = s.clone();
-        for &m in act {
-            c.apply_move::<true>(m);
+        for (i, &m) in act.iter().enumerate() {
+            c.apply_promo::<true>(m, act.promo(i));
         }
         c.submit::<true>();
         c
@@ -3257,7 +3260,7 @@ pub fn score_text(score: i32) -> String {
 }
 
 fn action_text(s: &State, act: &MoveSeq) -> String {
-    let a = Action::from_moveseq(act, s);
+    let a = Action::from_seq(act, s);
     let mut os = s.clone();
     let mut parts = Vec::new();
     for em in a.moves() {
@@ -3504,6 +3507,16 @@ impl AlphaBeta {
     }
 
     /// Nodes the last search visited, over all its threads.
+    /// Search only the root actions that play none of `moves` (puzzle analysis: how the
+    /// position fares without a move); empty restores every action.
+    pub fn set_root_exclude(&mut self, moves: &[FullMove]) {
+        self.root_exclude = moves.to_vec();
+    }
+
+    fn root_excluded(&self, act: &MoveSeq) -> bool {
+        !self.root_exclude.is_empty() && act.iter().any(|m| self.root_exclude.contains(m))
+    }
+
     pub fn last_search_nodes(&self) -> u64 {
         self.nodes + self.helper_nodes
     }
@@ -3571,7 +3584,7 @@ impl AlphaBeta {
             && let Some(action) = lines[k].1.first() {
                 self.last_score = lines[k].0;
                 self.last_proven = false;
-                return Some(Action::from_moveseq(action, root));
+                return Some(Action::from_seq(action, root));
             }
         fallback
     }
@@ -3596,7 +3609,7 @@ impl AlphaBeta {
                     work.unmake(mark);
                     info(format!("string sacbot {}", fm));
                     self.last_score = 0;
-                    return Some(Action::from_moveseq(&seq, root));
+                    return Some(Action::from_seq(&seq, root));
                 }
             }
         }
@@ -3618,7 +3631,7 @@ impl AlphaBeta {
             if r.completed_depth >= max_depth {
                 self.last_score = r.score;
                 self.last_proven = r.proven;
-                return Some(Action::from_moveseq(&r.best, root));
+                return Some(Action::from_seq(&r.best, root));
             }
             return self.search_roots(root, r.roots.clone(), r.roots_complete, max_depth, start, plan.as_ref(), info, Some(r));
         }
@@ -3651,6 +3664,7 @@ impl AlphaBeta {
             }
         };
         self.mate_recheck = 0;
+        let future_mate = future_mate.filter(|m| !self.root_excluded(m));
         // An analysis (no clock) is told how far the search for a mate in one went.
         if !plan.as_ref().is_some_and(|p| p.clock) && future_mate.is_none() && !interrupted() {
             match scan_end {
@@ -3669,7 +3683,7 @@ impl AlphaBeta {
             self.last_score = MATE - 1;
             self.last_proven = true;
             self.resume = None;
-            return Some(Action::from_moveseq(m, root));
+            return Some(Action::from_seq(m, root));
         }
         let mut agen = BestFirstCursor::default();
         let mut first = Self::without_future(root, &hc, &ss);
@@ -3721,6 +3735,7 @@ impl AlphaBeta {
                 }
             }
         }
+        roots.retain(|r| !self.root_excluded(&r.1));
         if roots.is_empty() {
             return None;
         }
@@ -3728,13 +3743,13 @@ impl AlphaBeta {
         let roots_complete = complete && !full.as_ref().is_some_and(|f| Self::trims_future(root, &hc, f));
         // A forced action on the clock is played at once.
         if complete && roots.len() == 1 && plan.as_ref().is_some_and(|p| p.clock) && future_mate.is_none() {
-            return Some(Action::from_moveseq(&roots[0].1, root));
+            return Some(Action::from_seq(&roots[0].1, root));
         }
         // A checking travel the root's actions come to late or never (one creating a timeline
         // that moves the present back, so that it is an action alone, comes after every action
         // creating none) is searched as a root action: it can start a mate in more than one.
         for a in travel_checks {
-            if !roots.iter().any(|r| r.1 == a) {
+            if !roots.iter().any(|r| r.1 == a) && !self.root_excluded(&a) {
                 roots.push((self.action_score(root, &a, 0), a));
             }
         }
@@ -3742,7 +3757,7 @@ impl AlphaBeta {
         // Capturing travels of that kind too, after every other action: never left out, but
         // searched last (reduced like other late actions), as most of them only lose material.
         for a in travel_captures {
-            if !roots.iter().any(|r| r.1 == a) {
+            if !roots.iter().any(|r| r.1 == a) && !self.root_excluded(&a) {
                 roots.push((i32::MIN / 2, a));
             }
         }
@@ -3759,7 +3774,7 @@ impl AlphaBeta {
                 self.last_score = MATE - 1;
                 self.last_proven = true;
                 self.resume = None;
-                Some(Action::from_moveseq(&m, root))
+                Some(Action::from_seq(&m, root))
             }
             _ => best,
         }
@@ -3784,7 +3799,7 @@ impl AlphaBeta {
             let r = self.iterate(root, roots, roots_complete, max_depth, start, plan, info, &[], resumed_depth, resume);
             self.last_score = r.score;
             self.last_proven = r.proven;
-            return Some(Action::from_moveseq(&r.best, root));
+            return Some(Action::from_seq(&r.best, root));
         }
 
         raise_thread_priority();
@@ -3853,7 +3868,7 @@ impl AlphaBeta {
         }
         self.last_score = chosen.score;
         self.last_proven = chosen.proven;
-        Some(Action::from_moveseq(&chosen.best, root))
+        Some(Action::from_seq(&chosen.best, root))
     }
 
     /// Iterative deepening over `roots` (best first). The main thread (`thread_id` 0) keeps

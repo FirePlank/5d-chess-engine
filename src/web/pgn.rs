@@ -1189,11 +1189,18 @@ fn short_core(s: &State, mv: ExtMove) -> String {
     move_core(s, mv, &board, true, true, true)
 }
 
-/// Play `mv` on `s`; returns its notation without check symbol, whether it gives check, and
-/// the branching suffix (`~` when the present moves back, then ` (>L<new line>)`).
-fn play_move(s: &mut State, mv: ExtMove, short: bool) -> Option<(String, bool, String)> {
+/// The move with its whole source square and target board, e.g. `(0T2)Ng1f3`.
+fn full_core(s: &State, mv: ExtMove) -> String {
+    move_core(s, mv, &s.pretty_lt(mv.fm.from), true, true, true)
+}
+
+/// Play `mv` on `s`; returns its notation without check symbol, whether it gives check, the
+/// branching suffix (`~` when the present moves back, then ` (>L<new line>)`) and, when
+/// `want_full`, the move in full form (else empty).
+fn play_move(s: &mut State, mv: ExtMove, short: bool, want_full: bool) -> Option<(String, bool, String, String)> {
     let mv = s.normalize_promotion(mv)?;
-    let core = if short { short_core(s, mv) } else { move_core(s, mv, &s.pretty_lt(mv.fm.from), true, true, true) };
+    let core = if short { short_core(s, mv) } else { full_core(s, mv) };
+    let full = if !want_full { String::new() } else if short { full_core(s, mv) } else { core.clone() };
     let (player, present, new_line) = (s.player(), s.get_present().0, s.new_line());
     let q = mv.fm.to;
     let branching = mv.fm.from.tl() != q.tl() && (q.t(), player) < s.get_timeline_end(q.l());
@@ -1208,13 +1215,13 @@ fn play_move(s: &mut State, mv: ExtMove, short: bool) -> Option<(String, bool, S
         }
         suffix += &format!(" (>L{})", s.pretty_l(new_line));
     }
-    Some((core, check, suffix))
+    Some((core, check, suffix, full))
 }
 
 fn single_move(s: &State, mv: &ExtMove, short: bool) -> String {
     let mut t = s.clone();
-    match play_move(&mut t, *mv, short) {
-        Some((core, check, suffix)) => format!("{}{}{}", core, if check { "+" } else { "" }, suffix),
+    match play_move(&mut t, *mv, short, false) {
+        Some((core, check, suffix, _)) => format!("{}{}{}", core, if check { "+" } else { "" }, suffix),
         None => "---INVALID MOVE---".into(),
     }
 }
@@ -1253,16 +1260,23 @@ pub fn action_to_pgn_short(s: &State, act: &Action) -> String {
 /// An action in 5dpgn with the given options and optional next action (see
 /// `action_to_pgn_with_witness`).
 pub fn action_to_pgn_opts(s: &State, act: &Action, witness: Option<&Action>, opts: PgnOptions) -> String {
+    action_to_pgn_both(s, act, witness, opts, false).0
+}
+
+/// `action_to_pgn_opts` and the same action with every move's whole source square and target
+/// board (`(0T2)Ng1f3`), check symbols shared (empty unless `want_full`).
+pub fn action_to_pgn_both(s: &State, act: &Action, witness: Option<&Action>, opts: PgnOptions, want_full: bool) -> (String, String) {
+    let invalid = || ("---INVALID ACTION---".to_string(), "---INVALID ACTION---".to_string());
     let mut t = s.clone();
     let mut parts = Vec::with_capacity(act.len());
     for &mv in act.moves() {
-        match play_move(&mut t, mv, opts.short) {
+        match play_move(&mut t, mv, opts.short, want_full) {
             Some(p) => parts.push(p),
-            None => return "---INVALID ACTION---".into(),
+            None => return invalid(),
         }
     }
     if !t.submit::<false>() {
-        return "---INVALID ACTION---".into();
+        return invalid();
     }
     let mut symbols: Vec<&str> = parts.iter().map(|p| if p.1 { "+" } else { "" }).collect();
     if let Some(last) = symbols.iter().rposition(|&c| c == "+").filter(|_| opts.mate) {
@@ -1286,8 +1300,13 @@ pub fn action_to_pgn_opts(s: &State, act: &Action, witness: Option<&Action>, opt
         && let Some(last) = symbols.last_mut() {
             *last = "#";
         }
-    let texts: Vec<String> = parts.iter().zip(symbols).map(|((core, _, suffix), sym)| format!("{}{}{}", core, sym, suffix)).collect();
-    texts.join(" ")
+    let texts: Vec<String> = parts.iter().zip(&symbols).map(|((core, _, suffix, _), sym)| format!("{}{}{}", core, sym, suffix)).collect();
+    let fulls: Vec<String> = if want_full {
+        parts.iter().zip(&symbols).map(|((_, _, suffix, full), sym)| format!("{}{}{}", full, sym, suffix)).collect()
+    } else {
+        Vec::new()
+    };
+    (texts.join(" "), fulls.join(" "))
 }
 
 const BUILTIN: [&str; 44] = crate::core::variants::VARIANT_NAMES;

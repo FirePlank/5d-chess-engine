@@ -1,0 +1,109 @@
+# Site export of the mined puzzles (puzzlegen --export), sharded. The input is
+# puzzles/puzzles.jsonl on the `puzzle-data` branch; each shard checks its puzzles (the deep
+# search that every solver step still has one idea, the other right answers and the defender's
+# reply to each) and the last job joins the shards into one artifact, `site-puzzles`.
+name: Puzzle export
+
+on:
+  workflow_dispatch:
+    inputs:
+      shards:
+        description: Number of shards
+        default: "40"
+      deep_nodes:
+        description: Nodes of the deep check (0 skips it)
+        default: "3000000"
+      only:
+        description: "Run just these shards (comma separated), e.g. 6,8,38"
+        default: ""
+      data_ref:
+        description: Branch holding puzzles/puzzles.jsonl
+        default: puzzle-data
+
+permissions:
+  contents: read
+
+env:
+  RUSTFLAGS: -C target-cpu=x86-64-v3
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      shards: ${{ steps.m.outputs.shards }}
+    steps:
+      - id: m
+        run: |
+          if [ -n "${{ inputs.only }}" ]; then
+            echo "shards=[${{ inputs.only }}]" >> "$GITHUB_OUTPUT"
+          else
+            echo "shards=$(jq -nc --argjson n ${{ inputs.shards }} '[range(1; $n + 1)]')" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: puzzlegen
+      - run: cargo build --release --bin puzzlegen
+      - uses: actions/upload-artifact@v4
+        with:
+          name: puzzlegen
+          path: target/release/puzzlegen
+          retention-days: 3
+
+  export:
+    needs: [plan, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.plan.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.data_ref }}
+          path: data
+      - uses: actions/download-artifact@v4
+        with:
+          name: puzzlegen
+      - name: Export shard
+        run: |
+          chmod +x puzzlegen
+          mkdir -p games/puzzles
+          ./puzzlegen --export site_${{ matrix.shard }}.jsonl --out data/puzzles/puzzles.jsonl \
+            --shard ${{ matrix.shard }}/${{ inputs.shards }} --deep-nodes ${{ inputs.deep_nodes }} \
+            --threads "$(nproc)" | tee export_${{ matrix.shard }}.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site-shard-${{ matrix.shard }}
+          path: |
+            site_${{ matrix.shard }}.jsonl
+            export_${{ matrix.shard }}.log
+          retention-days: 14
+
+  merge:
+    needs: export
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: site-shard-*
+          merge-multiple: true
+      - name: Join
+        run: |
+          cat site_*.jsonl | jq -sc 'sort_by(.rating) | .[]' > site_puzzles.jsonl
+          wc -l site_puzzles.jsonl
+          cat export_*.log | grep exported | tee summary.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site-puzzles
+          path: |
+            site_puzzles.jsonl
+            summary.txt
+          retention-days: 30

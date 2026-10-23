@@ -176,7 +176,8 @@ impl Api {
                     let Ok(moves) = parse_lan_moves(act) else { break };
                     let a = Action::from_vector(&moves, &s);
                     let Ok(next) = super::tree::play_action(&s, a.moves()) else { break };
-                    out.push(obj![("san", super::tree::action_san(&s, &a)), ("lan", act.trim()), ("player", s.get_present().1)]);
+                    let (san, full) = super::tree::action_san_pair(&s, &a);
+                    out.push(obj![("san", san), ("sanFull", full), ("lone", super::tree::lone_board(&s)), ("lan", act.trim()), ("player", s.get_present().1)]);
                     s = next;
                 }
                 Ok(ok(obj![("actions", Json::Arr(out))]))
@@ -268,8 +269,8 @@ impl Api {
                     }
                 };
                 let trans = book.transpositions(&s);
-                let mut moves: Vec<&crate::engine::book::BookMove> =
-                    book.probe(&s).map(|v| v.iter().collect()).unwrap_or_default();
+                let own = book.probe(&s).map(|v| v.into_owned()).unwrap_or_default();
+                let mut moves: Vec<&crate::engine::book::BookMove> = own.iter().collect();
                 moves.extend(trans.iter());
                 moves.sort_by_key(|m| (!m.play, std::cmp::Reverse(m.weight)));
                 let list: Vec<Json> =

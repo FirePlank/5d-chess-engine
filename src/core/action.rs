@@ -12,6 +12,9 @@ pub struct FullMove {
 }
 
 const SEQ_INLINE: usize = 3;
+/// Moves of a `MoveSeq` that can carry a promotion piece other than the default.
+pub const PROMO_MOVES: usize = 6;
+const COUNT_MASK: u32 = 0xff;
 
 #[derive(Clone, Copy)]
 #[repr(C)]
@@ -23,6 +26,8 @@ union SeqData {
 /// The moves of an action, one per moved timeline. Up to three are stored inline; longer
 /// actions spill to the heap. All-zero bytes are a valid empty sequence.
 pub struct MoveSeq {
+    /// The number of moves (low 8 bits) and, 4 bits each above them, the promotion piece of
+    /// the first `PROMO_MOVES` moves (`promotion::promo_code`; 0: the position's default).
     len: u32,
     /// Heap capacity; 0 while the moves are inline.
     cap: u32,
@@ -45,8 +50,47 @@ impl MoveSeq {
     }
 
     #[inline(always)]
+    fn count(&self) -> usize {
+        (self.len & COUNT_MASK) as usize
+    }
+
+    /// The piece move `i` promotes to when it is not the position's default (`NO_PIECE`
+    /// otherwise, as for a move that does not promote).
+    #[inline(always)]
+    pub fn promo(&self, i: usize) -> Piece {
+        if i >= PROMO_MOVES || self.len <= COUNT_MASK {
+            return NO_PIECE;
+        }
+        super::promotion::promo_piece((self.len >> (8 + 4 * i)) & 0xf)
+    }
+
+    /// Whether some move promotes to a piece other than the default.
+    #[inline(always)]
+    pub fn has_promos(&self) -> bool {
+        self.len > COUNT_MASK
+    }
+
+    /// `push` of a move promoting to `promo` (`NO_PIECE`: the default); one past the first
+    /// `PROMO_MOVES` keeps the default.
+    pub fn push_promo(&mut self, m: FullMove, promo: Piece) {
+        let i = self.count();
+        self.push(m);
+        let code = super::promotion::promo_code(promo);
+        if i < PROMO_MOVES && code != 0 {
+            self.len |= code << (8 + 4 * i);
+        }
+    }
+
+    /// Replace the contents with `src`, promotion pieces included.
+    #[inline]
+    pub fn assign_seq(&mut self, src: &MoveSeq) {
+        self.assign(src.as_slice());
+        self.len |= src.len & !COUNT_MASK;
+    }
+
+    #[inline(always)]
     pub fn push(&mut self, m: FullMove) {
-        let n = self.len as usize;
+        let n = self.count();
         if self.cap == 0 {
             if n < SEQ_INLINE {
                 // SAFETY: inline storage is active while `cap == 0`.
@@ -70,15 +114,19 @@ impl MoveSeq {
     fn set_vec(&mut self, v: Vec<FullMove>) {
         let mut v = std::mem::ManuallyDrop::new(v);
         self.data.heap = v.as_mut_ptr();
-        self.len = v.len() as u32;
+        self.len = (self.len & !COUNT_MASK) | v.len() as u32;
         self.cap = v.capacity() as u32;
     }
 
     pub fn pop(&mut self) -> Option<FullMove> {
-        if self.len == 0 {
+        let n = self.count();
+        if n == 0 {
             return None;
         }
-        let m = self.as_slice()[self.len as usize - 1];
+        let m = self.as_slice()[n - 1];
+        if n - 1 < PROMO_MOVES {
+            self.len &= !(0xf << (8 + 4 * (n - 1)));
+        }
         self.len -= 1;
         Some(m)
     }
@@ -104,24 +152,26 @@ impl MoveSeq {
 
     #[inline(always)]
     pub fn as_slice(&self) -> &[FullMove] {
-        // SAFETY: the active storage holds `len` initialized moves.
+        // SAFETY: the active storage holds `count` initialized moves.
         unsafe {
             if self.cap == 0 {
-                &self.data.inline[..self.len as usize]
+                &self.data.inline[..self.count()]
             } else {
-                std::slice::from_raw_parts(self.data.heap, self.len as usize)
+                std::slice::from_raw_parts(self.data.heap, self.count())
             }
         }
     }
 
+    /// The moves, mutable: a caller that reorders them must not rely on `promo` after.
     #[inline(always)]
     pub fn as_mut_slice(&mut self) -> &mut [FullMove] {
+        let n = self.count();
         // SAFETY: as above.
         unsafe {
             if self.cap == 0 {
-                &mut self.data.inline[..self.len as usize]
+                &mut self.data.inline[..n]
             } else {
-                std::slice::from_raw_parts_mut(self.data.heap, self.len as usize)
+                std::slice::from_raw_parts_mut(self.data.heap, n)
             }
         }
     }
@@ -131,7 +181,7 @@ impl Drop for MoveSeq {
     fn drop(&mut self) {
         if self.cap != 0 {
             // SAFETY: the block came from a `Vec` with this capacity.
-            drop(unsafe { Vec::from_raw_parts(self.data.heap, self.len as usize, self.cap as usize) });
+            drop(unsafe { Vec::from_raw_parts(self.data.heap, self.count(), self.cap as usize) });
         }
     }
 }
@@ -145,11 +195,11 @@ impl Default for MoveSeq {
 impl Clone for MoveSeq {
     fn clone(&self) -> Self {
         let mut s = MoveSeq::new();
-        s.assign(self);
+        s.assign_seq(self);
         s
     }
     fn clone_from(&mut self, src: &Self) {
-        self.assign(src);
+        self.assign_seq(src);
     }
 }
 
@@ -171,14 +221,17 @@ impl std::ops::DerefMut for MoveSeq {
 impl PartialEq for MoveSeq {
     #[inline]
     fn eq(&self, o: &Self) -> bool {
-        self.as_slice() == o.as_slice()
+        self.len == o.len && self.as_slice() == o.as_slice()
     }
 }
 impl Eq for MoveSeq {}
 
 impl std::hash::Hash for MoveSeq {
     fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
-        self.as_slice().hash(h)
+        self.as_slice().hash(h);
+        if self.has_promos() {
+            (self.len >> 8).hash(h);
+        }
     }
 }
 
@@ -424,6 +477,19 @@ impl Action {
 
     pub fn from_moveseq(mvs: &[FullMove], s: &State) -> Action {
         let ext: Vec<ExtMove> = mvs.iter().map(|&fm| ExtMove::resolve(fm, s)).collect();
+        Self::from_vector(&ext, s)
+    }
+
+    /// `from_moveseq` keeping the promotion pieces `seq` carries.
+    pub fn from_seq(seq: &MoveSeq, s: &State) -> Action {
+        let ext: Vec<ExtMove> = seq
+            .iter()
+            .enumerate()
+            .map(|(i, &fm)| match seq.promo(i) {
+                NO_PIECE => ExtMove::resolve(fm, s),
+                p => s.normalize_promotion(ExtMove::new(fm, p)).unwrap_or_else(|| ExtMove::resolve(fm, s)),
+            })
+            .collect();
         Self::from_vector(&ext, s)
     }
 
