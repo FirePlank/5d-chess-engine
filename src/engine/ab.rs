@@ -51,7 +51,7 @@ const ROOT_CAP: usize = 1000;
 /// batch holds one action and each next one twice as many, up to this.
 const BATCH: usize = 12;
 const QDEPTH: i32 = 2;
-const QCAP: usize = 4;
+const QCAP: usize = 6;
 /// Internal iterative reduction: nodes of this depth or more without a TT action lose a ply.
 const IIR_DEPTH: i32 = 4;
 /// Singular extension: depth from which the TT action is tested, and the margin per depth.
