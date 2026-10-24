@@ -58,7 +58,7 @@ const IIR_DEPTH: i32 = 4;
 const SING_DEPTH: i32 = 4;
 const SING_MARGIN: i32 = 100;
 const LMR_MIN_DEPTH: i32 = 3;
-const LMR_MIN_INDEX: usize = 4;
+const LMR_MIN_INDEX: usize = 5;
 /// Board-rank pruning (`board_ranks`): from this many actions searched, a quiet action that
 /// plays two or more boards and gives no check is skipped at non-PV nodes when the ranks of
 /// its moves in their boards' orders sum to this much per board or more. (Measured at
