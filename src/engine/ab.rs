@@ -2933,6 +2933,11 @@ impl AlphaBeta {
                         child_check = Some(ic);
                         if !ic {
                             r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
+                            // A move through time or to another timeline is reduced a ply less:
+                            // time-travel sacrifices are quiet moves that win a dozen plies on.
+                            if r > 0 && act.iter().any(|m| m.from.tl() != m.to.tl()) {
+                                r -= 1;
+                            }
                         }
                     }
                     if weak && quiet && searched >= BOARD_RANK_MIN_INDEX && !*child_check.get_or_insert_with(|| self.in_check(s)) {
