@@ -2933,11 +2933,6 @@ impl AlphaBeta {
                         child_check = Some(ic);
                         if !ic {
                             r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
-                            // A quiet move through time or to another timeline is reduced a ply
-                            // more (the moves that create timelines are most of the tree).
-                            if r > 0 && depth >= LMR_MIN_DEPTH + 1 && act.iter().any(|m| m.from.tl() != m.to.tl()) {
-                                r = (r + 1).min(depth - 2);
-                            }
                         }
                     }
                     if weak && quiet && searched >= BOARD_RANK_MIN_INDEX && !*child_check.get_or_insert_with(|| self.in_check(s)) {
