@@ -2924,18 +2924,21 @@ impl AlphaBeta {
                     // over boards tells neither).
                     let _ = sc;
                     let quiet = !Self::is_tactical(s, &act);
+                    // A move through time or to another timeline is not reduced or skipped as
+                    // weak: time-travel sacrifices are quiet moves that win only a dozen plies on.
+                    let travels = act.iter().any(|m| m.from.tl() != m.to.tl());
                     let mark = Self::make(s, &act);
                     let mut r = 0;
                     let mut child_check = None;
                     // Checking actions are not reduced: mating lines run through them.
-                    if depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet {
+                    if depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet && !travels {
                         let ic = self.in_check(s);
                         child_check = Some(ic);
                         if !ic {
                             r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
                         }
                     }
-                    if weak && quiet && searched >= BOARD_RANK_MIN_INDEX && !*child_check.get_or_insert_with(|| self.in_check(s)) {
+                    if weak && quiet && !travels && searched >= BOARD_RANK_MIN_INDEX && !*child_check.get_or_insert_with(|| self.in_check(s)) {
                         s.unmake(mark);
                         skipped = true;
                         continue;
