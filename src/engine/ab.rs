@@ -73,9 +73,6 @@ const ROOT_LMR_MIN_INDEX: usize = 6;
 const ACTIVATED_MOVES: usize = 4;
 /// Ordering weight of such a move: its score divided by this (a tie-break).
 const FILLER_DIV: i32 = 64;
-/// Most root actions moving the present back more than a turn tried as a mate in two
-/// (`back_mate_in_two`).
-const BACK_MATE_PROBES: usize = 32;
 /// Hypercuboids per checking travel in the root's mate-in-one probes. Root pre-search work is
 /// bounded by counts, not time, so it is the same on any machine and for any `movetime`.
 const ROOT_PROBE_STEPS: u32 = 2048;
@@ -2281,44 +2278,6 @@ impl AlphaBeta {
     /// What `MateVerify` allows the search for a checkmate in one at the root, given the move's
     /// time plan (none: an analysis without a limit). Returns the scan's budget and the steps of
     /// the second look at an evasion search that ran out (`MATE_RECHECK_STEPS`).
-    /// The index in `roots` of an action moving the present back more than a turn that mates
-    /// in two, if any, and whether that is proven (every reply searched; the opponent's moves
-    /// on optional boards are often too many). After such an action the opponent plays on that timeline alone, turn
-    /// after turn, while every board ahead waits: a tempo the static evaluation knows nothing
-    /// of, and the actions come last in the root's order (capturing travels after every other
-    /// action), so the search sees such a mate late. Each is searched to the mate on its own
-    /// with a mate-bound window (which no static pruning cuts), at most `BACK_MATE_PROBES` of them.
-    fn back_mate_in_two(&mut self, root: &State, roots: &[(i32, MoveSeq)]) -> Option<(usize, bool)> {
-        let half = |t: (i32, bool)| 2 * t.0 + !t.1 as i32;
-        let present = half(root.get_present());
-        let mut work = root.clone();
-        work.enable_undo();
-        let mut probed = 0;
-        for (k, (_, act)) in roots.iter().enumerate() {
-            if probed == BACK_MATE_PROBES || interrupted() {
-                break;
-            }
-            let mark = Self::make(&mut work, act);
-            if present - half(work.get_present()) <= 2 {
-                work.unmake(mark);
-                continue;
-            }
-            probed += 1;
-            // Mated within two of the side to move's turns: the reply loses to a mate in one.
-            let bar = -(MATE - 3);
-            let v = -self.negamax(&mut work, 2, 1, bar, bar + 1, false);
-            work.unmake(mark);
-            if self.aborted {
-                self.aborted = false;
-                return None;
-            }
-            if v >= MATE - 3 {
-                return Some((k, self.proven));
-            }
-        }
-        None
-    }
-
     fn root_mate_budget(&self, plan: Option<&TimePlan>) -> (MateBudget, u32) {
         let clock = plan.is_some_and(|p| p.clock);
         let now = Instant::now();
@@ -3914,19 +3873,6 @@ impl AlphaBeta {
                 roots.push((i32::MIN / 2, a));
             }
         }
-        // A mate in two by an action moving the present back more than a turn is played at once
-        // as a mate in one is (or searched first, for MultiPV's other lines).
-        let back_mate = if future_mate.is_none() { self.back_mate_in_two(root, &roots).map(|(k, p)| (roots.remove(k).1, p)) } else { None };
-        if let Some((m, proven)) = &back_mate {
-            info(self.info_text(root, 3, self.line_tag(1), MATE - 3, std::slice::from_ref(m), self.nodes, start.elapsed().as_secs_f64(), roots.len() + 1));
-            if self.multipv <= 1 {
-                self.last_score = MATE - 3;
-                self.last_proven = *proven;
-                self.resume = None;
-                return Some(Action::from_seq(m, root));
-            }
-            roots.insert(0, (i32::MAX, m.clone()));
-        }
         // The probe's mate is a root action, searched first: every depth's line (and a
         // resumed search) has it.
         if let Some(m) = &future_mate {
@@ -3934,14 +3880,6 @@ impl AlphaBeta {
             roots.insert(0, (i32::MAX, m.clone()));
         }
         let best = self.search_roots(root, roots, roots_complete, max_depth, start, plan.as_ref(), info, None);
-        if let Some((m, proven)) = back_mate
-            && self.last_score < MATE - 3
-        {
-            self.last_score = MATE - 3;
-            self.last_proven = proven;
-            self.resume = None;
-            return Some(Action::from_seq(&m, root));
-        }
         match future_mate {
             Some(m) if self.last_score < MATE - 1 => {
                 info(self.info_text(root, 1, self.line_tag(1), MATE - 1, std::slice::from_ref(&m), self.nodes, start.elapsed().as_secs_f64(), 1));
