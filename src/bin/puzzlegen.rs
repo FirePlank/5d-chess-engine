@@ -1740,14 +1740,29 @@ fn after_score(e: &mut Engine, child: &State, nodes: u64) -> Option<i32> {
 static DEEP_FAILED: AtomicUsize = AtomicUsize::new(0);
 
 /// The deep check of a solver step, `nodes` a search: the position still wins (or holds) as
-/// before, and without any one key move no other idea does - the claim the mining made with
-/// much smaller searches.
-fn deep_step_ok(e: &mut Engine, s: &State, win: bool, keys: &[FullMove], nodes: u64) -> bool {
-    let Some(best) = e.search(s, nodes, 1, &[]).lines.first().cloned() else { return false };
+/// before, and the step's key moves again - each move of the answer `canon` without which no
+/// other idea works, the claim the mining made with much smaller searches. The keys found (the
+/// mining's ones or fewer: a move another action can do without, e.g. one beside a timeline-
+/// creating jump that wins with almost any move on the board it activates), or None when none
+/// is left (another idea works too).
+fn deep_keys(e: &mut Engine, s: &State, win: bool, canon: &str, nodes: u64) -> Option<Vec<String>> {
+    let best = e.search(s, nodes, 1, &[]).lines.first().cloned()?;
     if !valid(best.score, None) || win != wins(best.score) {
-        return false;
+        return None;
     }
-    keys.iter().all(|k| valid(best.score, e.search(s, nodes, 1, &[*k]).lines.first().map(|l| l.score)))
+    let keys: Vec<String> = action_moves(canon)
+        .into_iter()
+        .filter(|(t, m)| {
+            let r = e.search(s, nodes, 1, &[*m]);
+            let w = r.lines.first().map(|l| l.score);
+            if std::env::var_os("PUZZLEGEN_DEBUG").is_some() {
+                eprintln!("  deep key? {} best {} {} | without it {:?} {:?}", t, best.score, best.action, w, r.lines.first().map(|l| &l.action));
+            }
+            valid(best.score, w)
+        })
+        .map(|(t, _)| t)
+        .collect();
+    (!keys.is_empty()).then_some(keys)
 }
 
 /// Whether an answer scoring `mine` keeps what the puzzle's own answer (`reference`) does.
@@ -1797,6 +1812,8 @@ fn site_puzzle(e: &mut Engine, p: &Json, cfg: &Cfg) -> Option<Json> {
 
 /// Puzzles exported with a trimmed line.
 static TRIMMED: AtomicUsize = AtomicUsize::new(0);
+/// Steps whose deep check found fewer key moves than the mining.
+static REKEYED: AtomicUsize = AtomicUsize::new(0);
 
 /// `site_puzzle` for one line; `count`: a failed deep check counts in `DEEP_FAILED`.
 #[allow(clippy::too_many_arguments)]
@@ -1810,22 +1827,37 @@ fn site_line(e: &mut Engine, p: &Json, cfg: &Cfg, start: &State, line: &[String]
         let canon = line.get(2 * i)?.clone();
         let reply = line.get(2 * i + 1).cloned();
         let child = play(&cur, &canon)?;
-        let mut step = vec![("canonical", Json::from(canon.clone())), ("keys", Json::Arr(ks.iter().map(|k| Json::from(k.clone())).collect()))];
+        let mut step = vec![("canonical", Json::from(canon.clone()))];
         if let Some(r) = &reply {
             step.push(("reply", Json::from(r.clone())));
         }
         if ks.is_empty() {
+            step.push(("keys", Json::Arr(Vec::new())));
             step.push(("accept", Json::from("mates")));
             steps.push(Json::Obj(step.into_iter().map(|(k, v)| (k.to_string(), v)).collect()));
             break;
         }
-        let kmoves: Vec<FullMove> = ks.iter().filter_map(|k| parse_move(k)).collect();
-        if cfg.deep_nodes > 0 && !deep_step_ok(e, &cur, win, &kmoves, cfg.deep_nodes) {
-            if count {
-                DEEP_FAILED.fetch_add(1, Ordering::Relaxed);
+        let mut ks = ks.clone();
+        if cfg.deep_nodes > 0 {
+            match deep_keys(e, &cur, win, &canon, cfg.deep_nodes) {
+                Some(dk) if ks.iter().all(|k| dk.contains(k)) => {}
+                // Fewer keys than mined: any action playing these is right.
+                Some(dk) if dk.iter().all(|k| ks.contains(k)) => {
+                    if count {
+                        REKEYED.fetch_add(1, Ordering::Relaxed);
+                    }
+                    ks = dk;
+                }
+                _ => {
+                    if count {
+                        DEEP_FAILED.fetch_add(1, Ordering::Relaxed);
+                    }
+                    return None;
+                }
             }
-            return None;
         }
+        step.push(("keys", Json::Arr(ks.iter().map(|k| Json::from(k.clone())).collect())));
+        let kmoves: Vec<FullMove> = ks.iter().filter_map(|k| parse_move(k)).collect();
         let reference = after_score(e, &child, nodes)?;
         // The opponent's own search after the answer, a root search (which looks for a mate in
         // one exhaustively) where the mining saw the answer one ply down: it must agree that the
@@ -1957,13 +1989,14 @@ fn export_site(cfg: &Cfg, site: &Path) {
     }
     let _ = std::fs::write(site, body);
     println!(
-        "{} of {} puzzles exported to {} ({} judged by key moves alone, {} with a list of answers; {} with a trimmed line; {} failed the deep check)",
+        "{} of {} puzzles exported to {} ({} judged by key moves alone, {} with a list of answers; {} with a trimmed line; {} steps with fewer key moves; {} failed the deep check)",
         done.len(),
         puzzles.len(),
         site.display(),
         keys_ok,
         partial,
         TRIMMED.load(Ordering::Relaxed),
+        REKEYED.load(Ordering::Relaxed),
         DEEP_FAILED.load(Ordering::Relaxed)
     );
 }
