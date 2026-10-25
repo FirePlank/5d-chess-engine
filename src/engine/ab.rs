@@ -69,10 +69,6 @@ const RANK_PER_BOARD: u32 = 2;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
 const ROOT_LMR_MIN_INDEX: usize = 6;
-/// Moves kept on a board an action creating a timeline activates (`future_parts`).
-const ACTIVATED_MOVES: usize = 4;
-/// Ordering weight of such a move: its score divided by this (a tie-break).
-const FILLER_DIV: i32 = 64;
 /// Hypercuboids per checking travel in the root's mate-in-one probes. Root pre-search work is
 /// bounded by counts, not time, so it is the same on any machine and for any `movetime`.
 const ROOT_PROBE_STEPS: u32 = 2048;
@@ -1208,11 +1204,7 @@ impl AlphaBeta {
             scores.resize_with(dim, Vec::new);
         }
         let mut detector = if checks { Some(CheckDetector::new(info, s, scratch)) } else { None };
-        // A move on a board an action creating a timeline activates is mostly filler beside the
-        // timeline's creation: its score only breaks ties, so the action ranks by its travel.
-        let activated: Vec<usize> = Self::activated_lines(s).into_iter().filter_map(|l| info.line_to_axis(l)).collect();
         for n in axes.start..axes.end.min(dim) {
-            let filler = activated.contains(&n);
             let sc = &mut scores[n];
             sc.clear();
             if scratch.skip && n < fba && scratch.skipped.get(n).copied().unwrap_or(false) {
@@ -1275,7 +1267,6 @@ impl AlphaBeta {
                     }
                     _ => self.coord_score(s, info, n, i, &mut detector, recorded),
                 };
-                let score = if filler && i != 0 { score / FILLER_DIV } else { score };
                 sc[i as usize] = score;
                 v.push(((!((score as u32) ^ 0x8000_0000) as u64) << 32) | i as u64);
             }
@@ -1296,162 +1287,64 @@ impl AlphaBeta {
         HcOrdering::Precomputed(orders)
     }
 
-    /// The axes of the boards the side to move doesn't have to play (ahead of the present, or on
-    /// inactive timelines), and those of them an action creating a timeline makes playable: an
-    /// inactive line the new one activates, ending on the side to move's turn at or before the
-    /// present (it must then be played).
-    /// The inactive lines an action creating a timeline activates whose last board is the side
-    /// to move's, at or before the present (it must then be played too).
-    fn activated_lines(s: &State) -> Vec<i32> {
-        let present = s.get_present();
-        let (amin, amax) = s.get_active_range();
-        let (lo, hi) = s.get_lines_range();
-        if amin == lo && amax == hi {
-            return Vec::new();
-        }
-        let nl = s.new_line();
-        let (na, nb) = active_range_for(s.multiverse().layout(), lo.min(nl), hi.max(nl));
-        (lo..=hi)
-            .filter(|&l| (l < amin || l > amax) && l >= na && l <= nb)
-            .filter(|&l| {
-                let e = s.get_timeline_end(l);
-                e <= present && e.1 == present.1
-            })
-            .collect()
-    }
-
-    fn optional_axes(s: &State, info: &HcInfo) -> (Vec<usize>, Vec<usize>) {
-        let present = s.get_present();
-        let (amin, amax) = s.get_active_range();
-        let (lo, hi) = s.get_lines_range();
-        let nl = s.new_line();
-        let (na, nb) = active_range_for(s.multiverse().layout(), lo.min(nl), hi.max(nl));
-        let has_branch = info.first_branch_axis() < info.dimension();
-        let (mut optional, mut activated) = (Vec::new(), Vec::new());
-        for l in lo..=hi {
-            let active = l >= amin && l <= amax;
-            if active && s.get_timeline_end(l) == present {
-                continue;
-            }
-            let Some(n) = info.line_to_axis(l) else { continue };
-            optional.push(n);
-            if has_branch && !active && l >= na && l <= nb && s.get_timeline_end(l) <= present {
-                activated.push(n);
-            }
-        }
-        (optional, activated)
-    }
-
-    /// `hc` split by whether it creates a timeline (when some board can be activated), each part
-    /// with the optional axes it leaves out and, on a creating part, the moves kept on each board
-    /// it activates: the `ACTIVATED_MOVES` best by the board-only order (captures and checks
-    /// first, hanging moves last), any other entry (a travel) too. The board's move is mostly
-    /// filler beside the timeline's creation; its other moves are only searched where the
-    /// left-out moves are (`future_only`).
-    #[allow(clippy::type_complexity)]
-    fn future_parts<'a>(s: &State, info: &HcInfo, hc: &Hc, optional: &'a [usize], activated: &[usize], rest: &'a [usize]) -> Vec<(Hc, &'a [usize], Vec<(usize, IntegerSet)>)> {
-        let fba = info.first_branch_axis();
-        if activated.is_empty() || !hc[fba].has_other_than(0) {
-            return vec![(hc.clone(), optional, Vec::new())];
-        }
-        let mut branching = hc.clone();
-        let mut parts = Vec::new();
-        if hc[fba].contains(0) {
-            let mut quiet = hc.clone();
-            quiet[fba].assign_singleton(0);
-            parts.push((quiet, optional, Vec::new()));
-            branching[fba].erase(0);
-        }
-        let mut keep = Vec::new();
-        for &n in activated {
-            let mut scored: Vec<(i32, Index)> = hc[n]
-                .iter()
-                .filter(|&i| matches!(info.entry(n, i), Entry::Physical { .. }))
-                .map(|i| {
-                    let p = Self::phys_static(s, info, n, i);
-                    (p.base + if p.physical_check { CHECK_BONUS } else { 0 }, i)
-                })
-                .collect();
-            if scored.len() <= ACTIVATED_MOVES {
-                continue;
-            }
-            scored.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-            let mut k = IntegerSet::from_bits(&hc[n]);
-            for &(_, i) in &scored[ACTIVATED_MOVES..] {
-                k.erase(i);
-            }
-            keep.push((n, k));
-        }
-        parts.push((branching, rest, keep));
-        parts
-    }
-
     /// Moves on boards the side to move doesn't have to play (ahead of the present, or on
-    /// inactive timelines) are left out: only the null coordinate stay on those axes. An action
-    /// creating a timeline keeps its best moves on a board it makes playable (`future_parts`).
+    /// inactive timelines) are left out: only the null coordinate stay on those axes.
     fn without_future(s: &State, info: &HcInfo, ss: &SearchSpace) -> SearchSpace {
-        let (optional, activated) = Self::optional_axes(s, info);
-        if optional.is_empty() {
+        let present = s.get_present();
+        let (amin, amax) = s.get_active_range();
+        let (lo, hi) = s.get_lines_range();
+        let optional = |l: i32| -> Option<usize> {
+            let n = info.line_to_axis(l)?;
+            if l >= amin && l <= amax && s.get_timeline_end(l) == present { None } else { Some(n) }
+        };
+        if !(lo..=hi).any(|l| optional(l).is_some()) {
             return ss.clone();
         }
-        let rest: Vec<usize> = optional.iter().copied().filter(|n| !activated.contains(n)).collect();
         let mut out = SearchSpace::default();
-        for hc in &ss.hcs {
-            'part: for (mut h, opt, keep) in Self::future_parts(s, info, hc, &optional, &activated, &rest) {
-                for &n in opt {
-                    if !h[n].contains(0) {
-                        continue 'part;
+        'hc: for hc in &ss.hcs {
+            for l in lo..=hi {
+                if let Some(n) = optional(l)
+                    && !hc[n].contains(0) {
+                        continue 'hc;
                     }
+            }
+            let mut h = hc.clone();
+            for l in lo..=hi {
+                if let Some(n) = optional(l) {
                     h[n].assign_singleton(0);
                 }
-                for (n, k) in &keep {
-                    h[*n].assign(k);
-                }
-                out.hcs.push(h);
             }
+            out.hcs.push(h);
         }
         out
     }
 
     /// The points of `ss` that `without_future` leaves out: actions with a move on a board the
-    /// side to move need not play, or with a move left out on a board a creating action
-    /// activates. Disjoint hypercuboids: the k-th optional axis played, the optional axes before
-    /// it not; then, those all passing, the k-th activated axis on a left-out move, the ones
-    /// before it on kept moves.
+    /// side to move need not play. Disjoint hypercuboids: the k-th optional axis played, the
+    /// optional axes before it not.
     fn future_only(s: &State, info: &HcInfo, ss: &SearchSpace) -> SearchSpace {
-        let (optional, activated) = Self::optional_axes(s, info);
-        let rest: Vec<usize> = optional.iter().copied().filter(|n| !activated.contains(n)).collect();
+        let present = s.get_present();
+        let (amin, amax) = s.get_active_range();
+        let (lo, hi) = s.get_lines_range();
+        let optional: Vec<usize> = (lo..=hi)
+            .filter(|&l| !(l >= amin && l <= amax && s.get_timeline_end(l) == present))
+            .filter_map(|l| info.line_to_axis(l))
+            .collect();
         let mut out = SearchSpace::default();
         for hc in &ss.hcs {
-            'part: for (hc, opt, keep) in Self::future_parts(s, info, hc, &optional, &activated, &rest) {
-                for (k, &n) in opt.iter().enumerate() {
-                    if !hc[n].has_other_than(0) {
-                        continue;
-                    }
-                    if opt[..k].iter().any(|&p| !hc[p].contains(0)) {
-                        continue 'part;
-                    }
-                    let mut h = hc.clone();
-                    for &p in &opt[..k] {
-                        h[p].assign_singleton(0);
-                    }
-                    h[n].erase(0);
-                    out.hcs.push(h);
-                }
-                if opt.iter().any(|&p| !hc[p].contains(0)) {
+            for (k, &n) in optional.iter().enumerate() {
+                if !hc[n].has_other_than(0) {
                     continue;
                 }
-                for (k, (n, kept)) in keep.iter().enumerate() {
-                    let mut h = hc.clone();
-                    for &p in opt {
-                        h[p].assign_singleton(0);
-                    }
-                    for (q, kq) in &keep[..k] {
-                        h[*q].assign(kq);
-                    }
-                    h[*n].minus(kept);
-                    out.hcs.push(h);
+                if optional[..k].iter().any(|&p| !hc[p].contains(0)) {
+                    break;
                 }
+                let mut h = hc.clone();
+                for &p in &optional[..k] {
+                    h[p].assign_singleton(0);
+                }
+                h[n].erase(0);
+                out.hcs.push(h);
             }
         }
         out
@@ -2377,20 +2270,16 @@ impl AlphaBeta {
 
     fn action_score(&self, s: &State, act: &MoveSeq, ply: usize) -> i32 {
         let mut sc = 0;
-        let activated = Self::activated_lines(s);
         for m in act {
             let (mover, victim) = mover_victim(s, m);
-            let mut v = 0;
             if victim != NO_PIECE {
-                v += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
+                sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
             } else {
-                v += self.history[history_index_of(mover, m, s.get_present().1)] / 3 / 4;
+                sc += self.history[history_index_of(mover, m, s.get_present().1)] / 3 / 4;
             }
             if m.from.tl() != m.to.tl() && victim == NO_PIECE {
-                v -= 300;
+                sc -= 300;
             }
-            // (A move on a board activated by the action's new timeline: see `node_ordering`.)
-            sc += if m.from.l() == m.to.l() && activated.contains(&m.from.l()) { v / FILLER_DIV } else { v };
         }
         if ply <= MAX_PLY {
             if self.killers[ply][0].as_ref() == Some(act) {
@@ -2530,12 +2419,14 @@ impl AlphaBeta {
 
     /// Whether `without_future` leaves out any point of `ss` (a move on an optional board).
     fn trims_future(s: &State, info: &HcInfo, ss: &SearchSpace) -> bool {
-        let (optional, activated) = Self::optional_axes(s, info);
-        let rest: Vec<usize> = optional.iter().copied().filter(|n| !activated.contains(n)).collect();
-        !optional.is_empty()
-            && ss.hcs.iter().any(|hc| {
-                Self::future_parts(s, info, hc, &optional, &activated, &rest).iter().any(|(h, opt, keep)| !keep.is_empty() || opt.iter().any(|&n| h[n].has_other_than(0)))
-            })
+        let present = s.get_present();
+        let (amin, amax) = s.get_active_range();
+        let (lo, hi) = s.get_lines_range();
+        let optional: Vec<usize> = (lo..=hi)
+            .filter(|&l| !(l >= amin && l <= amax && s.get_timeline_end(l) == present))
+            .filter_map(|l| info.line_to_axis(l))
+            .collect();
+        !optional.is_empty() && ss.hcs.iter().any(|hc| optional.iter().any(|&n| hc[n].has_other_than(0)))
     }
 
     fn terminal_score(&mut self, s: &State, ply: usize) -> i32 {
