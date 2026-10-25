@@ -649,8 +649,6 @@ pub struct AlphaBeta {
     excl_key: u64,
     /// The ply right after a null move (no second null move there).
     null_child: usize,
-    /// Per ply: its node follows an action that moved the present back (`set_back`).
-    back: Vec<bool>,
     /// Quiet actions searched at each ply's node so far (penalized when another one cuts).
     quiets: Vec<Vec<MoveSeq>>,
     /// Per-node buffers, reused down the recursion.
@@ -1008,7 +1006,6 @@ impl AlphaBeta {
             excluded: None,
             excl_key: 0,
             null_child: usize::MAX,
-            back: vec![false; MAX_PLY + 2],
             quiets: vec![Vec::new(); MAX_PLY + 1],
             bufs: Vec::new(),
             terms: Box::default(),
@@ -2730,23 +2727,6 @@ impl AlphaBeta {
         v
     }
 
-    /// Records whether the action just made at `ply`, a capture (`capture`), moved the present
-    /// back from `present`: the opponent then plays on that timeline alone while every board
-    /// ahead waits, a tempo a static evaluation knows nothing of, so that node is not pruned by
-    /// it (and the root does not reduce the action, as no node reduces a capture). Returns it.
-    fn set_back(&mut self, s: &State, present: (i32, bool), capture: bool, ply: usize) -> bool {
-        let back = capture && Self::half_turn(s.get_present()) < Self::half_turn(present);
-        if let Some(b) = self.back.get_mut(ply + 1) {
-            *b = back;
-        }
-        back
-    }
-
-    /// A turn's place in time (the side to move's flag is set for white).
-    fn half_turn(t: (i32, bool)) -> i32 {
-        2 * t.0 + !t.1 as i32
-    }
-
     fn negamax(&mut self, s: &mut State, depth: i32, ply: usize, mut alpha: i32, beta: i32, pv: bool) -> i32 {
         let known_check = self.known_check.take();
         self.pv_clear(ply);
@@ -2806,7 +2786,7 @@ impl AlphaBeta {
         // shallower, which also leaves one for the next iteration to find.
         let depth = if tt_action.is_none() && depth >= IIR_DEPTH && !known_check.unwrap_or_else(|| self.in_check(s)) { depth - 1 } else { depth };
 
-        if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !self.back[ply] && !known_check.unwrap_or_else(|| self.in_check(s)) {
+        if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| self.in_check(s)) {
             if depth <= RFP_DEPTH {
                 let e = self.static_eval(s);
                 if e - RFP_MARGIN * depth >= beta {
@@ -2816,7 +2796,6 @@ impl AlphaBeta {
             if depth >= NMP_MIN_DEPTH && self.null_child != ply && Self::has_null_material(s) && self.static_eval(s) >= beta {
                 let r = NMP_R + depth / NMP_DIV;
                 let mark = s.make_null();
-                self.back[ply + 1] = false;
                 let null_child = std::mem::replace(&mut self.null_child, ply + 1);
                 let v = -self.negamax(s, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
                 self.null_child = null_child;
@@ -2877,12 +2856,7 @@ impl AlphaBeta {
             remembered.extend(self.killers[ply].iter().flatten().filter(|k| tt_action.as_ref() != Some(*k)).cloned());
         }
         for (k, act) in remembered.into_iter().enumerate() {
-            // (A remembered action may not fit this position: its boards are checked first.)
-            let player = s.get_present().1;
-            let fits = act.iter().all(|m| s.get_board_ptr(m.from.l(), m.from.t(), player).is_some() && s.get_board_ptr(m.to.l(), m.to.t(), player).is_some());
-            let (present, capture) = (s.get_present(), fits && Self::is_tactical(s, &act));
             let Some(mark) = Self::make_checked(s, &act) else { continue };
-            self.set_back(s, present, capture, ply);
             let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act);
             // The TT action keeps the node's PV status; killers after it are null-window.
             let v = if k == 0 && tt_action.is_some() && !(excl_node && self.excluded.as_ref() == tt_action.as_ref()) {
@@ -2944,9 +2918,7 @@ impl AlphaBeta {
             if pre_tried.contains(&act) {
                 continue;
             }
-            let (present, capture) = (s.get_present(), Self::is_tactical(s, &act));
             let mark = Self::make(s, &act);
-            self.set_back(s, present, capture, ply);
             let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act);
             let v = self.search_child(s, mark, searched == 0, child_depth, ply, alpha, beta, pv);
             if self.aborted {
@@ -3061,9 +3033,7 @@ impl AlphaBeta {
                     // over boards tells neither).
                     let _ = sc;
                     let quiet = !Self::is_tactical(s, &act);
-                    let present = s.get_present();
                     let mark = Self::make(s, &act);
-                    self.set_back(s, present, !quiet, ply);
                     let mut r = 0;
                     let mut child_check = None;
                     // Checking actions are not reduced: mating lines run through them.
@@ -3173,9 +3143,7 @@ impl AlphaBeta {
                     if widened >= cap {
                         break 'widen None;
                     }
-                    let (present, capture) = (s.get_present(), Self::is_tactical(s, &act));
                     let mark = Self::make(s, &act);
-                    self.set_back(s, present, capture, ply);
                     let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act);
                     let v = self.search_child(s, mark, false, child_depth, ply, alpha, beta, pv);
                     if self.aborted {
@@ -4098,16 +4066,14 @@ impl AlphaBeta {
                     let (iter_nodes0, mut best_nodes) = (self.nodes, 0u64);
                     for (k, (_, act)) in roots.iter().enumerate() {
                         let act_nodes0 = self.nodes;
-                        let capture = Self::is_tactical(&work, act);
                         let mark = Self::make(&mut work, act);
-                        let back = self.set_back(&work, root.get_present(), capture, 0);
                         let child_depth = self.root_child_depth(act, depth);
                         let v = if k == 0 {
                             -self.negamax(&mut work, child_depth - 1, 1, -beta, -alpha, true)
                         } else {
                             // Late root actions are reduced, never pruned.
                             let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(self.in_check(&work)) } else { None };
-                            let r = if child_check == Some(false) && !back { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
+                            let r = if child_check == Some(false) { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
                             self.known_check = child_check;
                             let mut v = -self.negamax(&mut work, child_depth - 1 - r, 1, -alpha - 1, -alpha, false);
                             if !self.aborted && v > alpha && r > 0 {
@@ -4316,12 +4282,9 @@ impl AlphaBeta {
         let mut pass = MultiPass { best: None, best_pv: Vec::new(), all_proven: roots_complete, scores: Vec::with_capacity(roots.len()), lines: Vec::new() };
         // The best exact scores so far, best first, at most `want` of them.
         let mut top: Vec<i32> = Vec::with_capacity(want + 1);
-        let present = work.get_present();
         for (k, (_, act)) in roots.iter().enumerate() {
             let bar = if top.len() >= want { top[want - 1] } else { -INF };
-            let capture = Self::is_tactical(work, act);
             let mark = Self::make(work, act);
-            let back = self.set_back(work, present, capture, 0);
             let child_depth = self.root_child_depth(act, depth);
             let mut exact = true;
             let v = if k == 0 {
@@ -4334,7 +4297,7 @@ impl AlphaBeta {
                 -self.negamax(work, child_depth - 1, 1, -INF, INF, true)
             } else {
                 let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(self.in_check(work)) } else { None };
-                let r = if child_check == Some(false) && !back { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
+                let r = if child_check == Some(false) { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
                 self.known_check = child_check;
                 let mut v = -self.negamax(work, child_depth - 1 - r, 1, -bar - 1, -bar, false);
                 if !self.aborted && v > bar && r > 0 {
