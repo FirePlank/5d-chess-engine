@@ -120,7 +120,7 @@ const TRAVEL_MATE_STEPS: u32 = 64;
 /// checking travel of `travel_mate`.
 const TRAVEL_MATE_COMPLETIONS: usize = 8;
 /// The same at the root, which has the time for more.
-const ROOT_TRAVEL_MATE_COMPLETIONS: usize = 512;
+const ROOT_TRAVEL_MATE_COMPLETIONS: usize = 128;
 /// Hypercuboids the cursor may take on a capturing travel (`optional_travels`) before it gives
 /// it up (when most of its combinations with the other boards' moves are illegal, finding one
 /// can take thousands).
