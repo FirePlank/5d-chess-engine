@@ -43,7 +43,7 @@ const MAX_PLY: usize = 128;
 
 /// Actions searched at non-PV nodes by remaining depth (index = depth); from one more ply on there
 /// is no cap: a late action is reduced, never left out, where it can still matter.
-const LMP: [usize; 5] = [0, 20, 32, 44, 56];
+const LMP: [usize; 4] = [0, 20, 32, 44];
 /// Multiplier for the PV-node action cap.
 const PV_CAP_MULT: usize = 4;
 /// Root actions considered.
