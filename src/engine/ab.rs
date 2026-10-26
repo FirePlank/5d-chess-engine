@@ -43,9 +43,6 @@ const MAX_PLY: usize = 128;
 
 /// Actions searched at non-PV nodes by remaining depth (index = depth, last repeats).
 const LMP: [usize; 5] = [0, 20, 32, 44, 56];
-/// From the last entry's depth on, the cap grows by this per ply: a late action is searched once
-/// the depth is enough, never left out for good (as a cap fixed past depth 4 did).
-const LMP_GROW: usize = 12;
 /// Multiplier for the PV-node action cap.
 const PV_CAP_MULT: usize = 4;
 /// Root actions considered.
@@ -2827,7 +2824,7 @@ impl AlphaBeta {
         // Mate proof: the best reply's, and every searched reply's (see `proven`).
         let (mut best_proven, mut all_proven) = (false, true);
         let mut cap = {
-            let base = LMP[(depth as usize).min(LMP.len() - 1)] + LMP_GROW * (depth.max(LMP.len() as i32 - 1) as usize - (LMP.len() - 1));
+            let base = LMP[(depth as usize).min(LMP.len() - 1)];
             if pv { base * PV_CAP_MULT } else { base }
         };
         // When every action searched loses to a mate, the cap is raised once by its own size:
