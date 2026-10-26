@@ -1172,8 +1172,16 @@ impl AlphaBeta {
                 if (mover == PAWN_W || mover == BRAWN_W) && m.to.y() == promotion_rank(s.get_board_size().1, s.get_present().1) {
                     sc += 9000;
                 }
+                // A quiet travel sinks below the board moves, unless it lands next to the enemy
+                // royal (within two squares) on its board: a past board where the king is still
+                // exposed is where a travel starts a mating attack (site game XfEGIW).
                 if m.from.tl() != m.to.tl() && victim == NO_PIECE {
-                    sc -= 150;
+                    let to = m.to.xy();
+                    let near_royal = marked_pos(b.royal() & b.hostile(s.get_present().1))
+                        .any(|r| ((r & 7) - (to & 7)).abs() <= 2 && ((r >> 3) - (to >> 3)).abs() <= 2);
+                    if !near_royal {
+                        sc -= 150;
+                    }
                 }
                 if mover == KING_W || mover == COMMON_KING_W {
                     sc -= 200;
