@@ -31,8 +31,8 @@ const UNMOVED: [Piece; 4] = [KING_W, ROOK_W, PAWN_W, BRAWN_W];
 pub const NB: usize = KINDS.len() * 2 * 64 + UNMOVED.len() * 2 * 64;
 /// Board roles, the order of the pooled sums: the side to move's boards on the present (it
 /// must play them), its other playable boards, the opponent's latest boards, inactive lines;
-/// then the active lines' past boards, one or two half-turns back and three or four (where
-/// time travel lands).
+/// then the active lines' past boards, one or two half-turns back and three to eight (where
+/// time travel lands: a queen going back four turns to a board where the king is exposed).
 pub const ROLES: usize = 6;
 pub const ROLE_MANDATORY: u8 = 0;
 pub const ROLE_OPTIONAL: u8 = 1;
@@ -41,7 +41,7 @@ pub const ROLE_INACTIVE: u8 = 3;
 pub const ROLE_PAST_NEAR: u8 = 4;
 pub const ROLE_PAST_FAR: u8 = 5;
 /// Half-turns back the past boards go.
-const PAST_BACK: i32 = 4;
+const PAST_BACK: i32 = 8;
 /// Dense bridge inputs: both sides' `hce::Sides` counts (side to move first), then active and
 /// inactive timelines, heavy pieces and mandatory boards.
 pub const ND: usize = 2 * hce::si::COUNT + 2 * hce::ex::COUNT + 4;
