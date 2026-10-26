@@ -1297,46 +1297,49 @@ fn n(v: f64, hi: f64) -> f64 {
     (v / hi).clamp(0.0, 1.0)
 }
 
-/// Absolute rating in Elo-like points. The chess terms (how much there is to calculate, how
-/// hidden the answer is, how busy the boards are) follow the infinite-chess generator; on top,
-/// 5D's own: how many timelines the solver must read, whether the answer travels (through time
-/// or across timelines, worst when it branches), whether it is a combination over several
-/// boards, and whether its checks come from another board.
+/// Absolute rating in Elo-like points, in two parts, as a person meets a puzzle:
+///
+/// - What they must understand before they can calculate at all (5D literacy). A beginner knows
+///   chess on one board; every 5D idea the answer needs raises the floor: playing several boards
+///   in one turn (the biggest step), reading several timelines, an answer that travels (through
+///   time, most of all when it branches a timeline), a check or mate from another board, a key
+///   action combining moves on several boards, and timelines the line creates. A mate in two on
+///   one board stays easy; the same mate with four timelines and three boards to play is not.
+/// - How much there is to calculate (the infinite-chess terms: line length, how hidden the key
+///   move is, precision, a quiet key move, a sacrifice), harder with every board to play.
 fn rating(f: &Features) -> i32 {
+    // ---- 5D literacy: the floor.
+    let boards = f.present_boards.max(1) as f64;
+    let multi_board = if boards >= 2.0 { 220.0 + 120.0 * boards.log2() } else { 0.0 };
+    let read = f.active_timelines.max(f.timelines).max(1) as f64;
+    let timelines = 150.0 * read.log2().min(4.0);
+    let travel = match f.key_kind {
+        2 => 250.0,
+        1 => 150.0,
+        _ => 0.0,
+    };
+    let travel_share = if f.plies > 0 { f.travel_turns as f64 / f.plies.div_ceil(2) as f64 } else { 0.0 };
+    let across = 150.0 * (0.6 * f.superphysical_checks + 0.4 * if f.superphysical_mate { 1.0 } else { 0.0 });
+    let combo = 120.0 * f.key_count.saturating_sub(1).min(2) as f64;
+    let branching = 60.0 * f.branches_created.min(3) as f64;
+    let literacy = multi_board + timelines + travel * (0.7 + 0.3 * travel_share) + across + combo + branching;
+
+    // ---- Calculation (the chess terms), harder the more boards there are to play.
     let forcing = f.forcing.clamp(0.0, 1.0);
     let mate_tail = ((f.mate_in as usize * 2).saturating_sub(1).saturating_sub(f.plies) as f64 * 0.2).min(2.0);
     let calc = n(f.calc_load + mate_tail, 5.5);
     // Engine order puts hundreds of 5D actions ahead of a hidden one: log-scaled.
     let obscure = (0.60 * n(((f.shallow_rank + 1) as f64).log2(), 9.0) + 0.40 * n(f.depth_to_find.saturating_sub(2) as f64, 8.0)) * (0.50 + 0.50 * calc);
-    // Boards to hold in mind: pieces that bear on the tactic, and timelines.
-    let complex = (0.55 * n(f.relevant as f64, 60.0) + 0.45 * n(f.timelines.saturating_sub(1) as f64, 6.0)) * (0.35 + 0.65 * calc);
-    // Timelines to read at all, before any calculation: every active one is a board to scan.
-    let timelines = n((f.active_timelines.max(1) as f64).log2(), 3.0);
-    // The answer itself: a travel (most when it branches), a combination over boards, a check
-    // or mate that comes from another board, timelines created along the way.
-    let travel = match f.key_kind {
-        2 => 1.0,
-        1 => 0.65,
-        _ => 0.0,
-    };
-    let travel_share = if f.plies > 0 { f.travel_turns as f64 / f.plies.div_ceil(2) as f64 } else { 0.0 };
-    let combo = n(f.key_count.saturating_sub(1) as f64, 2.0);
-    let across = 0.6 * f.superphysical_checks + 0.4 * if f.superphysical_mate { 1.0 } else { 0.0 };
-    let branching = n(f.branches_created as f64, 3.0);
+    // Pieces that bear on the tactic.
+    let complex = n(f.relevant as f64, 60.0) * (0.35 + 0.65 * calc);
     let precision = n(((f.mean_replies.max(1.0)).log2()) / 9.0, 1.0) * f.mean_choice;
     let margin_edge = 1.0 - n(f.margin, 1.4);
     let cands = forcing * f.forcing_candidates as f64 + (1.0 - forcing) * f.candidates as f64;
     let width = n((cands.max(1.0)).log2() / 8.0, 1.0) * calc;
     let spread = n(((f.span + 1) as f64).log2(), 3.0) * (0.4 + 0.6 * calc);
-    let r = 520.0
-        + 1400.0 * calc * (1.0 - 0.45 * forcing)
+    let chess = 1400.0 * calc * (1.0 - 0.45 * forcing)
         + 400.0 * obscure
-        + 280.0 * complex
-        + 380.0 * timelines
-        + 260.0 * travel * (0.6 + 0.4 * travel_share)
-        + 200.0 * combo
-        + 160.0 * across
-        + 100.0 * branching
+        + 160.0 * complex
         + 140.0 * spread
         + 280.0 * f.fork_peak
         + 140.0 * precision
@@ -1345,6 +1348,7 @@ fn rating(f: &Features) -> i32 {
         + 120.0 * n(f.sacrifice as f64, 900.0)
         + 60.0 * width
         - 100.0 * if f.ends_in_mate { 1.0 } else { 0.0 };
+    let r = 500.0 + literacy + chess * (1.0 + 0.10 * boards.log2());
     ((r / 10.0).round() as i32 * 10).clamp(400, 3200)
 }
 
