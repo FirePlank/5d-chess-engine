@@ -354,20 +354,27 @@ impl TtTable {
         Self::with_len(((mb << 20) / 64).next_power_of_two())
     }
 
-    /// An empty table of `n` slots (at least one bucket's worth).
+    /// An empty table of `n` slots (at least one bucket's worth), or, when that much can't be
+    /// had, the largest half, quarter... of it that can: the browser build (wasm32) can make no
+    /// block of 2 GB or more, nor grow past its memory's maximum, and a Hash it couldn't
+    /// allocate used to panic the engine. Halving keeps the length a power of two (the bucket mask).
     fn with_len(n: usize) -> Self {
-        let n = n.max(TT_BUCKET);
-        let layout = std::alloc::Layout::array::<TtSlot>(n).expect("tt size");
-        // SAFETY: an all-zero `TtSlot` is valid (unlocked, empty bound, empty inline action),
-        // and the block is allocated with the layout `Vec` uses for this capacity.
-        let slots = unsafe {
-            let p = std::alloc::alloc_zeroed(layout) as *mut TtSlot;
-            if p.is_null() {
-                std::alloc::handle_alloc_error(layout);
+        let mut n = n.max(TT_BUCKET);
+        loop {
+            if let Ok(layout) = std::alloc::Layout::array::<TtSlot>(n) {
+                // SAFETY: an all-zero `TtSlot` is valid (unlocked, empty bound, empty inline
+                // action), and the block is allocated with the layout `Vec` uses for this capacity.
+                let p = unsafe { std::alloc::alloc_zeroed(layout) as *mut TtSlot };
+                if !p.is_null() {
+                    let slots = unsafe { Vec::from_raw_parts(p, n, n) };
+                    return TtTable { slots, spilled: AtomicBool::new(false), generation: std::sync::atomic::AtomicU8::new(0) };
+                }
+                if n <= TT_BUCKET {
+                    std::alloc::handle_alloc_error(layout);
+                }
             }
-            Vec::from_raw_parts(p, n, n)
-        };
-        TtTable { slots, spilled: AtomicBool::new(false), generation: std::sync::atomic::AtomicU8::new(0) }
+            n /= 2;
+        }
     }
 
     fn len(&self) -> usize {
