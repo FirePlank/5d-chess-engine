@@ -118,7 +118,7 @@ const TRAVEL_MATE_PLY: usize = 2;
 const TRAVEL_MATE_STEPS: u32 = 64;
 /// Legal completions (moves on the other boards the side to move must play) tried with each
 /// checking travel of `travel_mate`.
-const TRAVEL_MATE_COMPLETIONS: usize = 4;
+const TRAVEL_MATE_COMPLETIONS: usize = 8;
 /// The same at the root, which has the time for more.
 const ROOT_TRAVEL_MATE_COMPLETIONS: usize = 512;
 /// Hypercuboids the cursor may take on a capturing travel (`optional_travels`) before it gives
