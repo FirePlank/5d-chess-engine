@@ -68,7 +68,7 @@ const BOARD_RANK_MIN_INDEX: usize = 8;
 const RANK_PER_BOARD: u32 = 2;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
-const ROOT_LMR_MIN_INDEX: usize = 6;
+const ROOT_LMR_MIN_INDEX: usize = 4;
 /// Moves kept on a board an action creating a timeline activates (`future_parts`).
 const ACTIVATED_MOVES: usize = 4;
 /// Ordering weight of such a move: its score divided by this (a tie-break).
