@@ -1174,7 +1174,7 @@ impl AlphaBeta {
                     sc += 9000;
                 }
                 if m.from.tl() != m.to.tl() && victim == NO_PIECE {
-                    sc -= 150;
+                    sc -= 75;
                 }
                 if checks.as_mut().map(|c| c.gives_check(n, i)).unwrap_or(false) {
                     sc += CHECK_BONUS;
