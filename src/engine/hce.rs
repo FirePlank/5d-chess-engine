@@ -85,13 +85,10 @@ pub mod fi {
     /// Time-travel exposure of the squares next to enemy royals (`ex::F7_WEAK` ..= `ex::KN_CHECKS`),
     /// white's minus black's.
     pub const F7: usize = 70;
-    /// Enemy time-travel landings on a timeline's past boards that check the royal there (a queen
-    /// going back to a board where the king is still exposed): white's danger minus black's,
-    /// and the side to move's own ones (+ for white to move, - for black).
-    pub const TRAVEL_CHECK: usize = 75;
-    pub const TRAVEL_CHECK_STM: usize = 76;
     /// Always 0: the f7 sac table these terms came from is gone (the slots keep the weights'
     /// layout).
+    pub const SAC_LINE: usize = 75;
+    pub const SAC_CLOSE: usize = 76;
     pub const SAC_NOW: usize = 77;
     pub const SAC_NOW_STM: usize = 78;
     pub const SAC_OPEN: usize = 79;
@@ -133,7 +130,7 @@ pub const FEATURE_NAMES: [&str; NF] = [
     "king_prox_5d", "queen_prox", "travel_past", "travel_now", "travel_backed", "weak_sq", "open_orth5",
     "open_diag5", "open_multi5", "king_off", "king_off_new", "low_flight", "exiled", "inactive_royal_att",
     "travel_stm", "tl_slots_threat", "tl_slots_stm", "f7_weak", "f7_open", "f7_qreach", "f7_broute", "kn_checks",
-    "travel_check", "travel_check_stm", "sac_now", "sac_now_stm", "sac_open", "zone_hot", "weak_hot", "dmax5", "zone_max",
+    "sac_line", "sac_close", "sac_now", "sac_now_stm", "sac_open", "zone_hot", "weak_hot", "dmax5", "zone_max",
     "k_def", "k_flight",
     "tl_lost", "to_move", "zone_mand_stm", "zone_mand_opp",
     "def_hot", "def_board", "travel_hot",
@@ -244,9 +241,9 @@ pub fn tuned_weights() -> Weights {
         ("f7_qreach", 248.4),
         ("f7_broute", -11.6),
         ("kn_checks", 296.2),
-        ("travel_check", 0.0),
-        ("travel_check_stm", 0.0),
-        // Unused: the features are always 0 (`fi::SAC_NOW`).
+        // Unused: the features are always 0 (`fi::SAC_LINE`).
+        ("sac_line", 600.0),
+        ("sac_close", 100.0),
         ("sac_now", 0.0),
         ("sac_now_stm", 700.0),
         ("sac_open", 150.0),
@@ -467,9 +464,6 @@ pub struct Sides {
     pub chess: [[i32; chess::NG]; 2],
     /// Whether the chess terms were worked out (at most `CHESS_MAX_LINES` active timelines).
     pub chess_on: bool,
-    /// Enemy time-travel landings on past boards that check an own royal (`past_line`), per
-    /// side (the NNUE reads them as `ex::TRAVEL_CHECK`).
-    pub travel_check: [i32; 2],
 }
 
 /// Extra per-side term indices of `Sides`.
@@ -492,10 +486,8 @@ pub mod ex {
     pub const F7_BROUTE: usize = 10;
     /// Knight checks available against enemy royals (Nh3-g5+ in the f7 attack).
     pub const KN_CHECKS: usize = 11;
-    /// Enemy time-travel landings on past boards that check an own royal (`past_line`): an
-    /// input of the NNUE only (no handcrafted feature reads it).
-    pub const TRAVEL_CHECK: usize = 12;
-    /// Unused: always 0.
+    /// Unused (`fi::SAC_LINE`): always 0.
+    pub const SAC_LINE: usize = 12;
     pub const SAC_CLOSE: usize = 13;
     pub const SAC_NOW: usize = 14;
     pub const SAC_OPEN: usize = 15;
@@ -738,10 +730,10 @@ pub fn board_terms(b: &Board, w: i32, h: i32) -> BoardTerms {
 pub trait TermSource {
     fn terms(&mut self, b: &Board, w: i32, h: i32) -> &BoardTerms;
     /// Memoized `past_line` results by `past_key`.
-    fn past_get(&mut self, _key: u64) -> Option<[i32; 3]> {
+    fn past_get(&mut self, _key: u64) -> Option<[i32; 2]> {
         None
     }
-    fn past_put(&mut self, _key: u64, _v: [i32; 3]) {}
+    fn past_put(&mut self, _key: u64, _v: [i32; 2]) {}
     /// The standard-chess terms of board `b` (`chess::board_chess`), memoized where the terms
     /// are.
     fn chess(&mut self, b: &Board, w: i32, h: i32) -> BoardChess {
@@ -764,7 +756,7 @@ pub struct TermCache {
     slots: Vec<(Board, bool, BoardTerms)>,
     /// Each slot's standard-chess terms, once asked for (`chess`).
     chess: Vec<Option<BoardChess>>,
-    past: Vec<(u64, [i32; 3])>,
+    past: Vec<(u64, [i32; 2])>,
 }
 
 impl Default for TermCache {
@@ -773,7 +765,7 @@ impl Default for TermCache {
             size: (0, 0),
             slots: vec![(Board::default(), false, BoardTerms::ZERO); 1 << 12],
             chess: vec![None; 1 << 12],
-            past: vec![(0, [0; 3]); 1 << 14],
+            past: vec![(0, [0; 2]); 1 << 14],
         }
     }
 }
@@ -792,12 +784,12 @@ impl TermCache {
 
 impl TermSource for TermCache {
     #[inline]
-    fn past_get(&mut self, key: u64) -> Option<[i32; 3]> {
+    fn past_get(&mut self, key: u64) -> Option<[i32; 2]> {
         let e = &self.past[(key >> 50) as usize];
         if e.0 == key && key != 0 { Some(e.1) } else { None }
     }
     #[inline]
-    fn past_put(&mut self, key: u64, v: [i32; 3]) {
+    fn past_put(&mut self, key: u64, v: [i32; 2]) {
         self.past[(key >> 50) as usize] = (key, v);
     }
     #[inline]
@@ -838,7 +830,6 @@ pub fn sides_with(s: &State, src: &mut impl TermSource) -> Sides {
         extra: [[0; ex::COUNT]; 2],
         chess: [[0; chess::NG]; 2],
         chess_on: false,
-        travel_check: [0; 2],
     };
     let (l_min, l_max) = s.get_lines_range();
     let (amin, amax) = s.get_active_range();
@@ -1093,11 +1084,10 @@ fn spread1(r: Bitboard) -> Bitboard {
 }
 
 /// Squares next to enemy royals on line `l`'s past boards where attacker `c` can land:
-/// [undefended by other enemy pieces, and of those, also covered by `c`, and the landings
-/// that check an enemy royal there, from any distance and defended or not: a check forces].
+/// [undefended by other enemy pieces, and of those, also covered by `c`].
 /// Landings from other timelines are ignored.
-fn past_line(g: &Geo, l: i32, c: bool) -> [i32; 3] {
-    let mut past = [0i32; 3];
+fn past_line(g: &Geo, l: i32, c: bool) -> [i32; 2] {
+    let mut past = [0i32; 2];
     // The latest board (`at(l, src_v(end, c))`) and the past boards before it.
     let tl = g.m.timeline(l);
     let Some(b0) = tl.boards.last() else { return past };
@@ -1107,9 +1097,6 @@ fn past_line(g: &Geo, l: i32, c: bool) -> [i32; 3] {
     let mut boards: [&Board; 8] = [b0; 8];
     let mut zone = [0u64; 8];
     let mut hits = [0u64; 8];
-    // Squares from which a rook-like, bishop-like or knight landing checks an enemy royal.
-    let mut chk = [[0u64; 3]; 8];
-    let mut chits = [0u64; 8];
     let mut n = 0;
     let mut zones = 0;
     while n < 8 {
@@ -1121,43 +1108,28 @@ fn past_line(g: &Geo, l: i32, c: bool) -> [i32; 3] {
         boards[n] = b;
         let r = b.royal() & b.hostile(c);
         zone[n] = spread1(r) & !r & !b.friendly(c);
-        let free = !b.friendly(c);
-        for rs in marked_pos(r) {
-            chk[n][0] |= rook_attack(rs, b.occupied()) & free;
-            chk[n][1] |= bishop_attack(rs, b.occupied()) & free;
-            chk[n][2] |= knight_attack(rs) & free;
-        }
-        zones |= zone[n] | chk[n][0] | chk[n][1] | chk[n][2];
+        zones |= zone[n];
         n += 1;
     }
     if zones == 0 {
         return past;
     }
     let comp = [b0.lrook() & mine, b0.lbishop() & mine, b0.lunicorn() & mine];
-    let queens = b0.queen() & mine;
     if comp.iter().any(|&x| x != 0) {
         for (j, &(sx, sy)) in XY9.iter().enumerate() {
-            let class = (sx != 0) as usize + (sy != 0) as usize;
-            let mut pos = comp[class];
+            let mut pos = comp[(sx != 0) as usize + (sy != 0) as usize];
             // Only pieces on the line back from some zone square can land on one.
             if pos & fill(zones, BACK_FILL[j]) == 0 {
                 continue;
             }
-            // The queens among them check as a rook and as a bishop; a rook-like (bishop-like)
-            // landing checks only as a rook (bishop); a unicorn-like one never on one board.
-            let mut posq = pos & queens;
             let st = STEP9[j];
             for k in 0..n {
                 pos = step(pos, st);
-                posq = step(posq, st);
                 if pos == 0 {
                     break;
                 }
                 hits[k] |= pos & zone[k];
-                let own = if class < 2 { chk[k][class] } else { 0 };
-                chits[k] |= (pos & own) | (posq & (chk[k][0] | chk[k][1]));
                 pos &= !boards[k].occupied();
-                posq &= !boards[k].occupied();
             }
         }
     }
@@ -1166,22 +1138,18 @@ fn past_line(g: &Geo, l: i32, c: bool) -> [i32; 3] {
         for &(dx, dy, dt) in &KN_PAST {
             let k = (-dt - 1) as usize;
             if k < n {
-                let to = shift_xy(kn, dx, dy);
-                hits[k] |= to & zone[k];
-                chits[k] |= to & chk[k][2];
+                hits[k] |= shift_xy(kn, dx, dy) & zone[k];
             }
         }
     }
     // Squares no other enemy piece defends, and those `c` also covers there.
     for k in 0..n {
-        if hits[k] | chits[k] != 0 {
-            let defended = side_attacks(boards[k], !c).attacks_nr;
-            let weak = hits[k] & !defended;
+        if hits[k] != 0 {
+            let weak = hits[k] & !side_attacks(boards[k], !c).attacks_nr;
             if weak != 0 {
                 past[0] += weak.count_ones() as i32;
                 past[1] += (weak & side_attacks(boards[k], c).attacks).count_ones() as i32;
             }
-            past[2] += chits[k].count_ones() as i32;
         }
     }
     past
@@ -1242,7 +1210,7 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
     let (w, h) = s.get_board_size();
     let g = Geo { m: s.multiverse(), lo, hi };
     // Time travel into the past: walk every source line's pieces backwards.
-    let mut past = [[0i32; 3]; 2];
+    let mut past = [[0i32; 2]; 2];
     for l in lo..=hi {
         for (ci, pc) in past.iter_mut().enumerate() {
             let c = ci == 1;
@@ -1257,15 +1225,12 @@ fn royal_5d(s: &State, sd: &mut Sides, src: &mut impl TermSource, atts: &[[Bitbo
             };
             pc[0] += p[0];
             pc[1] += p[1];
-            pc[2] += p[2];
         }
     }
     for (ci, pc) in past.iter().enumerate() {
         let f = &mut sd.side[1 - ci];
         f[si::TRAVEL_PAST] += pc[0];
         f[si::TRAVEL_BACKED] += pc[1];
-        sd.travel_check[1 - ci] += pc[2];
-        sd.extra[1 - ci][ex::TRAVEL_CHECK] += pc[2];
     }
     // Latest boards: lines to the enemy royals and landings next to them.
     let mut royals_active = [false; 2];
@@ -1570,8 +1535,6 @@ pub fn features_from(sd: &Sides, s: &State, checks: bool) -> Features {
     }
     let opp = sd.side[1 - stm as usize];
     f[fi::TRAVEL_STM] = sign * (opp[si::TRAVEL_PAST] + opp[si::TRAVEL_NOW]);
-    f[fi::TRAVEL_CHECK] = sd.travel_check[0] - sd.travel_check[1];
-    f[fi::TRAVEL_CHECK_STM] = sign * sd.travel_check[1 - stm as usize];
     let sl = [sd.side[0][si::SLOTS], sd.side[1][si::SLOTS]];
     let dg = [royal_danger(&sd.side[0]), royal_danger(&sd.side[1])];
     f[fi::TL_SLOTS_THREAT] = sl[0] * dg[1] - sl[1] * dg[0];
@@ -1981,7 +1944,7 @@ mod royal_tests {
     }
 
     fn zero() -> Sides {
-        Sides { side: [[0; si::COUNT]; 2], heavy: 0, active: 0, inactive: 0, mandatory: 0, extra: [[0; ex::COUNT]; 2], chess: [[0; chess::NG]; 2], chess_on: false, travel_check: [0; 2] }
+        Sides { side: [[0; si::COUNT]; 2], heavy: 0, active: 0, inactive: 0, mandatory: 0, extra: [[0; ex::COUNT]; 2], chess: [[0; chess::NG]; 2], chess_on: false }
     }
 
     #[test]
