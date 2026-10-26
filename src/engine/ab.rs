@@ -1173,7 +1173,7 @@ impl AlphaBeta {
                     sc += 9000;
                 }
                 if m.from.tl() != m.to.tl() && victim == NO_PIECE {
-                    sc -= 300;
+                    sc -= 150;
                 }
                 if mover == KING_W || mover == COMMON_KING_W {
                     sc -= 200;
