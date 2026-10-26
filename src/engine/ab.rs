@@ -41,7 +41,8 @@ fn board_diff(a: &Board, b: &Board) -> Bitboard {
 pub const INF: i32 = 32000;
 const MAX_PLY: usize = 128;
 
-/// Actions searched at non-PV nodes by remaining depth (index = depth, last repeats).
+/// Actions searched at non-PV nodes by remaining depth (index = depth); from one more ply on there
+/// is no cap: a late action is reduced, never left out, where it can still matter.
 const LMP: [usize; 5] = [0, 20, 32, 44, 56];
 /// Multiplier for the PV-node action cap.
 const PV_CAP_MULT: usize = 4;
@@ -2821,7 +2822,7 @@ impl AlphaBeta {
         // Mate proof: the best reply's, and every searched reply's (see `proven`).
         let (mut best_proven, mut all_proven) = (false, true);
         let mut cap = {
-            let base = LMP[(depth as usize).min(LMP.len() - 1)];
+            let base = LMP.get(depth.max(0) as usize).copied().unwrap_or(usize::MAX / 8);
             if pv { base * PV_CAP_MULT } else { base }
         };
         // When every action searched loses to a mate, the cap is raised once by its own size:
