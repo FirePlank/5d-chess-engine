@@ -45,7 +45,7 @@ const MAX_PLY: usize = 128;
 /// is no cap: a late action is reduced, never left out, where it can still matter.
 const LMP: [usize; 5] = [0, 20, 32, 44, 56];
 /// Multiplier for the PV-node action cap.
-const PV_CAP_MULT: usize = 4;
+const PV_CAP_MULT: usize = 5;
 /// Root actions considered.
 const ROOT_CAP: usize = 1000;
 /// Actions generated (and sorted by action score) at a time at interior nodes: the first
