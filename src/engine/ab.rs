@@ -1167,7 +1167,7 @@ impl AlphaBeta {
                 if victim != NO_PIECE {
                     sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
                 } else {
-                    sc += history.unwrap_or_else(|| self.history[history_index_of(mover, m, s.get_present().1)]) / 2;
+                    sc += history.unwrap_or_else(|| self.history[history_index_of(mover, m, s.get_present().1)]) / 3;
                 }
                 if (mover == PAWN_W || mover == BRAWN_W) && m.to.y() == promotion_rank(s.get_board_size().1, s.get_present().1) {
                     sc += 9000;
@@ -1272,7 +1272,7 @@ impl AlphaBeta {
                         let p = st[i as usize - 1];
                         let mut sc = p.base;
                         if !p.capture {
-                            sc += self.history[p.history as usize] / 2;
+                            sc += self.history[p.history as usize] / 3;
                         }
                         if let Some(d) = detector.as_mut()
                             && (p.physical_check || d.reach_check(n, i)) {
