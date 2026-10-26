@@ -109,7 +109,7 @@ const ROOT_GEN_STEPS: u32 = 1 << 20;
 const ROOT_FUTURE_MATE_PROBE: usize = 16;
 /// Root actions with a move on an optional board added when every root action loses to a
 /// mate (interior nodes take up to their action cap).
-const ROOT_WIDEN_CAP: usize = 512;
+const ROOT_WIDEN_CAP: usize = 256;
 /// Interior nodes up to this ply (the root is 0) look for a checkmate in one by a checking
 /// travel the node would search late or never (`travel_mate`).
 const TRAVEL_MATE_PLY: usize = 2;
