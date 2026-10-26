@@ -1175,6 +1175,9 @@ impl AlphaBeta {
                 if m.from.tl() != m.to.tl() && victim == NO_PIECE {
                     sc -= 150;
                 }
+                if mover == KING_W || mover == COMMON_KING_W {
+                    sc -= 200;
+                }
                 if checks.as_mut().map(|c| c.gives_check(n, i)).unwrap_or(false) {
                     sc += CHECK_BONUS;
                 }
