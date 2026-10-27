@@ -20,7 +20,8 @@
 #        SELFPLAY=1 (self-play data instead of a test: new may equal old, no BOOK, every game
 #        gets its own generated opening of BOOK_PLIES actions (default 10) within BOOK_MARGIN internal
 #        units of the best (default 1200), and fixed-node searches get +-15% jitter; set MIN_GAMES to the
-#        game count so the LLR never stops it).
+#        game count so the LLR never stops it; SEED_BASE offsets the shards' seeds so another
+#        self-play run gets other openings).
 #   Network trouble never stops it: every gh call has a timeout and is retried, a run whose
 #   status cannot be read is waited on (or past the time cap cancelled when GitHub answers
 #   again), and the shard download retries until the artifacts come.
@@ -62,8 +63,8 @@ else
   [ "$PATCH" = "-" ] || git apply "$PATCH"
   jq -n --arg n "$NAME" --arg o "${OLD_SHA:-$BASE_SHA}" --arg tc "$TC" --argjson g "$GAMES" \
         --argjson e0 "$E0" --argjson e1 "$E1" --argjson sh "${SHARDS:-40}" \
-        --arg na "${NEW_ARGS:-}" --arg oa "${OLD_ARGS:-}" --arg b "${BASE:-self}" --arg bk "${BOOK:-}" --argjson ms "$(( ${MAX_MIN:-20} * 60 - 360 ))" --argjson th "${THREADS:-1}"         --argjson sp "$([ -n "${SELFPLAY:-}" ] && echo true || echo false)" --argjson bp "${BOOK_PLIES:-10}" --argjson bm "${BOOK_MARGIN:-1200}" \
-        '{name:$n, old:$o, games:$g, shards:$sh, tc:$tc, elo0:$e0, elo1:$e1, new_args:$na, old_args:$oa, base:$b, book:$bk, max_seconds:$ms, threads:$th, selfplay:$sp, book_plies:$bp, book_margin:$bm}' \
+        --arg na "${NEW_ARGS:-}" --arg oa "${OLD_ARGS:-}" --arg b "${BASE:-self}" --arg bk "${BOOK:-}" --argjson ms "$(( ${MAX_MIN:-20} * 60 - 360 ))" --argjson th "${THREADS:-1}"         --argjson sp "$([ -n "${SELFPLAY:-}" ] && echo true || echo false)" --argjson bp "${BOOK_PLIES:-10}" --argjson bm "${BOOK_MARGIN:-1200}" --argjson sb "${SEED_BASE:-0}" \
+        '{name:$n, old:$o, games:$g, shards:$sh, tc:$tc, elo0:$e0, elo1:$e1, new_args:$na, old_args:$oa, base:$b, book:$bk, max_seconds:$ms, threads:$th, selfplay:$sp, book_plies:$bp, book_margin:$bm, seed_base:$sb}' \
         > .github/sprt.json
   git add -A && git commit -q -m "test: $NAME"
   SHA=$(git rev-parse HEAD)
@@ -111,7 +112,8 @@ while :; do
       if [ "${LAST_SEEN[$CTX]:-}" != "$DESC" ]; then LAST_SEEN[$CTX]=$DESC; LAST_CHANGE[$CTX]=$NOW; fi
       if [ "$STATE" = pending ] && [ $(( NOW - ${LAST_CHANGE[$CTX]} )) -ge $STALL_S ]; then STUCK="$STUCK $CTX"; fi
     done <<< "$LINES"
-    if [ -n "$STUCK" ]; then
+    # A self-play run keeps going: one hung shard costs only its own games.
+    if [ -n "$STUCK" ] && [ -z "${SELFPLAY:-}" ]; then
       echo "stalled for $((STALL_S / 60)) min:$STUCK; cancelling"
       cancel_and_wait; break
     fi
