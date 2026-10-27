@@ -16,7 +16,11 @@
 #        played with both colors; default: generated openings),
 #        THREADS (search threads of both engines, default 1; a runner then plays nproc/THREADS
 #        games at once),
-#        GH_RETRY_S (how long one GitHub call is retried through network errors, default 1800).
+#        GH_RETRY_S (how long one GitHub call is retried through network errors, default 1800),
+#        SELFPLAY=1 (self-play data instead of a test: new may equal old, no BOOK, every game
+#        gets its own generated opening of BOOK_PLIES actions (default 10) within BOOK_MARGIN internal
+#        units of the best (default 1200), and fixed-node searches get +-15% jitter; set MIN_GAMES to the
+#        game count so the LLR never stops it).
 #   Network trouble never stops it: every gh call has a timeout and is retried, a run whose
 #   status cannot be read is waited on (or past the time cap cancelled when GitHub answers
 #   again), and the shard download retries until the artifacts come.
@@ -58,8 +62,8 @@ else
   [ "$PATCH" = "-" ] || git apply "$PATCH"
   jq -n --arg n "$NAME" --arg o "${OLD_SHA:-$BASE_SHA}" --arg tc "$TC" --argjson g "$GAMES" \
         --argjson e0 "$E0" --argjson e1 "$E1" --argjson sh "${SHARDS:-40}" \
-        --arg na "${NEW_ARGS:-}" --arg oa "${OLD_ARGS:-}" --arg b "${BASE:-self}" --arg bk "${BOOK:-}" --argjson ms "$(( ${MAX_MIN:-20} * 60 - 360 ))" --argjson th "${THREADS:-1}" \
-        '{name:$n, old:$o, games:$g, shards:$sh, tc:$tc, elo0:$e0, elo1:$e1, new_args:$na, old_args:$oa, base:$b, book:$bk, max_seconds:$ms, threads:$th}' \
+        --arg na "${NEW_ARGS:-}" --arg oa "${OLD_ARGS:-}" --arg b "${BASE:-self}" --arg bk "${BOOK:-}" --argjson ms "$(( ${MAX_MIN:-20} * 60 - 360 ))" --argjson th "${THREADS:-1}"         --argjson sp "$([ -n "${SELFPLAY:-}" ] && echo true || echo false)" --argjson bp "${BOOK_PLIES:-10}" --argjson bm "${BOOK_MARGIN:-1200}" \
+        '{name:$n, old:$o, games:$g, shards:$sh, tc:$tc, elo0:$e0, elo1:$e1, new_args:$na, old_args:$oa, base:$b, book:$bk, max_seconds:$ms, threads:$th, selfplay:$sp, book_plies:$bp, book_margin:$bm}' \
         > .github/sprt.json
   git add -A && git commit -q -m "test: $NAME"
   SHA=$(git rev-parse HEAD)

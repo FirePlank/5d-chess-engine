@@ -1,6 +1,8 @@
 //! SPRT match harness: plays colour-swapped opening pairs between NEW and BASE 5DUCI engines,
 //! referees every action with the kairos rules core and stops on a pentanomial GSPRT decision.
-//! sprt --new <cmd> --base <cmd> [--book f | --book-plies N] [--tc B+I[/dD][/tT]] [--games-out f]
+//! sprt --new <cmd> --base <cmd> [--book f | --book-plies N [--book-margin M] [--unpaired]] [--tc B+I[/dD][/tT]] [--games-out f]
+//! --unpaired: each game of a pair gets its own generated opening (self-play data: identical
+//! deterministic engines would otherwise replay the same game with colours swapped).
 
 use kairos::core::action::{ExtMove, MoveSeq};
 use kairos::core::hypercuboid::{HcCursor, HcInfo};
@@ -390,6 +392,9 @@ struct Config {
     new_options: Vec<String>,
     base_options: Vec<String>,
     go: String,
+    /// Fixed-node self-play (--nodes N --unpaired): each search gets N +-15% nodes, so games
+    /// from the same opening still diverge.
+    jitter_nodes: Option<u64>,
     /// Clock games (`--tc base+inc[/dD][/tT]`, seconds).
     clock: Option<Clock>,
     timeout: Duration,
@@ -523,7 +528,7 @@ fn shuffled_order(w: &HcInfo, mut st: u64) -> HcOrdering {
 }
 
 /// The opening of pair `pair`, deterministic in (seed, pair).
-fn gen_opening(eng: &mut AlphaBeta, seed: u64, pair: usize, plies: usize) -> Opening {
+fn gen_opening(eng: &mut AlphaBeta, seed: u64, pair: usize, plies: usize, wide: i32) -> Opening {
     let mut st = (seed ^ (pair as u64 + 1).wrapping_mul(0xD1B5_4A32_D192_ED03)).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
     let mut rnd = move || {
         st ^= st << 13;
@@ -577,7 +582,7 @@ fn gen_opening(eng: &mut AlphaBeta, seed: u64, pair: usize, plies: usize) -> Ope
             scored.push((v, c, txt));
         }
         let best = scored.iter().map(|x| x.0).max().unwrap();
-        let margin = if book < 2 { BOOK_FIRST_MARGIN } else { BOOK_MARGIN };
+        let margin = if book < 2 { BOOK_FIRST_MARGIN.max(wide) } else { BOOK_MARGIN.max(wide) };
         scored.retain(|x| x.0 >= best - margin);
         let (_, c, txt) = scored.swap_remove((rnd() % scored.len() as u64) as usize);
         s = c;
@@ -715,7 +720,17 @@ fn play_game(cfg: &Config, procs: &mut [Option<Proc>; 2], op: &Opening, new_firs
                 let (w, b) = if player { (clock[1 - side], clock[side]) } else { (clock[side], clock[1 - side]) };
                 c.go(w, b)
             }
-            None => cfg.go.clone(),
+            None => match cfg.jitter_nodes {
+                Some(n) => {
+                    let mut x = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64)
+                        ^ (prog.actions as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                    x ^= x >> 33;
+                    x = x.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+                    x ^= x >> 33;
+                    format!("go nodes {}", n * 85 / 100 + x % (n * 30 / 100 + 1))
+                }
+                None => cfg.go.clone(),
+            },
         };
         let t0 = Instant::now();
         proc.send(&go)?;
@@ -846,6 +861,10 @@ fn main() {
     // Wall-clock limit (0: none): no pair is started after it, so a run ends by itself.
     let max_seconds: u64 = arg(&args, "--max-seconds").and_then(|v| v.parse().ok()).unwrap_or(0);
     let compact = args.iter().any(|a| a == "--compact");
+    let unpaired = args.iter().any(|a| a == "--unpaired");
+    // Generated openings: play any candidate within this many internal units of the best
+    // (default: BOOK_MARGIN, BOOK_FIRST_MARGIN for each side's first action).
+    let book_margin: i32 = arg(&args, "--book-margin").and_then(|v| v.parse().ok()).unwrap_or(0);
     let elo0: f64 = arg(&args, "--elo0").and_then(|v| v.parse().ok()).unwrap_or(0.0);
     let elo1: f64 = arg(&args, "--elo1").and_then(|v| v.parse().ok()).unwrap_or(5.0);
     let alpha: f64 = arg(&args, "--alpha").and_then(|v| v.parse().ok()).unwrap_or(0.05);
@@ -871,6 +890,7 @@ fn main() {
         new_options: args_all(&args, "--new-option"),
         base_options: args_all(&args, "--base-option"),
         go: go.clone(),
+        jitter_nodes: if unpaired && clock.is_none() { arg(&args, "--nodes").and_then(|v| v.parse().ok()) } else { None },
         clock,
         timeout: Duration::from_millis(budget_ms * 4 + 10000),
         max_actions,
@@ -948,15 +968,21 @@ fn main() {
                 if 2 * k >= max_games {
                     break;
                 }
-                let generated;
-                let op = if book.is_empty() {
-                    generated = gen_opening(&mut book_engine, seed, k, book_plies);
-                    &generated
+                let generated: Vec<Opening>;
+                let ops: [&Opening; 2] = if book.is_empty() {
+                    generated = if unpaired {
+                        vec![gen_opening(&mut book_engine, seed, 2 * k, book_plies, book_margin), gen_opening(&mut book_engine, seed, 2 * k + 1, book_plies, book_margin)]
+                    } else {
+                        vec![gen_opening(&mut book_engine, seed, k, book_plies, book_margin)]
+                    };
+                    [&generated[0], &generated[generated.len() - 1]]
                 } else {
-                    &book[order[k % order.len()]]
+                    let o = &book[order[k % order.len()]];
+                    [o, o]
                 };
                 let mut results = Vec::new();
                 for new_first in [true, false] {
+                    let op = ops[!new_first as usize];
                     let mut attempt = 0;
                     loop {
                         if procs[0].is_none() {
@@ -1014,6 +1040,7 @@ fn main() {
                 let mut sh = shared.lock().unwrap();
                 sh.penta.add(results[0].result, results[1].result);
                 for (gi, r) in results.iter().enumerate() {
+                    let op = ops[gi];
                     sh.wdl[match r.result {
                         GameResult::Win => 0,
                         GameResult::Draw => 1,
