@@ -2143,6 +2143,13 @@ impl HcCursor {
         self.next_with(info, s, &mut |_| {}).expect("branch entries built")
     }
 
+    /// Whether no legal action is left among the remaining hypercuboids (`none_left_in`).
+    #[cold]
+    #[inline(never)]
+    fn none_left(&self, info: &HcInfo, s: &State, steps: u32) -> bool {
+        none_left_in(self.ss.hcs.clone(), &self.excluded, info, s, steps)
+    }
+
     /// Forget the problems found so far: call when `ss` is set for another context (state).
     pub fn forget(&mut self) {
         self.memo.clear();
@@ -2172,6 +2179,12 @@ impl HcCursor {
         while !self.ss.is_empty() {
             steps += 1;
             if interrupted_step(steps) || self.budget == 0 {
+                return Ok(None);
+            }
+            // An ordered, unbounded enumeration long without an action: often none is left (a
+            // mate in quiescence), which natural order with regions proves far faster.
+            if steps >= EXHAUST_CHECK_STEPS && steps.is_power_of_two() && !self.regions && self.budget > u32::MAX / 2 && self.none_left(info, s, steps) {
+                self.ss.hcs.clear();
                 return Ok(None);
             }
             self.budget -= 1;
@@ -2610,17 +2623,24 @@ impl BestFirstCursor {
 }
 
 impl BestFirstCursor {
-    /// Whether no legal action is left: a depth-first search of the hypercuboids still queued
-    /// (skipping the excluded regions) finds none within four times `steps` steps.
+    /// Whether no legal action is left among the hypercuboids still queued (`none_left_in`).
     #[cold]
     #[inline(never)]
     fn none_left(&self, info: &HcInfo, s: &State, steps: u32) -> bool {
-        let hcs: Vec<Hc> = self.heap.heap.iter().map(|it| it.hc.clone()).collect();
-        let mut c = HcCursor::new(SearchSpace::from_vec(hcs), HcOrdering::Natural);
-        c.excluded = self.excluded.clone();
+        none_left_in(self.heap.heap.iter().map(|it| it.hc.clone()).collect(), &self.excluded, info, s, steps)
+    }
+}
+
+/// Whether `hcs` hold no legal action outside `excluded`: a natural-order search, with and then
+/// without regions (each fastest on some mates), finds none within four times `steps` steps.
+fn none_left_in(hcs: Vec<Hc>, excluded: &RegionMemo, info: &HcInfo, s: &State, steps: u32) -> bool {
+    [true, false].into_iter().any(|regions| {
+        let mut c = HcCursor::new(SearchSpace::from_vec(hcs.clone()), HcOrdering::Natural);
+        c.excluded = excluded.clone();
+        c.regions = regions;
         c.budget = steps.saturating_mul(4);
         matches!(c.next_with(info, s, &mut |_| {}), Ok(None)) && c.budget > 0 && !interrupted()
-    }
+    })
 }
 
 /// Lazy enumeration of legal actions over a borrowed state.
