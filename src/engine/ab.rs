@@ -113,9 +113,9 @@ const ROOT_WIDEN_CAP: usize = 512;
 /// Interior nodes up to this ply (the root is 0) look for a checkmate in one by a checking
 /// travel the node would search late or never (`travel_mate`).
 const TRAVEL_MATE_PLY: usize = 2;
-/// Hypercuboids the search for an evasion of such a check may look at (proving a mate takes
-/// hundreds with many timelines; past this the check counts as no mate).
-const TRAVEL_MATE_STEPS: u32 = 1024;
+/// Hypercuboids the search for an evasion of such a check may look at (an evasion is usually
+/// found in a few; past this the check counts as no mate).
+const TRAVEL_MATE_STEPS: u32 = 64;
 /// Legal completions (moves on the other boards the side to move must play) tried with each
 /// checking travel of `travel_mate`.
 const TRAVEL_MATE_COMPLETIONS: usize = 8;
