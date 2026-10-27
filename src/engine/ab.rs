@@ -66,7 +66,7 @@ const LMR_MIN_INDEX: usize = 4;
 /// many-timeline nodes: such actions are four in ten of those searched there and give 0.3% of
 /// their cutoffs.)
 const BOARD_RANK_MIN_INDEX: usize = 12;
-const RANK_PER_BOARD: u32 = 4;
+const RANK_PER_BOARD: u32 = 5;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
 const ROOT_LMR_MIN_INDEX: usize = 6;
@@ -1047,6 +1047,11 @@ impl AlphaBeta {
     }
 
     #[inline]
+    /// The static evaluation (side to move's view), for analysis tools.
+    pub fn eval_of(&mut self, s: &State) -> i32 {
+        self.static_eval(s)
+    }
+
     fn static_eval(&mut self, s: &State) -> i32 {
         let _prof = crate::misc::prof::scope(9);
         let key = s.hash();
