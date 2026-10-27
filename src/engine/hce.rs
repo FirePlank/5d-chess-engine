@@ -194,7 +194,7 @@ pub fn tuned_weights() -> Weights {
         ("pawn_adv", -28.2),
         ("pawn_near", 302.0),
         ("king_cent", -123.6),
-        ("tl_slots", 3000.0),
+        ("tl_slots", 2332.7),
         ("tl_slots_heavy", -98.2),
         ("k_holes", -224.7),
         ("k_knights", 2526.0),
