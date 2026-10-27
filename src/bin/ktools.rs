@@ -587,6 +587,7 @@ fn main() {
         }
         "netdata" => netdata(&args[2..], &mut out),
         "nnuedata" => nnuedata(&args[2..], &mut out),
+        "xthreat" => xthreat(&args[2..], &mut out),
         "nnueeval" => nnueeval(&args[2..], &mut out),
         "nnuerandom" => nnuerandom(&args[2..], &mut out),
         "nnuerecs" => nnuerecs(&args[2..], &mut out),
@@ -2332,6 +2333,97 @@ fn is_quiet(s: &State, played: &str, local_vals: &kairos::engine::local::Values)
         .map(|l| kairos::engine::local::capture_gain(s.board(l, present.0, present.1), present.1, h, local_vals))
         .sum();
     gain <= 0 && !tactical(s, played)
+}
+
+/// `xthreat games...`: candidate evaluation terms on quiet positions (as `NNUE_QUIET` exports),
+/// the side to move's view, one row each: result, static eval, 10 move stats for the side to move
+/// and 10 for the opponent (after a null move; -1 when that leaves a royal in check), then 6
+/// timeline stats. Move stats: same-board captures (max victim, max victim - attacker, count),
+/// cross-board captures (the same), captures by a lesser piece (same-board, cross-board count),
+/// physical and superphysical move counts. Values are kind_value10 units, royals excluded.
+fn xthreat(args: &[String], out: &mut impl Write) {
+    use kairos::core::bitboard::{marked_pos, pmask};
+    use kairos::core::vec4::Vec4;
+    use kairos::engine::hce;
+    let local_vals = kairos::engine::local::values_from(&hce::tuned_weights()[hce::fi::MAT_A..hce::fi::MAT_A + 10]);
+    let stats = |s: &State| -> [i32; 10] {
+        let c = s.get_present().1;
+        let (amin, amax) = s.get_active_range();
+        let m = s.multiverse();
+        let mut r = [0i32; 10];
+        let mut ml = Vec::new();
+        for l in amin..=amax {
+            let (t, bc) = s.get_timeline_end(l);
+            if bc != c {
+                continue;
+            }
+            let b = m.board(l, t, c);
+            for sq in marked_pos(b.hostile(!c)) {
+                let p = Vec4::from_xy(sq, Vec4::new(0, 0, t, l));
+                let av = if b.royal() & pmask(sq) != 0 { 1000 } else { hce::kind_value10(b, sq) };
+                ml.clear();
+                m.gen_moves(p, c, &mut ml);
+                for &(tl, bb) in ml.iter() {
+                    let same = tl == p.tl();
+                    r[if same { 8 } else { 9 }] += bb.count_ones() as i32;
+                    let tb = m.board(tl.l(), tl.t(), c);
+                    for v in marked_pos(bb & tb.hostile(c) & !tb.royal()) {
+                        let vv = hce::kind_value10(tb, v);
+                        let k = if same { 0 } else { 3 };
+                        r[k] = r[k].max(vv);
+                        r[k + 1] = r[k + 1].max(vv - av.min(vv + 1000));
+                        r[k + 2] += 1;
+                        if vv > av {
+                            r[if same { 6 } else { 7 }] += 1;
+                        }
+                    }
+                }
+            }
+        }
+        r
+    };
+    let lines_of = |s: &State| -> [i32; 6] {
+        let (pt, pc) = s.get_present();
+        let (lo, hi) = s.get_lines_range();
+        let (amin, amax) = s.get_active_range();
+        let (i0, i1) = s.get_initial_lines_range();
+        let mine = (lo..=hi).filter(|&l| l > i1).count() as i32 - (lo..=hi).filter(|&l| l < i0).count() as i32;
+        let bal = if pc { -mine } else { mine };
+        let (mut ahead, mut n_ahead, mut mand) = (0, 0, 0);
+        for l in amin..=amax {
+            let (t, c) = s.get_timeline_end(l);
+            let d = 2 * (t - pt) + (c as i32 - pc as i32);
+            ahead += d;
+            n_ahead += (d != 0) as i32;
+            mand += (d == 0) as i32;
+        }
+        [bal, amax - amin + 1, (hi - lo + 1) - (amax - amin + 1), ahead, n_ahead, mand]
+    };
+    let mut e = kairos::engine::ab::AlphaBeta::new();
+    for f in args {
+        let text = std::fs::read_to_string(f).expect("games");
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            let mut rows: Vec<(bool, i32, [i32; 10], [i32; 10], [i32; 6])> = Vec::new();
+            let Some(white) = replay_game(line, |s, _t, played| {
+                if !is_quiet(s, played, &local_vals) {
+                    return;
+                }
+                let ev = e.eval_of(s);
+                let me = stats(s);
+                let mut n = s.clone();
+                n.make_null();
+                let opp = if n.has_phantom_check() { [-1; 10] } else { stats(&n) };
+                rows.push((s.get_present().1, ev, me, opp, lines_of(s)));
+            }) else {
+                continue;
+            };
+            for (black, ev, me, opp, ln) in rows {
+                let res = if black { 1.0 - white } else { white };
+                let j = |a: &[i32]| a.iter().map(|x| x.to_string()).collect::<Vec<_>>().join("	");
+                writeln!(out, "{}	{}	{}	{}	{}", res, ev, j(&me), j(&opp), j(&ln)).unwrap();
+            }
+        }
+    }
 }
 
 /// Whether action `played` (5DUCI moves) of the side to move in `s` captures or gives check.

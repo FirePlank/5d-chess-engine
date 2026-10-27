@@ -313,7 +313,7 @@ pub(crate) fn open_rays(sq: i32, own: Bitboard, dirs: &[(i32, i32)], w: i32, h: 
     n
 }
 
-pub(crate) fn kind_value10(b: &Board, sq: i32) -> i32 {
+pub fn kind_value10(b: &Board, sq: i32) -> i32 {
     let z = pmask(sq);
     if b.lpawn() & z != 0 {
         10

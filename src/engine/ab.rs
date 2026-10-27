@@ -1047,6 +1047,11 @@ impl AlphaBeta {
     }
 
     #[inline]
+    /// The static evaluation (side to move's view), for analysis tools.
+    pub fn eval_of(&mut self, s: &State) -> i32 {
+        self.static_eval(s)
+    }
+
     fn static_eval(&mut self, s: &State) -> i32 {
         let _prof = crate::misc::prof::scope(9);
         let key = s.hash();
