@@ -1617,47 +1617,6 @@ pub fn score(f: &Features, w: &Weights, black_to_move: bool) -> i32 {
     if black_to_move { -white } else { white }
 }
 
-/// Strategy-guide candidates (screened with `ktools xthreat`), per side [side to move, opponent]:
-/// rooks, queens and bishops on active lines' latest boards times how far back their line goes
-/// (turns, capped at 16: how far a Jurassic counter-travel reaches), and the squares next to a
-/// royal that moved on its last move (or the one before) that no other own piece defends (where
-/// an anti-castle Tchaikovsky travel lands).
-pub fn guide_terms(s: &State) -> [[i32; 5]; 2] {
-    let stm = s.get_present().1;
-    let (amin, amax) = s.get_active_range();
-    let m = s.multiverse();
-    let mut r = [[0i32; 5]; 2];
-    for l in amin..=amax {
-        let tl = m.timeline(l);
-        let n = tl.boards.len();
-        let b = tl.boards.last().unwrap();
-        let reach = (n as i32 / 2).min(16);
-        for (si, c) in [(0usize, stm), (1, !stm)] {
-            let mine = b.hostile(!c);
-            let q = b.lrook() & b.lbishop() & mine;
-            r[si][0] += ((b.lrook() & mine & !q).count_ones() as i32) * reach;
-            r[si][1] += (q.count_ones() as i32) * reach;
-            r[si][2] += ((b.lbishop() & mine & !q).count_ones() as i32) * reach;
-            let k = b.royal() & mine;
-            if k == 0 {
-                continue;
-            }
-            // The same color's boards one and two of its moves back (2 and 4 half-turns).
-            let def = side_attacks(b, c).attacks_nr;
-            let weak = (spread1(k) & !k & !b.friendly(c) & !b.wall() & !def).count_ones() as i32;
-            for (j, back) in [(3usize, 3usize), (4, 5)] {
-                if n > back {
-                    let kb = tl.boards[n - back].royal() & tl.boards[n - back].hostile(!c);
-                    if kb != 0 && kb != k {
-                        r[si][j] += weak;
-                    }
-                }
-            }
-        }
-    }
-    r
-}
-
 /// `score` of a vector from `split_chess`: only its chess terms.
 #[inline]
 pub fn score_chess(f: &Features, w: &Weights, black_to_move: bool) -> i32 {
