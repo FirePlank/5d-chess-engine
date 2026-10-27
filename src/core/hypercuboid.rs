@@ -1990,12 +1990,17 @@ impl Problem {
     }
 }
 
-/// Starting at the back of `ss`, cut `problem` from the hypercuboids while they keep meeting it
-/// (as `SearchSpace::remove_slice_backwards` does for a slice).
+/// Hypercuboids from the back of a search space a region problem is cut from (each into up to
+/// one piece per branch axis): unbounded, one step could multiply a long queue many times over.
+const REGION_LOOKBACK: usize = 16;
+
+/// Starting at the back of `ss`, cut `problem` from the last `REGION_LOOKBACK` hypercuboids
+/// while they keep meeting it (as `SearchSpace::remove_slice_backwards` does for a slice).
 fn remove_problem_backwards(ss: &mut SearchSpace, problem: &Problem, b0: usize) {
     let (mut intersect, mut disjoint) = (0usize, 0usize);
     let mut current = ss.hcs.len();
-    while current > 0 {
+    let stop = current.saturating_sub(REGION_LOOKBACK);
+    while current > stop {
         current -= 1;
         if problem.intersects(&ss.hcs[current], b0) {
             let hc = std::mem::take(&mut ss.hcs[current]);
