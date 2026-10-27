@@ -2403,7 +2403,7 @@ fn xthreat(args: &[String], out: &mut impl Write) {
     for f in args {
         let text = std::fs::read_to_string(f).expect("games");
         for line in text.lines().filter(|l| !l.trim().is_empty()) {
-            let mut rows: Vec<(bool, i32, [i32; 10], [i32; 10], [i32; 6])> = Vec::new();
+            let mut rows: Vec<(bool, i32, [i32; 10], [i32; 10], Vec<i32>)> = Vec::new();
             let Some(white) = replay_game(line, |s, _t, played| {
                 if !is_quiet(s, played, &local_vals) {
                     return;
@@ -2413,7 +2413,11 @@ fn xthreat(args: &[String], out: &mut impl Write) {
                 let mut n = s.clone();
                 n.make_null();
                 let opp = if n.has_phantom_check() { [-1; 10] } else { stats(&n) };
-                rows.push((s.get_present().1, ev, me, opp, lines_of(s)));
+                let hf = hce::features(s);
+                let mut ln = lines_of(s).to_vec();
+                ln.extend_from_slice(&hf[hce::fi::TL_BALANCE..hce::fi::TL_BALANCE + 5]);
+                ln.push(s.get_present().1 as i32);
+                rows.push((s.get_present().1, ev, me, opp, ln));
             }) else {
                 continue;
             };
