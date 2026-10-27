@@ -44,6 +44,7 @@ jobs:
       selfplay: ${{ steps.cfg.outputs.selfplay }}
       book_plies: ${{ steps.cfg.outputs.book_plies }}
       book_margin: ${{ steps.cfg.outputs.book_margin }}
+      seed_base: ${{ steps.cfg.outputs.seed_base }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -73,6 +74,7 @@ jobs:
             echo "selfplay=$(jq -r '.selfplay // false' $c)"
             echo "book_plies=$(jq -r '.book_plies // 6' $c)"
             echo "book_margin=$(jq -r '.book_margin // 0' $c)"
+            echo "seed_base=$(jq -r '.seed_base // 0' $c)"
           } >> "$GITHUB_OUTPUT"
 
       - uses: Swatinem/rust-cache@v2
@@ -236,7 +238,7 @@ jobs:
           ./bins/sprt --new "$PWD/bins/new-kairos ${{ needs.setup.outputs.new_args }}" \
             --base "$PWD/bins/old-kairos $old_args" ${book:+--book "$book"} \
             --${tc% *} ${tc#* } --elo0="${{ needs.setup.outputs.elo0 }}" --elo1="${{ needs.setup.outputs.elo1 }}" \
-            $topts --concurrency "$conc" --compact --seed "${{ matrix.shard }}" \
+            $topts --concurrency "$conc" --compact --seed "$(( ${{ matrix.shard }} + ${{ needs.setup.outputs.seed_base }} ))" \
             --min-games "${{ needs.setup.outputs.per_shard }}" --max-games "${{ needs.setup.outputs.per_shard }}" \
             --max-seconds "${{ needs.setup.outputs.max_seconds }}" \
             --games-out "$G" | tail -12
