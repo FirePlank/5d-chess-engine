@@ -64,6 +64,14 @@ impl Bits {
     pub fn intersects(&self, o: &Bits) -> bool {
         self.0.iter().zip(o.0.iter()).any(|(a, b)| a & b != 0)
     }
+    /// The smallest element of both sets.
+    #[inline]
+    pub fn first_common(&self, o: &Bits) -> Option<Index> {
+        self.0.iter().zip(o.0.iter()).enumerate().find_map(|(i, (a, b))| {
+            let w = a & b;
+            (w != 0).then(|| (i * 64) as Index + w.trailing_zeros() as Index)
+        })
+    }
     pub fn is_subset_of(&self, o: &Bits) -> bool {
         self.0.iter().enumerate().all(|(i, &w)| w & !o.word(i) == 0)
     }

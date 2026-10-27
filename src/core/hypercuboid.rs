@@ -1046,6 +1046,7 @@ impl HcInfo {
                 continue;
             }
             let grp = &self.groups[n.min(self.new_axis)];
+            
             // Arrivals whose departure left the hypercuboid can never be paired.
             if n < self.new_axis {
                 let mut ghost: Option<IntegerSet> = None;
@@ -1108,10 +1109,15 @@ impl HcInfo {
                 found == needed
             };
             match order {
+                // In natural order the first coordinate of each category is the smallest one
+                // live in its group (orphan arrivals are outside the universe).
                 HcOrdering::Natural => {
-                    for i in live.iter() {
-                        if visit(i) {
-                            break;
+                    if need_nonjump && let Some(i) = live.first_common(&grp.nonjump) {
+                        visit(i);
+                    }
+                    for (_, set) in &grp.by_from[..grp.from_len] {
+                        if let Some(i) = live.first_common(set) {
+                            visit(i);
                         }
                     }
                 }
@@ -1775,6 +1781,9 @@ thread_local! {
     static INTERRUPT: std::cell::Cell<Option<Interrupt>> = const { std::cell::Cell::new(None) };
 }
 
+/// Steps of one `BestFirstCursor` call after which (and after each doubling) a depth-first
+/// search checks whether any action is left.
+const EXHAUST_CHECK_STEPS: u32 = 256;
 /// Cursor steps (hypercuboids taken) between interrupt checks.
 const INTERRUPT_EVERY: u32 = 4;
 
@@ -1893,7 +1902,7 @@ impl ProblemMemo {
 
 /// Caller-excluded regions (e.g. proven mate-free, see `exclude`), skipped like problems.
 /// Bounded: the oldest is replaced, which costs time but never loses an action.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct RegionMemo {
     slices: Vec<Slice>,
     next: usize,
@@ -2362,6 +2371,13 @@ impl BestFirstCursor {
             if interrupted_step(steps) || !self.spend() {
                 return Ok(None);
             }
+            // Long without an action: often none is left (a mate), which best-first proves
+            // slowly (each remembered problem splits its hypercuboids again and again) and
+            // depth-first quickly.
+            if steps >= EXHAUST_CHECK_STEPS && steps.is_power_of_two() && self.budget.is_none() && self.none_left(info, s, steps) {
+                self.heap.heap.clear();
+                return Ok(None);
+            }
             let BfItem { key, mut hc } = self.heap.heap.pop().unwrap();
             if info.needs_branch(&hc) {
                 self.heap.heap.push(BfItem { key, hc });
@@ -2416,6 +2432,20 @@ impl BestFirstCursor {
             }
         }
         Ok(None)
+    }
+}
+
+impl BestFirstCursor {
+    /// Whether no legal action is left: a depth-first search of the hypercuboids still queued
+    /// (skipping the excluded regions) finds none within four times `steps` steps.
+    #[cold]
+    #[inline(never)]
+    fn none_left(&self, info: &HcInfo, s: &State, steps: u32) -> bool {
+        let hcs: Vec<Hc> = self.heap.heap.iter().map(|it| it.hc.clone()).collect();
+        let mut c = HcCursor::new(SearchSpace::from_vec(hcs), HcOrdering::Natural);
+        c.excluded = self.excluded.clone();
+        c.budget = steps.saturating_mul(4);
+        matches!(c.next_with(info, s, &mut |_| {}), Ok(None)) && c.budget > 0 && !interrupted()
     }
 }
 

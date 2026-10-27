@@ -655,6 +655,35 @@ fn main() {
         "matescan" => matescan(&args[2..], &mut out),
         "matekinds" => matekinds(&args[2..], &mut out),
         "depthtl" => depthtl(&args[2..], &mut out),
+        "nodebench" => {
+            // nodebench file.g [cap] [ms]: travel_mate and move-loop enumeration per node.
+            let path = args.get(2).expect("file");
+            let cap: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(200);
+            let ms: u64 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(10000);
+            let verbose = std::env::var_os("NB_VERBOSE").is_some();
+            let text = std::fs::read_to_string(path).unwrap();
+            let stop = std::sync::atomic::AtomicBool::new(false);
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            let (mut ttm, mut tml) = (0.0, 0.0);
+            for (k, line) in text.lines().filter(|l| l.starts_with("G ")).enumerate() {
+                let s = parse_g_line(line).unwrap();
+                let mut e = kairos::engine::ab::AlphaBeta::new();
+                let _g = kairos::core::hypercuboid::interrupt_on(&stop, Some(Instant::now() + std::time::Duration::from_millis(ms)));
+                let (tm, tm_ms, ml, ml_ms, n) = e.bench_node(&s, cap);
+                (tm.as_str(), ml.as_str()).hash(&mut h);
+                ttm += tm_ms;
+                tml += ml_ms;
+                writeln!(out, "node {} tl {} travel_mate {:.1}ms move_loop {:.1}ms ({} actions, {})", k, s.active_timelines(), tm_ms, ml_ms, n, ml.split(':').next().unwrap()).unwrap();
+                if verbose {
+                    writeln!(out, "  {}
+  {}", tm, ml).unwrap();
+                }
+                out.flush().unwrap();
+            }
+            writeln!(out, "nodeoracle {:016x} travel_mate {:.1}ms move_loop {:.1}ms", h.finish(), ttm, tml).unwrap();
+            write!(out, "{}", kairos::misc::prof::report()).unwrap();
+        }
         "abbench" => abbench(
             args.get(2).map(|s| s.as_str()).unwrap_or("data/bench_ab.g"),
             args.get(3).and_then(|s| s.parse().ok()).unwrap_or(20),

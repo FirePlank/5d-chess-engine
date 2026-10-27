@@ -113,9 +113,9 @@ const ROOT_WIDEN_CAP: usize = 512;
 /// Interior nodes up to this ply (the root is 0) look for a checkmate in one by a checking
 /// travel the node would search late or never (`travel_mate`).
 const TRAVEL_MATE_PLY: usize = 2;
-/// Hypercuboids the search for an evasion of such a check may look at (an evasion is usually
-/// found in a few; past this the check counts as no mate).
-const TRAVEL_MATE_STEPS: u32 = 64;
+/// Hypercuboids the search for an evasion of such a check may look at (proving a mate takes
+/// hundreds with many timelines; past this the check counts as no mate).
+const TRAVEL_MATE_STEPS: u32 = 1024;
 /// Legal completions (moves on the other boards the side to move must play) tried with each
 /// checking travel of `travel_mate`.
 const TRAVEL_MATE_COMPLETIONS: usize = 8;
@@ -2508,10 +2508,71 @@ impl AlphaBeta {
         // A remembered action that wastes a move here is not one the search would generate.
         let wasted = |s: &State| branching != 0 && plays_wasted_move(s, act, |i| i >= 64 || branching >> i & 1 != 0);
         if ok && !wasted(s) && s.submit::<false>() && !s.royal_capturable(s.get_present().1) {
+            s.unmake(mark);
+                for (i, &m) in act.iter().enumerate() { s.apply_promo::<false>(m, act.promo(i)); }
+            s.submit::<false>();
             return Some(mark);
         }
         s.unmake(mark);
         None
+    }
+
+    /// Benchmark: the node work of `negamax` on `s` (ply 1): `travel_mate`'s result and checks,
+    /// and the first `cap` actions of the move loop's cursor; with timings.
+    pub fn bench_node(&mut self, s: &State, cap: usize) -> (String, f64, String, f64, usize) {
+        let mut s = s.clone();
+        s.enable_undo();
+        let mut nb = self.bufs.pop().unwrap_or_default();
+        let ss = nb.info.rebuild(&s, true);
+        let t = Instant::now();
+        let mut tchecks: Vec<MoveSeq> = Vec::new();
+        let mate = {
+            let NodeBufs { info, order, .. } = &mut *nb;
+            self.travel_mate(&mut s, info, &ss, order, Some(&mut tchecks), None, TRAVEL_MATE_COMPLETIONS, None)
+        };
+        let tm_ms = t.elapsed().as_secs_f64() * 1e3;
+        let fmt = |a: &MoveSeq| a.iter().map(|m| m.to_string()).collect::<Vec<_>>().join(" ");
+        let tm = format!("mate {:?} checks [{}]", mate.as_ref().map(fmt), tchecks.iter().map(fmt).collect::<Vec<_>>().join(", "));
+        let t = Instant::now();
+        let mut first = Self::without_future(&s, &nb.info, &ss);
+        let travels = self.optional_travels(&s, &nb.info, &ss, &mut first);
+        let mut full = Some(ss);
+        {
+            let NodeBufs { info, cursor, order, .. } = &mut *nb;
+            self.start_actions(&s, info, cursor, order, first, true);
+            cursor.limit_classes(travels as i32, TRAVEL_CAPTURE_STEPS);
+        }
+        let mut acts: Vec<String> = Vec::new();
+        let mut end = "exhausted";
+        while acts.len() < cap {
+            let next = {
+                let NodeBufs { info, cursor, order, .. } = &mut *nb;
+                cursor.next_with(info, &s, &mut |o, sc| self.branch_order(&s, info, order, o, sc))
+            };
+            match next {
+                Err(NeedBranch) => nb.info.materialize_branch(&s),
+                Ok(None) if interrupted() => { end = "interrupted"; break; }
+                Ok(None) => {
+                    if acts.is_empty() && let Some(f) = full.take() {
+                        {
+                            let NodeBufs { info, cursor, order, .. } = &mut *nb;
+                            self.order_skipped(&s, info, order, cursor);
+                        }
+                        nb.cursor.restart(&nb.info, f);
+                        continue;
+                    }
+                    break;
+                }
+                Ok(Some(a)) => {
+                    if full.is_some() { Self::travel_class(&mut nb.cursor, travels); }
+                    acts.push(fmt(&a));
+                }
+            }
+        }
+        let ml_ms = t.elapsed().as_secs_f64() * 1e3;
+        self.bufs.push(nb);
+        let n = acts.len();
+        (tm, tm_ms, format!("{} {}: {}", end, n, acts.join(", ")), ml_ms, n)
     }
 
     /// Owned copy of the position after `act` (for PV reporting).
