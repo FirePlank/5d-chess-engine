@@ -11,7 +11,7 @@ use super::hce::Sides;
 /// Features per side.
 pub const NS: usize = si::COUNT;
 /// Global features.
-pub const NG: usize = 10;
+pub const NG: usize = 5;
 pub const NI: usize = 2 * NS + NG;
 
 /// Global feature indices (after both sides' blocks).
@@ -24,8 +24,6 @@ pub mod gi {
     pub const BASE: usize = 3;
     /// Boards the side to move must play on.
     pub const MANDATORY: usize = 4;
-    /// `hce::late_terms`: timeline balance, present tempo (2), captures by a lesser piece (2).
-    pub const LATE: usize = 5;
 }
 
 /// Net inputs for `s`, given the handcrafted score from the side to move's view.
@@ -47,9 +45,6 @@ pub fn inputs_from(sd: &Sides, s: &State, base_stm: i32) -> [f32; NI] {
     g[gi::HEAVY] = (8 * sd.heavy.min(full) / full) as f32;
     g[gi::BASE] = (base_stm as f32 / 100.0).clamp(-30.0, 30.0);
     g[gi::MANDATORY] = sd.mandatory as f32;
-    for (k, v) in super::hce::late_terms(s).into_iter().enumerate() {
-        g[gi::LATE + k] = v as f32;
-    }
     x
 }
 

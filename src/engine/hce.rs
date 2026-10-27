@@ -85,13 +85,13 @@ pub mod fi {
     /// Time-travel exposure of the squares next to enemy royals (`ex::F7_WEAK` ..= `ex::KN_CHECKS`),
     /// white's minus black's.
     pub const F7: usize = 70;
-    /// Always 0: `late_terms` (timeline balance, present tempo, captures by a lesser piece) go
-    /// to the residual network instead; as linear terms they lost (hce_bundle, -25 Elo).
-    pub const TL_BALANCE: usize = 75;
-    pub const TEMPO_LINES: usize = 76;
-    pub const TEMPO_AHEAD: usize = 77;
-    pub const LESSER_STM: usize = 78;
-    pub const LESSER_OPP: usize = 79;
+    /// Always 0: the f7 sac table these terms came from is gone (the slots keep the weights'
+    /// layout).
+    pub const SAC_LINE: usize = 75;
+    pub const SAC_CLOSE: usize = 76;
+    pub const SAC_NOW: usize = 77;
+    pub const SAC_NOW_STM: usize = 78;
+    pub const SAC_OPEN: usize = 79;
     /// King safety board by board (`ex::ZONE_HOT` ..= `ex::K_FLIGHT`), white's danger minus
     /// black's.
     pub const KS: usize = 80;
@@ -130,7 +130,7 @@ pub const FEATURE_NAMES: [&str; NF] = [
     "king_prox_5d", "queen_prox", "travel_past", "travel_now", "travel_backed", "weak_sq", "open_orth5",
     "open_diag5", "open_multi5", "king_off", "king_off_new", "low_flight", "exiled", "inactive_royal_att",
     "travel_stm", "tl_slots_threat", "tl_slots_stm", "f7_weak", "f7_open", "f7_qreach", "f7_broute", "kn_checks",
-    "tl_balance", "tempo_lines", "tempo_ahead", "lesser_stm", "lesser_opp", "zone_hot", "weak_hot", "dmax5", "zone_max",
+    "sac_line", "sac_close", "sac_now", "sac_now_stm", "sac_open", "zone_hot", "weak_hot", "dmax5", "zone_max",
     "k_def", "k_flight",
     "tl_lost", "to_move", "zone_mand_stm", "zone_mand_opp",
     "def_hot", "def_board", "travel_hot",
@@ -241,12 +241,12 @@ pub fn tuned_weights() -> Weights {
         ("f7_qreach", 248.4),
         ("f7_broute", -11.6),
         ("kn_checks", 296.2),
-        // Always 0 (`fi::TL_BALANCE`).
-        ("tl_balance", 0.0),
-        ("tempo_lines", 0.0),
-        ("tempo_ahead", 0.0),
-        ("lesser_stm", 0.0),
-        ("lesser_opp", 0.0),
+        // Unused: the features are always 0 (`fi::SAC_LINE`).
+        ("sac_line", 600.0),
+        ("sac_close", 100.0),
+        ("sac_now", 0.0),
+        ("sac_now_stm", 700.0),
+        ("sac_open", 150.0),
         ("zone_hot", 460.2),
         ("weak_hot", -74.7),
         ("dmax5", -197.1),
@@ -486,7 +486,7 @@ pub mod ex {
     pub const F7_BROUTE: usize = 10;
     /// Knight checks available against enemy royals (Nh3-g5+ in the f7 attack).
     pub const KN_CHECKS: usize = 11;
-    /// Unused: always 0.
+    /// Unused (`fi::SAC_LINE`): always 0.
     pub const SAC_LINE: usize = 12;
     pub const SAC_CLOSE: usize = 13;
     pub const SAC_NOW: usize = 14;
@@ -1540,69 +1540,6 @@ pub fn features_from(sd: &Sides, s: &State, checks: bool) -> Features {
     f[fi::TL_SLOTS_THREAT] = sl[0] * dg[1] - sl[1] * dg[0];
     f[fi::TL_SLOTS_STM] = sign * sl[stm as usize];
     f
-}
-
-/// Residual network inputs (`evalnet::gi::LATE`), the side to move's view: timelines created
-/// by it minus by its opponent (the evaluation was overconfident when the two differ); the
-/// active lines whose latest board is past the present and the half-turns they are ahead by;
-/// captures by a lesser piece, its own on the boards it plays and its opponent's on every
-/// active line's latest board.
-pub fn late_terms(s: &State) -> [i32; 5] {
-    let stm = s.get_present().1;
-    let sign = if stm { -1 } else { 1 };
-    let (pt, _) = s.get_present();
-    let (lo, hi) = s.get_lines_range();
-    let (amin, amax) = s.get_active_range();
-    let (i0, i1) = s.get_initial_lines_range();
-    let bal = sign * ((hi - i1).max(0) - (i0 - lo).max(0));
-    let (mut lines, mut ahead, mut lesser) = (0, 0, [0i32; 2]);
-    for l in amin..=amax {
-        let (t, c) = s.get_timeline_end(l);
-        let d = 2 * (t - pt) + (c as i32 - stm as i32);
-        lines += (d != 0) as i32;
-        ahead += d;
-        let b = s.board(l, t, c);
-        if c == stm {
-            lesser[0] += lesser_captures(b, stm);
-        }
-        lesser[1] += lesser_captures(b, !stm);
-    }
-    [bal, lines, ahead, lesser[0], lesser[1]]
-}
-
-/// Captures `c` has on `b` with a piece worth less than the one it takes (royals neither take
-/// nor are taken here).
-fn lesser_captures(b: &Board, c: bool) -> i32 {
-    let mine = b.hostile(!c) & !b.royal();
-    let theirs = b.hostile(c) & !b.royal();
-    if mine == 0 || theirs == 0 {
-        return 0;
-    }
-    let occ = b.occupied();
-    let mut n = 0;
-    for sq in marked_pos(mine) {
-        let z = pmask(sq);
-        let a = if b.lpawn() & z != 0 {
-            if c { black_pawn_attack(sq) } else { white_pawn_attack(sq) }
-        } else if b.lknight() & z != 0 {
-            knight_attack(sq)
-        } else {
-            let mut a = 0;
-            if b.lrook() & z != 0 {
-                a |= rook_attack(sq, occ);
-            }
-            if b.lbishop() & z != 0 {
-                a |= bishop_attack(sq, occ);
-            }
-            a
-        };
-        let hits = a & theirs;
-        if hits != 0 {
-            let av = kind_value10(b, sq);
-            n += marked_pos(hits).filter(|&v| kind_value10(b, v) > av).count() as i32;
-        }
-    }
-    n
 }
 
 const DANGER_CAP: i32 = 6;
