@@ -1750,11 +1750,25 @@ fn get_move_path(s: &CheckPosition<'_>, fm: FullMove, c: bool) -> (Vec<Vec4>, i3
 }
 
 
-/// What interrupts the cursors of this thread (see `interrupt_on`): a stop flag and a deadline.
+/// What interrupts the cursors of this thread (see `interrupt_on`): a stop flag, a deadline
+/// and a bound on the steps between two nodes.
 #[derive(Clone, Copy)]
 struct Interrupt {
     stop: *const std::sync::atomic::AtomicBool,
     deadline: Option<std::time::Instant>,
+    /// Steps the cursors may take between two `interrupt_mark`s (see `interrupt_bounded`).
+    max_steps: u32,
+    /// Steps taken since the last `interrupt_mark`.
+    since: u32,
+    /// The cursors ran past `max_steps`: the interrupt stays fired.
+    overrun: bool,
+}
+
+impl Interrupt {
+    fn fired(&self) -> bool {
+        // SAFETY: the guard that installed the flag borrows it for as long as it is installed.
+        self.overrun || unsafe { &*self.stop }.load(std::sync::atomic::Ordering::Relaxed) || self.deadline.is_some_and(|d| std::time::Instant::now() >= d)
+    }
 }
 
 thread_local! {
@@ -1768,7 +1782,15 @@ const INTERRUPT_EVERY: u32 = 4;
 /// They then report no further action, so callers must check `interrupted()` before treating
 /// that as the end. Needed because finding a legal action can take arbitrarily long.
 pub fn interrupt_on(stop: &std::sync::atomic::AtomicBool, deadline: Option<std::time::Instant>) -> InterruptGuard<'_> {
-    let prev = INTERRUPT.with(|c| c.replace(Some(Interrupt { stop: stop as *const _, deadline })));
+    interrupt_bounded(stop, deadline, u32::MAX)
+}
+
+/// `interrupt_on` that also fires, for good, once the cursors take `max_steps` steps with no
+/// `interrupt_mark` between: a search with no clock (a node limit) is otherwise never
+/// interrupted, and with many timelines a node can enumerate for minutes (finding the next
+/// legal action, or probing mates). A count, so the same on any machine.
+pub fn interrupt_bounded(stop: &std::sync::atomic::AtomicBool, deadline: Option<std::time::Instant>, max_steps: u32) -> InterruptGuard<'_> {
+    let prev = INTERRUPT.with(|c| c.replace(Some(Interrupt { stop: stop as *const _, deadline, max_steps, since: 0, overrun: false })));
     InterruptGuard { prev, _stop: std::marker::PhantomData }
 }
 
@@ -1777,6 +1799,34 @@ pub fn interrupt_on(stop: &std::sync::atomic::AtomicBool, deadline: Option<std::
 pub fn interrupt_off() -> InterruptGuard<'static> {
     let prev = INTERRUPT.with(|c| c.replace(None));
     InterruptGuard { prev, _stop: std::marker::PhantomData }
+}
+
+/// Restart the step count of `interrupt_bounded` (a search calls it at every node); whether
+/// the count already ran out.
+#[inline]
+pub fn interrupt_mark() -> bool {
+    INTERRUPT.with(|c| match c.get() {
+        None => false,
+        Some(mut i) => {
+            i.since = 0;
+            c.set(Some(i));
+            i.overrun
+        }
+    })
+}
+
+/// Whether the cursor that took its `steps`-th step (of this call) is interrupted: counts the
+/// step for `interrupt_bounded`, and polls `interrupted` every `INTERRUPT_EVERY` steps.
+fn interrupted_step(steps: u32) -> bool {
+    INTERRUPT.with(|c| {
+        let Some(mut i) = c.get() else { return false };
+        i.since = i.since.saturating_add(1);
+        if i.since >= i.max_steps {
+            i.overrun = true;
+        }
+        c.set(Some(i));
+        i.overrun || steps.is_multiple_of(INTERRUPT_EVERY) && i.fired()
+    })
 }
 
 /// Restores the previous interrupt of the thread when dropped (see `interrupt_on`).
@@ -1791,14 +1841,10 @@ impl Drop for InterruptGuard<'_> {
     }
 }
 
-/// Whether the interrupt of this thread (see `interrupt_on`) has fired: its stop flag is set
-/// or its deadline has passed.
+/// Whether the interrupt of this thread (see `interrupt_on`) has fired: its stop flag is set,
+/// its deadline has passed or the cursors overran their steps (`interrupt_bounded`).
 pub fn interrupted() -> bool {
-    INTERRUPT.with(|c| match c.get() {
-        None => false,
-        // SAFETY: the guard that installed the flag borrows it for as long as it is installed.
-        Some(i) => unsafe { &*i.stop }.load(std::sync::atomic::Ordering::Relaxed) || i.deadline.is_some_and(|d| std::time::Instant::now() >= d),
-    })
+    INTERRUPT.with(|c| c.get().is_some_and(|i| i.fired()))
 }
 
 /// Problem slices found while enumerating one context. Each holds only failing points, so a
@@ -1950,7 +1996,7 @@ impl HcCursor {
         let mut steps = 0u32;
         while !self.ss.is_empty() {
             steps += 1;
-            if steps.is_multiple_of(INTERRUPT_EVERY) && interrupted() || self.budget == 0 {
+            if interrupted_step(steps) || self.budget == 0 {
                 return Ok(None);
             }
             self.budget -= 1;
@@ -2313,7 +2359,7 @@ impl BestFirstCursor {
         let mut steps = 0u32;
         while !self.heap.heap.is_empty() {
             steps += 1;
-            if steps.is_multiple_of(INTERRUPT_EVERY) && interrupted() || !self.spend() {
+            if interrupted_step(steps) || !self.spend() {
                 return Ok(None);
             }
             let BfItem { key, mut hc } = self.heap.heap.pop().unwrap();

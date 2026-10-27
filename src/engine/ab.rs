@@ -9,7 +9,7 @@ use crate::core::action::{Action, FullMove, MoveSeq};
 use crate::core::bitboard::{marked_pos, pmask, Bitboard};
 use crate::core::board::Board;
 use crate::core::check_position::{BoardOverlay, CheckBuf, CheckKind, CheckPosition, SpReach};
-use crate::core::hypercuboid::{has_physical_check, interrupt_off, interrupt_on, interrupted, plays_wasted_move, BestFirstCursor, Entry, HcCursor, HcInfo, NeedBranch};
+use crate::core::hypercuboid::{has_physical_check, interrupt_bounded, interrupt_mark, interrupt_off, interrupt_on, interrupted, plays_wasted_move, BestFirstCursor, Entry, HcCursor, HcInfo, NeedBranch};
 use crate::misc::geometry::{Hc, Point, Slice};
 use crate::core::multiverse::{active_range_for, next_turn};
 use crate::core::piece::*;
@@ -125,6 +125,10 @@ const ROOT_TRAVEL_MATE_COMPLETIONS: usize = 512;
 /// it up (when most of its combinations with the other boards' moves are illegal, finding one
 /// can take thousands).
 const TRAVEL_CAPTURE_STEPS: u32 = 16;
+/// Hypercuboids the cursors may take between two nodes of a search with a node limit before it
+/// ends as if out of nodes (`interrupt_bounded`). Searches take at most a few thousand; a node
+/// with many timelines can take millions finding no legal action, which no node count stops.
+const NODE_GAP_STEPS: u32 = 1 << 16;
 /// Aspiration windows: from ASP_MIN_DEPTH the root searches [prev - w, prev + w], w starting at
 /// ASP_WINDOW and multiplied by ASP_FAIL_MULT on each fail; past ASP_MAX_WINDOW or
 /// ASP_MAX_TRIES tries, a full-window search.
@@ -1133,7 +1137,8 @@ impl AlphaBeta {
         }
         // Nodes cost tens of microseconds, so reading the clock every node is free.
         let stop = unsafe { &*self.stop_ptr };
-        if stop.load(Ordering::Relaxed)
+        if interrupt_mark()
+            || stop.load(Ordering::Relaxed)
             || self.deadline.map(|d| Instant::now() >= d).unwrap_or(false)
             || self.node_limit.map(|n| self.nodes >= n).unwrap_or(false)
         {
@@ -3917,6 +3922,10 @@ impl AlphaBeta {
         resume: Option<&SearchResume>,
     ) -> Option<Action> {
         let resumed_depth = resume.map_or(0, |r| r.completed_depth);
+        // With a node limit and no clock, nothing else ends a node that enumerates for minutes
+        // (many timelines: the next legal action, mate probes); `check_abort` then sees it.
+        // SAFETY: the stop flag outlives the search (see `begin_search`).
+        let _bounded = self.node_limit.map(|_| interrupt_bounded(unsafe { &*self.stop_ptr }, self.deadline, NODE_GAP_STEPS));
         if self.threads <= 1 {
             let r = self.iterate(root, roots, roots_complete, max_depth, start, plan, info, &[], resumed_depth, resume);
             self.last_score = r.score;
