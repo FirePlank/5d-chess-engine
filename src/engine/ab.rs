@@ -1736,6 +1736,7 @@ impl AlphaBeta {
             evasions.forget();
             evasions.order = HcOrdering::Natural;
             evasions.branch_pending = false;
+            evasions.regions = true;
             let mut left = steps;
             let r = loop {
                 let chunk = if deadline.is_some() { left.min(MATE_CHUNK_STEPS) } else { left };
@@ -2572,6 +2573,10 @@ impl AlphaBeta {
         let ml_ms = t.elapsed().as_secs_f64() * 1e3;
         self.bufs.push(nb);
         let n = acts.len();
+        // The escape search of the side to move (as `is_mate` makes it), unbounded.
+        let t = Instant::now();
+        let (e, spent) = self.evasion(&s, 1 << 22, None);
+        let tm = format!("{} | escape {:?} in {} steps {:.1}ms", tm, e, spent, t.elapsed().as_secs_f64() * 1e3);
         (tm, tm_ms, format!("{} {}: {}", end, n, acts.join(", ")), ml_ms, n)
     }
 

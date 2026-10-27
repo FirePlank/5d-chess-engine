@@ -1153,18 +1153,57 @@ impl HcInfo {
     }
 
 
-    pub fn find_problem(&self, s: &State, p: &Point, hc: &Hc, buf: &mut CheckBuf) -> Option<Slice> {
+    /// Why `p` is no legal action. With `regions`, a jump order problem is the region over every
+    /// branch axis (`jump_order_region`), else the slice of its two axes.
+    pub fn find_problem(&self, s: &State, p: &Point, hc: &Hc, buf: &mut CheckBuf, regions: bool) -> Option<Problem> {
         let _prof = crate::misc::prof::scope(3);
-        let r = self.jump_order_consistent(s, p, hc).or_else(|| {
-            let pa = self.present_after(s, p)?;
-            self.present_problem(s, p, &pa).or_else(|| self.wasted_problem(s, p, &pa))
-        });
+        let jump = if regions { self.jump_order_region(s, p) } else { self.jump_order_consistent(s, p, hc).map(Problem::Slice) };
+        if jump.is_some() {
+            return jump;
+        }
+        let r = self.present_after(s, p).and_then(|pa| self.present_problem(s, p, &pa).or_else(|| self.wasted_problem(s, p, &pa)));
         drop(());
         if r.is_some() {
-            return r;
+            return r.map(Problem::Slice);
         }
         let _prof = crate::misc::prof::scope(4);
-        self.find_checks(s, p, hc, buf)
+        self.find_checks(s, p, hc, buf).map(Problem::Slice)
+    }
+
+    /// `jump_order_consistent`'s test, its problem as the region over every branch axis.
+    fn jump_order_region(&self, st: &State, p: &Point) -> Option<Problem> {
+        let (_, c) = st.get_present();
+        // The arrivals' target boards (line, time) so far, in branch axis order.
+        let mut arrived: Vec<Vec4> = Vec::new();
+        let branch = |f: &dyn Fn(&FullMove) -> bool| -> IntegerSet {
+            let mut set = IntegerSet::new();
+            for (k, b) in self.branch_moves.iter().enumerate() {
+                if f(&b.0) {
+                    set.insert(k as Index + 1);
+                }
+            }
+            set
+        };
+        for n in self.new_axis..self.dimension() {
+            let m_arr = match self.entry(n, p[n]) {
+                Entry::Null => break,
+                Entry::Arriving { m, .. } => *m,
+                _ => unreachable!(),
+            };
+            let (from, to) = (m_arr.from, m_arr.to);
+            if let Some(m) = self.line_to_axis(to.l()) {
+                let im = p[m];
+                if self.entry(m, im).is_null() && st.get_timeline_end(to.l()) == (to.t(), c) {
+                    return Some(Problem::Unplayed { m, nulls: IntegerSet::singleton(im), onto: branch(&|b| b.to.tl() == to.tl()) });
+                }
+            }
+            let critical = from.tl();
+            if arrived.contains(&critical) {
+                return Some(Problem::Order { arr: branch(&|b| b.to.tl() == critical), dep: branch(&|b| b.from.tl() == critical) });
+            }
+            arrived.push(to.tl());
+        }
+        None
     }
 
     pub fn jump_order_consistent(&self, st: &State, p: &Point, hc: &Hc) -> Option<Slice> {
@@ -1856,11 +1895,133 @@ pub fn interrupted() -> bool {
     INTERRUPT.with(|c| c.get().is_some_and(|i| i.fired()))
 }
 
+/// Why a point is no legal action, and every other point failing for the same reason.
+pub enum Problem {
+    Slice(Slice),
+    /// A branch axis takes an arrival of `arr` and a later one an arrival of `dep`: a jump onto
+    /// a board before a jump leaving it, where the first would not branch (the jump order the
+    /// action means is the other one). Over every pair of branch axes, which no slice holds.
+    Order { arr: IntegerSet, dep: IntegerSet },
+    /// Axis `m` takes a coordinate of `nulls` (its board unplayed) and some branch axis an
+    /// arrival of `onto`, onto that board's line's last board: such a jump does not branch.
+    Unplayed { m: usize, nulls: IntegerSet, onto: IntegerSet },
+}
+
+impl Problem {
+    /// Whether the point `p` (branch axes from `b0`) fails for this reason.
+    fn contains(&self, p: &Point, b0: usize) -> bool {
+        match self {
+            Problem::Slice(s) => s.contains(p),
+            Problem::Order { arr, dep } => {
+                let mut seen = false;
+                for &i in &p[b0..] {
+                    if seen && dep.contains(i) {
+                        return true;
+                    }
+                    seen |= arr.contains(i);
+                }
+                false
+            }
+            Problem::Unplayed { m, nulls, onto } => nulls.contains(p[*m]) && p[b0..].iter().any(|&i| onto.contains(i)),
+        }
+    }
+
+    /// Whether `hc` has a point of the problem.
+    fn intersects(&self, hc: &Hc, b0: usize) -> bool {
+        match self {
+            Problem::Slice(s) => hc.intersects(s),
+            Problem::Order { arr, dep } => {
+                let mut seen = false;
+                for n in b0..hc.dimension() {
+                    if seen && hc[n].intersects(dep) {
+                        return true;
+                    }
+                    seen |= hc[n].intersects(arr);
+                }
+                false
+            }
+            Problem::Unplayed { m, nulls, onto } => hc[*m].intersects(nulls) && (b0..hc.dimension()).any(|n| hc[n].intersects(onto)),
+        }
+    }
+
+    /// The points of `hc` outside the problem, as disjoint hypercuboids passed to `out`.
+    fn remove_from(&self, hc: Hc, b0: usize, mut out: impl FnMut(Hc)) {
+        match self {
+            Problem::Slice(s) => hc.into_remove_slice_with(s, out),
+            // By the first branch axis taking an arrival of `arr` (none: every axis avoids
+            // them), after which every axis avoids `dep`.
+            Problem::Order { arr, dep } => {
+                let dim = hc.dimension();
+                let mut before = hc;
+                for k in b0..dim {
+                    if before[k].intersects(arr) {
+                        let mut piece = before.clone();
+                        piece[k].and_assign(arr);
+                        for j in k + 1..dim {
+                            piece[j].minus(dep);
+                        }
+                        if !piece.is_empty() {
+                            out(piece);
+                        }
+                    }
+                    before[k].minus(arr);
+                    if before[k].is_empty() {
+                        return;
+                    }
+                }
+                out(before);
+            }
+            Problem::Unplayed { m, nulls, onto } => {
+                let mut played = hc.clone();
+                played[*m].minus(nulls);
+                if !played[*m].is_empty() {
+                    out(played);
+                }
+                let mut unplayed = hc;
+                unplayed[*m].and_assign(nulls);
+                for n in b0..unplayed.dimension() {
+                    unplayed[n].minus(onto);
+                }
+                if !unplayed.is_empty() {
+                    out(unplayed);
+                }
+            }
+        }
+    }
+}
+
+/// Hypercuboids from the back of a search space a region problem is cut from (each into up to
+/// one piece per branch axis): unbounded, one step could multiply a long queue many times over.
+const REGION_LOOKBACK: usize = 16;
+
+/// Starting at the back of `ss`, cut `problem` from the last `REGION_LOOKBACK` hypercuboids
+/// while they keep meeting it (as `SearchSpace::remove_slice_backwards` does for a slice).
+fn remove_problem_backwards(ss: &mut SearchSpace, problem: &Problem, b0: usize) {
+    let (mut intersect, mut disjoint) = (0usize, 0usize);
+    let mut current = ss.hcs.len();
+    let stop = current.saturating_sub(REGION_LOOKBACK);
+    while current > stop {
+        current -= 1;
+        if problem.intersects(&ss.hcs[current], b0) {
+            let hc = std::mem::take(&mut ss.hcs[current]);
+            let mut pieces = Vec::new();
+            problem.remove_from(hc, b0, |h| pieces.push(h));
+            ss.hcs.splice(current..current + 1, pieces);
+            intersect += 1;
+        } else {
+            disjoint += 1;
+        }
+        if disjoint * 10 >= intersect {
+            break;
+        }
+    }
+}
+
 /// Problem slices found while enumerating one context. Each holds only failing points, so a
 /// later hypercuboid or point inside one is cut without re-finding the same problem.
 #[derive(Default)]
 struct ProblemMemo {
-    slices: Vec<Slice>,
+    slices: Vec<Problem>,
     next: usize,
 }
 
@@ -1879,24 +2040,24 @@ impl ProblemMemo {
         self.slices.clear();
         self.next = 0;
     }
-    fn add(&mut self, s: &Slice) {
+    fn add(&mut self, s: Problem) {
         if NO_PROBLEM_MEMO.load(std::sync::atomic::Ordering::Relaxed) {
             return;
         }
         if self.slices.len() < PROBLEM_MEMO {
-            self.slices.push(s.clone());
+            self.slices.push(s);
         } else {
-            self.slices[self.next] = s.clone();
+            self.slices[self.next] = s;
             self.next = (self.next + 1) % PROBLEM_MEMO;
         }
     }
-    /// Whether every point of `hc` lies in one remembered problem.
+    /// Whether every point of `hc` lies in one remembered problem slice.
     fn covers(&self, hc: &Hc) -> bool {
-        self.slices.iter().any(|s| s.fixed.iter().all(|(n, c)| hc[*n].is_subset_of(c)))
+        self.slices.iter().any(|s| matches!(s, Problem::Slice(s) if s.fixed.iter().all(|(n, c)| hc[*n].is_subset_of(c))))
     }
-    /// A remembered problem holding `p`.
-    fn holding(&self, p: &Point) -> Option<&Slice> {
-        self.slices.iter().find(|s| s.contains(p))
+    /// A remembered problem holding `p` (branch axes from `b0`).
+    fn holding(&self, p: &Point, b0: usize) -> Option<&Problem> {
+        self.slices.iter().find(|s| s.contains(p, b0))
     }
 }
 
@@ -1942,6 +2103,10 @@ pub struct HcCursor {
     /// Hypercuboids it may still look at: once none is left, `next` finds no further action
     /// (the caller tells that apart from the end by `budget == 0`).
     pub budget: u32,
+    /// Cut a jump order problem from every branch axis at once (`HcInfo::find_problem`): an
+    /// escape search proving a mate with many branch axes takes tens of thousands of steps
+    /// as pairs of axes, a few hundred so. (Elsewhere the regions' pieces cost more.)
+    pub regions: bool,
     sc: PointScratch,
     checks: CheckBuf,
     /// Problems found in the current context (cleared by `forget`).
@@ -1965,6 +2130,7 @@ impl HcCursor {
             order,
             branch_pending: false,
             budget: u32::MAX,
+            regions: false,
             sc: PointScratch::default(),
             checks: CheckBuf::default(),
             memo: ProblemMemo::default(),
@@ -2033,13 +2199,17 @@ impl HcCursor {
                 self.ss.remove_slice_backwards(region, true, 10, 1);
                 continue;
             }
-            if let Some(problem) = memo.then(|| self.memo.holding(pt)).flatten() {
+            let b0 = info.first_branch_axis();
+            if let Some(problem) = memo.then(|| self.memo.holding(pt, b0)).flatten() {
                 let _prof = crate::misc::prof::scope(5);
                 self.ss.push_back(hc);
-                self.ss.remove_slice_backwards(problem, true, 10, 1);
+                match problem {
+                    Problem::Slice(slice) => self.ss.remove_slice_backwards(slice, true, 10, 1),
+                    region => remove_problem_backwards(&mut self.ss, region, b0),
+                }
                 continue;
             }
-            match info.find_problem(s, pt, &hc, &mut self.checks) {
+            match info.find_problem(s, pt, &hc, &mut self.checks, self.regions) {
                 None => {
                     let act = info.to_action(pt);
                     hc.into_remove_point_with(pt, |h| self.ss.push_back(h));
@@ -2048,11 +2218,14 @@ impl HcCursor {
                 }
                 Some(problem) => {
                     let _prof = crate::misc::prof::scope(5);
-                    if memo {
-                        self.memo.add(&problem);
-                    }
                     self.ss.push_back(hc);
-                    self.ss.remove_slice_backwards(&problem, true, 10, 1);
+                    match &problem {
+                        Problem::Slice(slice) => self.ss.remove_slice_backwards(slice, true, 10, 1),
+                        region => remove_problem_backwards(&mut self.ss, region, b0),
+                    }
+                    if memo {
+                        self.memo.add(problem);
+                    }
                 }
             }
         }
@@ -2409,12 +2582,13 @@ impl BestFirstCursor {
                 hc.into_remove_slice_with(region, |h| heap.push(h, class, fill));
                 continue;
             }
-            if let Some(problem) = memo.then(|| self.memo.holding(pt)).flatten() {
+            let b0 = info.first_branch_axis();
+            if let Some(problem) = memo.then(|| self.memo.holding(pt, b0)).flatten() {
                 let _prof = crate::misc::prof::scope(5);
-                hc.into_remove_slice_with(problem, |h| heap.push(h, class, fill));
+                problem.remove_from(hc, b0, |h| heap.push(h, class, fill));
                 continue;
             }
-            match info.find_problem(s, pt, &hc, &mut self.checks) {
+            match info.find_problem(s, pt, &hc, &mut self.checks, false) {
                 None => {
                     let act = info.to_action(pt);
                     hc.into_remove_point_with(pt, |h| heap.push(h, class, fill));
@@ -2424,10 +2598,10 @@ impl BestFirstCursor {
                 }
                 Some(problem) => {
                     let _prof = crate::misc::prof::scope(5);
+                    problem.remove_from(hc, b0, |h| heap.push(h, class, fill));
                     if memo {
-                        self.memo.add(&problem);
+                        self.memo.add(problem);
                     }
-                    hc.into_remove_slice_with(&problem, |h| heap.push(h, class, fill));
                 }
             }
         }
