@@ -111,7 +111,8 @@ while :; do
       if [ "${LAST_SEEN[$CTX]:-}" != "$DESC" ]; then LAST_SEEN[$CTX]=$DESC; LAST_CHANGE[$CTX]=$NOW; fi
       if [ "$STATE" = pending ] && [ $(( NOW - ${LAST_CHANGE[$CTX]} )) -ge $STALL_S ]; then STUCK="$STUCK $CTX"; fi
     done <<< "$LINES"
-    if [ -n "$STUCK" ]; then
+    # A self-play run keeps going: one hung shard costs only its own games.
+    if [ -n "$STUCK" ] && [ -z "${SELFPLAY:-}" ]; then
       echo "stalled for $((STALL_S / 60)) min:$STUCK; cancelling"
       cancel_and_wait; break
     fi
