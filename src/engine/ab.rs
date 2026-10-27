@@ -1736,6 +1736,7 @@ impl AlphaBeta {
             evasions.forget();
             evasions.order = HcOrdering::Natural;
             evasions.branch_pending = false;
+            evasions.regions = true;
             let mut left = steps;
             let r = loop {
                 let chunk = if deadline.is_some() { left.min(MATE_CHUNK_STEPS) } else { left };
