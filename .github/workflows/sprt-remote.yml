@@ -41,6 +41,9 @@ jobs:
       book: ${{ steps.cfg.outputs.book }}
       max_seconds: ${{ steps.cfg.outputs.max_seconds }}
       threads: ${{ steps.cfg.outputs.threads }}
+      selfplay: ${{ steps.cfg.outputs.selfplay }}
+      book_plies: ${{ steps.cfg.outputs.book_plies }}
+      book_margin: ${{ steps.cfg.outputs.book_margin }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -67,6 +70,9 @@ jobs:
             echo "book=$(jq -r '.book // ""' $c)"
             echo "max_seconds=$(jq -r '.max_seconds // 0' $c)"
             echo "threads=$(jq -r '.threads // 1' $c)"
+            echo "selfplay=$(jq -r '.selfplay // false' $c)"
+            echo "book_plies=$(jq -r '.book_plies // 6' $c)"
+            echo "book_margin=$(jq -r '.book_margin // 0' $c)"
           } >> "$GITHUB_OUTPUT"
 
       - uses: Swatinem/rust-cache@v2
@@ -85,7 +91,7 @@ jobs:
           echo "new=$(key HEAD)" >> "$GITHUB_OUTPUT"
           echo "old=$(key "${{ steps.cfg.outputs.old }}")" >> "$GITHUB_OUTPUT"
           if [ "${{ steps.cfg.outputs.base }}" = self ] && [ "$(key HEAD)" = "$(key "${{ steps.cfg.outputs.old }}")" ] \
-             && [ "${{ steps.cfg.outputs.new_args }}" = "${{ steps.cfg.outputs.old_args }}" ]; then
+             && [ "${{ steps.cfg.outputs.new_args }}" = "${{ steps.cfg.outputs.old_args }}" ]              && [ "${{ steps.cfg.outputs.selfplay }}" != true ]; then
             echo "::error::Null test: new and old engine are identical"; exit 1
           fi
 
@@ -223,6 +229,10 @@ jobs:
           th="${{ needs.setup.outputs.threads }}"
           conc=$(( $(nproc) / th )); [ "$conc" -ge 1 ] || conc=1
           topts=""; [ "$th" -gt 1 ] && topts="--new-option Threads=$th --base-option Threads=$th"
+          # Self-play data (selfplay: true): new and old may be the same engine; every game gets
+          # its own generated opening of book_plies actions (any candidate within book_margin of the
+          # best), and with --nodes each search gets +-15% of them so games keep diverging.
+          [ "${{ needs.setup.outputs.selfplay }}" = true ] && topts="$topts --unpaired --book-plies ${{ needs.setup.outputs.book_plies }} --book-margin ${{ needs.setup.outputs.book_margin }}"
           ./bins/sprt --new "$PWD/bins/new-kairos ${{ needs.setup.outputs.new_args }}" \
             --base "$PWD/bins/old-kairos $old_args" ${book:+--book "$book"} \
             --${tc% *} ${tc#* } --elo0="${{ needs.setup.outputs.elo0 }}" --elo1="${{ needs.setup.outputs.elo1 }}" \
