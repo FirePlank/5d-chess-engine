@@ -308,8 +308,6 @@ struct TtEntry {
     proven: bool,
     /// The search that last wrote it (`TtTable::new_search`), for replacement.
     generation: u8,
-    /// Written by a helper thread (see `AlphaBeta::negamax`'s probe).
-    helper: bool,
     score: i32,
     action: MoveSeq,
 }
@@ -423,7 +421,7 @@ impl TtTable {
         None
     }
 
-    fn store(&self, key: u64, depth: i32, bound: Bound, score: i32, proven: bool, action: &MoveSeq, helper: bool) {
+    fn store(&self, key: u64, depth: i32, bound: Bound, score: i32, proven: bool, action: &MoveSeq) {
         let generation = self.generation.load(Ordering::Relaxed);
         let bucket = self.bucket(key);
         // The slot holding the position if any, else the least valuable: empty first, then the
@@ -458,8 +456,7 @@ impl TtTable {
         let e = unsafe { &mut *slot.entry.get() };
         // The same position keeps a much deeper bound of this search unless this one is exact;
         // it takes the new action, and a kept mate bound loses a ply.
-        // (The main thread's own result replaces a helper's, which it does not trust.)
-        let keep = same && e.key == key && e.generation == generation && bound != Bound::Exact && !proven && depth <= e.depth as i32 - 4 && (helper || !e.helper);
+        let keep = same && e.key == key && e.generation == generation && bound != Bound::Exact && !proven && depth <= e.depth as i32 - 4;
         // A proven mate of the position stays until another proof replaces it: an unproven
         // result, however deep, may only have missed the line.
         let proof_kept = same && e.key == key && e.proven && e.score.abs() >= MATE - 1000 && !proven;
@@ -478,7 +475,6 @@ impl TtTable {
             e.bound = bound;
             e.proven = proven;
             e.generation = generation;
-            e.helper = helper;
             e.score = score;
             e.action.assign_seq(action);
             if e.action.spilled() && !self.spilled.load(Ordering::Relaxed) {
@@ -1128,7 +1124,7 @@ impl AlphaBeta {
         if key == self.excl_key && self.excluded.is_some() {
             return;
         }
-        self.tt.store(key, depth, bound, score, proven, action, self.thread_id != 0);
+        self.tt.store(key, depth, bound, score, proven, action);
     }
 
     fn check_abort(&mut self) -> bool {
@@ -2846,12 +2842,7 @@ impl AlphaBeta {
             let sc = mate_from_tt(e.score, ply);
             // A proven mate holds at any depth (see `AlphaBeta::proven`).
             let proven_mate = e.proven && sc.abs() >= MATE - 1000;
-            // The main thread cuts on a helper's entry only when it is a proven mate (it still
-            // takes its action): a helper orders actions by its own history, so its action caps
-            // leave out other lines than the main thread's, and its bound in either direction
-            // can hide a mate from the main thread until its own depth passes the helper's.
-            let trusted = !e.helper || self.thread_id != 0 || proven_mate;
-            if !pv && trusted && (e.depth as i32 >= depth || proven_mate) && !(excl_node) {
+            if !pv && (e.depth as i32 >= depth || proven_mate) && !(excl_node) {
                 let cut = match e.bound {
                     Bound::Exact => true,
                     Bound::Lower => sc >= beta,
