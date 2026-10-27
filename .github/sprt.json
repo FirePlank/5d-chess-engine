@@ -1,19 +1,15 @@
 {
-  "name": "selfplay2",
-  "old": "4dc386c",
-  "games": 93600,
+  "name": "net_past5",
+  "old": "1c215d3118c5bc9b18254cab1ea08c3c90ff1570",
+  "games": 8775,
   "shards": 39,
-  "tc": "nodes 20000",
+  "tc": "tc 10+0.1",
   "elo0": 0,
   "elo1": 5,
   "new_args": "",
   "old_args": "",
   "base": "self",
-  "book": "",
-  "max_seconds": 8640,
-  "threads": 1,
-  "selfplay": true,
-  "book_plies": 10,
-  "book_margin": 1200,
-  "seed_base": 1000
+  "book": "data/books/mixed.g",
+  "max_seconds": 840,
+  "threads": 1
 }
