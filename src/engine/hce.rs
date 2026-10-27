@@ -85,13 +85,18 @@ pub mod fi {
     /// Time-travel exposure of the squares next to enemy royals (`ex::F7_WEAK` ..= `ex::KN_CHECKS`),
     /// white's minus black's.
     pub const F7: usize = 70;
-    /// Always 0: the f7 sac table these terms came from is gone (the slots keep the weights'
-    /// layout).
-    pub const SAC_LINE: usize = 75;
-    pub const SAC_CLOSE: usize = 76;
-    pub const SAC_NOW: usize = 77;
-    pub const SAC_NOW_STM: usize = 78;
-    pub const SAC_OPEN: usize = 79;
+    /// Timelines created by white minus those created by black (the evaluation was
+    /// overconfident when the two differ).
+    pub const TL_BALANCE: usize = 75;
+    /// Present tempo: the active lines whose latest board is past the present, and the
+    /// half-turns they are ahead by (+ for white to move, - for black).
+    pub const TEMPO_LINES: usize = 76;
+    pub const TEMPO_AHEAD: usize = 77;
+    /// Captures by a lesser piece on the latest boards: the side to move's on the boards it
+    /// plays, its opponent's on every active line's latest board (+ for white to move, - for
+    /// black).
+    pub const LESSER_STM: usize = 78;
+    pub const LESSER_OPP: usize = 79;
     /// King safety board by board (`ex::ZONE_HOT` ..= `ex::K_FLIGHT`), white's danger minus
     /// black's.
     pub const KS: usize = 80;
@@ -130,7 +135,7 @@ pub const FEATURE_NAMES: [&str; NF] = [
     "king_prox_5d", "queen_prox", "travel_past", "travel_now", "travel_backed", "weak_sq", "open_orth5",
     "open_diag5", "open_multi5", "king_off", "king_off_new", "low_flight", "exiled", "inactive_royal_att",
     "travel_stm", "tl_slots_threat", "tl_slots_stm", "f7_weak", "f7_open", "f7_qreach", "f7_broute", "kn_checks",
-    "sac_line", "sac_close", "sac_now", "sac_now_stm", "sac_open", "zone_hot", "weak_hot", "dmax5", "zone_max",
+    "tl_balance", "tempo_lines", "tempo_ahead", "lesser_stm", "lesser_opp", "zone_hot", "weak_hot", "dmax5", "zone_max",
     "k_def", "k_flight",
     "tl_lost", "to_move", "zone_mand_stm", "zone_mand_opp",
     "def_hot", "def_board", "travel_hot",
@@ -241,12 +246,13 @@ pub fn tuned_weights() -> Weights {
         ("f7_qreach", 248.4),
         ("f7_broute", -11.6),
         ("kn_checks", 296.2),
-        // Unused: the features are always 0 (`fi::SAC_LINE`).
-        ("sac_line", 600.0),
-        ("sac_close", 100.0),
-        ("sac_now", 0.0),
-        ("sac_now_stm", 700.0),
-        ("sac_open", 150.0),
+        // Fit to game results next to the blended evaluation (ktools xthreat), times 4 for the
+        // handcrafted share of the blend; added after the residual network (`split_late`).
+        ("tl_balance", 4357.0),
+        ("tempo_lines", 400.0),
+        ("tempo_ahead", -37.0),
+        ("lesser_stm", 1982.0),
+        ("lesser_opp", -1587.0),
         ("zone_hot", 460.2),
         ("weak_hot", -74.7),
         ("dmax5", -197.1),
@@ -486,7 +492,7 @@ pub mod ex {
     pub const F7_BROUTE: usize = 10;
     /// Knight checks available against enemy royals (Nh3-g5+ in the f7 attack).
     pub const KN_CHECKS: usize = 11;
-    /// Unused (`fi::SAC_LINE`): always 0.
+    /// Unused: always 0.
     pub const SAC_LINE: usize = 12;
     pub const SAC_CLOSE: usize = 13;
     pub const SAC_NOW: usize = 14;
@@ -1539,7 +1545,63 @@ pub fn features_from(sd: &Sides, s: &State, checks: bool) -> Features {
     let dg = [royal_danger(&sd.side[0]), royal_danger(&sd.side[1])];
     f[fi::TL_SLOTS_THREAT] = sl[0] * dg[1] - sl[1] * dg[0];
     f[fi::TL_SLOTS_STM] = sign * sl[stm as usize];
+    let (pt, _) = s.get_present();
+    let (lo, hi) = s.get_lines_range();
+    let (amin, amax) = s.get_active_range();
+    let (i0, i1) = s.get_initial_lines_range();
+    f[fi::TL_BALANCE] = (hi - i1).max(0) - (i0 - lo).max(0);
+    let (mut lines, mut ahead, mut lesser) = (0, 0, [0i32; 2]);
+    for l in amin..=amax {
+        let (t, c) = s.get_timeline_end(l);
+        let d = 2 * (t - pt) + (c as i32 - stm as i32);
+        lines += (d != 0) as i32;
+        ahead += d;
+        let b = s.board(l, t, c);
+        if c == stm {
+            lesser[0] += lesser_captures(b, stm);
+        }
+        lesser[1] += lesser_captures(b, !stm);
+    }
+    f[fi::TEMPO_LINES] = sign * lines;
+    f[fi::TEMPO_AHEAD] = sign * ahead;
+    f[fi::LESSER_STM] = sign * lesser[0];
+    f[fi::LESSER_OPP] = sign * lesser[1];
     f
+}
+
+/// Captures `c` has on `b` with a piece worth less than the one it takes (royals neither take
+/// nor are taken here).
+fn lesser_captures(b: &Board, c: bool) -> i32 {
+    let mine = b.hostile(!c) & !b.royal();
+    let theirs = b.hostile(c) & !b.royal();
+    if mine == 0 || theirs == 0 {
+        return 0;
+    }
+    let occ = b.occupied();
+    let mut n = 0;
+    for sq in marked_pos(mine) {
+        let z = pmask(sq);
+        let a = if b.lpawn() & z != 0 {
+            if c { black_pawn_attack(sq) } else { white_pawn_attack(sq) }
+        } else if b.lknight() & z != 0 {
+            knight_attack(sq)
+        } else {
+            let mut a = 0;
+            if b.lrook() & z != 0 {
+                a |= rook_attack(sq, occ);
+            }
+            if b.lbishop() & z != 0 {
+                a |= bishop_attack(sq, occ);
+            }
+            a
+        };
+        let hits = a & theirs;
+        if hits != 0 {
+            let av = kind_value10(b, sq);
+            n += marked_pos(hits).filter(|&v| kind_value10(b, v) > av).count() as i32;
+        }
+    }
+    n
 }
 
 const DANGER_CAP: i32 = 6;
@@ -1615,6 +1677,16 @@ pub fn chess_linear(f: &Features, w: &Weights) -> f32 {
 pub fn score(f: &Features, w: &Weights, black_to_move: bool) -> i32 {
     let white = linear(f, w).round() as i32;
     if black_to_move { -white } else { white }
+}
+
+/// Moves the terms added after the residual network (`fi::TL_BALANCE` ..= `fi::LESSER_OPP`) out
+/// of `f` into a vector of their own.
+pub fn split_late(f: &mut Features) -> Features {
+    let mut late = [0i32; NF];
+    for i in fi::TL_BALANCE..=fi::LESSER_OPP {
+        late[i] = std::mem::take(&mut f[i]);
+    }
+    late
 }
 
 /// `score` of a vector from `split_chess`: only its chess terms.
