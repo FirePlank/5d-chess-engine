@@ -1091,18 +1091,14 @@ impl AlphaBeta {
         v
     }
 
-    /// The handcrafted evaluation (with the residual net and the chess terms) of `s`, side to
+    /// The handcrafted evaluation (with the chess terms) of `s`, side to
     /// move's view, from its counts `sd`.
     fn handcrafted(&self, s: &State, sd: &hce::Sides) -> i32 {
         let mut f = hce::features_from(sd, s, hce::needs_checks(&self.hce));
         let spatial = if self.skill_level < 8 { Some(super::skill::spatial_score(&f, &self.hce, s.get_present().1)) } else { None };
         let chess = if hce::CHESS_IN_NET { [0; hce::NF] } else { hce::split_chess(&mut f) };
         let base = hce::score(&f, &self.hce, s.get_present().1);
-        let v = match super::evalnet::embedded() {
-            Some(net) => base + net.residual(&super::evalnet::inputs_from(sd, s, base)),
-            None => base,
-        };
-        let v = v + hce::score_chess(&chess, &self.hce, s.get_present().1);
+        let v = base + hce::score_chess(&chess, &self.hce, s.get_present().1);
         let v = spatial.map_or(v, |local| super::skill::blend(local, v, self.skill_level));
         // Terms add up over every board, so with many timelines the sum can reach the mate
         // range (where it would be taken for a mate score).
