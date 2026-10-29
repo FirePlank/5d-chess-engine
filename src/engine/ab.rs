@@ -834,6 +834,24 @@ fn exchange_loss(b: &Board, to: i32, player: bool, mover_value: i32) -> i32 {
     (mover_value - least).max(0)
 }
 
+/// Ordering bonus of a quiet move that threatens material on its result board: the moved piece
+/// attacks an enemy piece (not a royal: that is a check) worth more than itself or undefended.
+/// Half the best target's value: a nudge among quiet moves, not past the history order.
+fn threat_bonus(b: &Board, to: i32, player: bool, mover_value: i32) -> i32 {
+    let mut best = 0;
+    for sq in marked_pos(b.hostile(player) & !b.royal()) {
+        let att = b.attacks_to(sq);
+        if att & pmask(to) == 0 {
+            continue;
+        }
+        let v = piece_value(b.kind(sq));
+        if v > mover_value || att & b.hostile(player) == 0 {
+            best = best.max(v);
+        }
+    }
+    best / 2
+}
+
 #[inline]
 /// History slot of a move by `black` (or white) of piece kind `mover` (colour-normalized).
 fn history_index_of(mover: Piece, m: &FullMove, black: bool) -> usize {
@@ -1160,6 +1178,8 @@ impl AlphaBeta {
         let mut base = -10 * exchange_loss(b, m.to.xy(), s.get_present().1, piece_value(mover));
         if victim != NO_PIECE {
             base += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
+        } else {
+            base += threat_bonus(b, m.to.xy(), s.get_present().1, piece_value(mover));
         }
         if (mover == PAWN_W || mover == BRAWN_W) && m.to.y() == promotion_rank(s.get_board_size().1, s.get_present().1) {
             base += 9000;
