@@ -1,5 +1,4 @@
 //! A board NNUE that gives the whole static evaluation (`docs/design/nnue_plan.md`, first model).
-//! (Data run: both sides are this engine.)
 //!
 //! Every timeline's latest board is encoded alone by a shared network: its pieces as sparse
 //! features (kind x own/enemy x square, from one colour's view) summed into an accumulator, seen
