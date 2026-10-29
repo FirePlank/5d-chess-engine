@@ -13,7 +13,7 @@ use super::vec4::Vec4;
 use crate::misc::geometry::{Hc, Point, SearchSpace, Slice};
 use crate::misc::graph::Graph;
 use crate::misc::integer_set::{Index, IntegerSet};
-use crate::misc::ordering::{AxisOrders, HcOrdering};
+use crate::misc::ordering::{AxisOrders, AxisSplit, HcOrdering};
 
 const INVALID: Index = Index::MAX;
 
@@ -1020,6 +1020,40 @@ impl HcInfo {
         self.branch_ready = true;
     }
 
+    /// Split axis `n`'s order `list` into `out` (see `AxisSplit`): what `take_point` walks to
+    /// find each kind's first live coordinate.
+    pub fn split_order(&self, n: usize, list: &[Index], out: &mut AxisSplit) {
+        out.nonjump.clear();
+        out.arrivals.clear();
+        out.from.clear();
+        out.from.resize(self.new_axis + 1, 0);
+        for &i in list {
+            match self.entry(n, i) {
+                Entry::Physical { .. } | Entry::Null => out.nonjump.push(i),
+                Entry::Arriving { fa, .. } => out.from[*fa as usize + 1] += 1,
+                Entry::Departing { .. } => {}
+            }
+        }
+        for fa in 1..out.from.len() {
+            out.from[fa] += out.from[fa - 1];
+        }
+        out.arrivals.resize(out.from[self.new_axis] as usize, 0);
+        // Fill each departure axis' range in order, `from[fa]` counting up to its end, then
+        // shift the starts back.
+        for &i in list {
+            if let Entry::Arriving { fa, .. } = self.entry(n, i) {
+                let at = &mut out.from[*fa as usize];
+                out.arrivals[*at as usize] = i;
+                *at += 1;
+            }
+        }
+        for fa in (1..out.from.len()).rev() {
+            out.from[fa] = out.from[fa - 1];
+        }
+        out.from[0] = 0;
+        out.valid = true;
+    }
+
     /// Pick a point in `hc` whose departures and arrivals pair up (into `sc.point`). Prunes
     /// arrivals whose departure is no longer available.
     pub fn take_point(&self, hc: &mut Hc, order: &HcOrdering, sc: &mut PointScratch) -> bool {
@@ -1129,13 +1163,42 @@ impl HcInfo {
                             visit(i);
                         }
                     }
-                    None => {
-                        for &i in o.axis(n) {
-                            if live.contains(i) && visit(i) {
-                                break;
+                    // The same first coordinates from the order's split: arrivals come late in
+                    // the order, and walking it to them passed ~100 coordinates per axis.
+                    None => match o.split(n) {
+                        Some(sp) => {
+                            if need_nonjump {
+                                for &i in &sp.nonjump {
+                                    if live.contains(i) {
+                                        result[n] = i;
+                                        break;
+                                    }
+                                }
+                            }
+                            for fa in 0..sp.from.len().min(dim) {
+                                if !want[fa] {
+                                    continue;
+                                }
+                                for &i in sp.arrivals_from(fa) {
+                                    if live.contains(i) {
+                                        let Entry::Arriving { idx, .. } = self.entry(n, i) else { unreachable!("arrival") };
+                                        want[fa] = false;
+                                        g.add_edge(fa as Index, n as Index);
+                                        edge_refs[fa * dim + n] = *idx;
+                                        edge_refs[n * dim + fa] = i;
+                                        break;
+                                    }
+                                }
                             }
                         }
-                    }
+                        None => {
+                            for &i in o.axis(n) {
+                                if live.contains(i) && visit(i) {
+                                    break;
+                                }
+                            }
+                        }
+                    },
                 },
             }
             if !need_nonjump {

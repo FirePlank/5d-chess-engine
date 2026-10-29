@@ -1219,9 +1219,12 @@ impl AlphaBeta {
         let fba = info.first_branch_axis();
         let dim = u.dimension().min(fba + 1);
         orders.shared = fba;
-        let orders = &mut orders.lists;
+        let AxisOrders { lists: orders, splits, .. } = orders;
         if orders.len() < dim {
             orders.resize_with(dim, Vec::new);
+        }
+        if splits.len() < dim {
+            splits.resize_with(dim, Default::default);
         }
         if scores.len() < dim {
             scores.resize_with(dim, Vec::new);
@@ -1239,6 +1242,7 @@ impl AlphaBeta {
                 // score adds the same to every bound of a class.
                 sc.resize(u[n].max().map(|i| i as usize + 1).unwrap_or(0), 0);
                 orders[n].clear();
+                splits[n].valid = false;
                 continue;
             }
             if n == fba && branch == BranchOrder::Defer {
@@ -1302,6 +1306,7 @@ impl AlphaBeta {
             let o = &mut orders[n];
             o.clear();
             o.extend(v.iter().map(|&k| k as u32 as Index));
+            info.split_order(n, o, &mut splits[n]);
         }
         if let Some(d) = detector {
             d.finish(scratch);
