@@ -67,10 +67,11 @@ const LMR_MIN_INDEX: usize = 4;
 /// their cutoffs.)
 const BOARD_RANK_MIN_INDEX: usize = 12;
 const RANK_PER_BOARD: u32 = 5;
-/// A combination of moves on several boards whose every move, played alone with the best moves
-/// elsewhere (in the star, see `AlphaBeta::star`), scored this far below alpha is reduced a
-/// ply more.
-const COMBO_MARGIN: i32 = RFP_MARGIN;
+/// A combination of moves on several boards is dominated when one of its moves, played alone
+/// with the best moves elsewhere (in the star, see `AlphaBeta::star`), scored this far below the
+/// best point: with values that add up over boards, it cannot beat the same combination without
+/// that move.
+const DOMINANCE_MARGIN: i32 = RFP_MARGIN / 5;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
 const ROOT_LMR_MIN_INDEX: usize = 6;
@@ -2576,16 +2577,38 @@ impl AlphaBeta {
         out
     }
 
-    /// The moves of the last action `cursor` found that are not first in their boards' orders:
-    /// (axis, coordinate).
-    fn off_best(cursor: &BestFirstCursor) -> Vec<(usize, Index)> {
+    /// The moves of the last action `cursor` found that are off the star's best point (see
+    /// `star`): a travel, or a move below the first non-travel coordinate in its board's order
+    /// (`top`, its score per board, from `star_tops`). (axis, coordinate).
+    fn off_best(info: &HcInfo, cursor: &BestFirstCursor, top: &[i32]) -> Vec<(usize, Index)> {
         let scores = cursor.scores();
         cursor
             .last_point()
             .iter()
             .enumerate()
-            .filter(|&(n, &c)| c != 0 && scores.get(n).and_then(|a| a.get(c as usize)).is_none_or(|&v| scores[n].iter().any(|&x| x > v)))
+            .filter(|&(n, &c)| {
+                c != 0
+                    && (n >= top.len()
+                        || !matches!(info.entry(n, c), Entry::Physical { .. })
+                        || scores.get(n).and_then(|a| a.get(c as usize)).is_none_or(|&v| v < top[n]))
+            })
             .map(|(n, &c)| (n, c))
+            .collect()
+    }
+
+    /// Per board, the score of the first non-travel coordinate in its order (the null move's
+    /// included): the star's best point plays it (see `star`).
+    fn star_tops(info: &HcInfo, scores: &[Vec<i32>]) -> Vec<i32> {
+        (0..info.first_branch_axis().min(scores.len()))
+            .map(|n| {
+                scores[n]
+                    .iter()
+                    .enumerate()
+                    .filter(|&(i, _)| matches!(info.entry(n, i as Index), Entry::Physical { .. } | Entry::Null))
+                    .map(|(_, &v)| v)
+                    .max()
+                    .unwrap_or(i32::MIN)
+            })
             .collect()
     }
 
@@ -3058,6 +3081,8 @@ impl AlphaBeta {
         // Remembered actions first, before paying for the action space: the TT action,
         // then the killers.
         let mut pre_tried: Vec<MoveSeq> = Vec::new();
+        // Their scores, for the star (see `star`) when it comes to one of them again.
+        let mut tried_scores: Vec<(MoveSeq, i32)> = Vec::new();
         let mut tt_ext = 0;
         if depth >= SING_DEPTH && !excl_node && ply > 0
             && let Some(ta) = tt_action.clone() {
@@ -3119,6 +3144,7 @@ impl AlphaBeta {
                 self.proven = proven;
                 return best;
             }
+            tried_scores.push((act.clone(), v));
             pre_tried.push(act);
         }
 
@@ -3176,6 +3202,7 @@ impl AlphaBeta {
                 self.proven = proven;
                 return best;
             }
+            tried_scores.push((act.clone(), v));
             pre_tried.push(act);
         }
         let mut first = Self::without_future(s, &nb.info, &ss);
@@ -3186,6 +3213,7 @@ impl AlphaBeta {
         // The star (see `star`) right after them, unless in check (evasions are searched as
         // they come); its actions are searched only once (`pre_tried`).
         let mut star_class = -1i32;
+        let mut tops: Vec<i32> = Vec::new();
         let node_check = known_check.unwrap_or_else(|| self.in_check(s));
         {
             let NodeBufs { info, cursor, order, .. } = &mut *nb;
@@ -3196,12 +3224,15 @@ impl AlphaBeta {
                 if !star.is_empty() {
                     cursor.restart_with(info, again, star, travels as i32);
                     star_class = travels as i32;
+                    tops = Self::star_tops(info, cursor.scores());
                 }
             }
             cursor.limit_classes(travels as i32, TRAVEL_CAPTURE_STEPS);
         }
-        // The star's single moves' scores (fail-soft, below alpha when they failed low).
+        // The star's single moves' scores and its best point's (fail-soft: bounds when they
+        // failed low).
         let mut singles: Vec<((usize, Index), i32)> = Vec::new();
+        let mut best_point: Option<i32> = None;
         let mut generated = 0usize;
         let mut exhausted = false;
         // An action was left unsearched (the action cap, or a TT action that failed validation).
@@ -3250,10 +3281,19 @@ impl AlphaBeta {
                         Ok(Some(act)) => {
                             generated += 1;
                             let travel = full.is_some() && Self::travel_class(&mut nb.cursor, travels);
+                            let in_star = star_class >= 0 && nb.cursor.last_class() == star_class;
                             if pre_tried.contains(&act) {
+                                // A star action searched before (the TT action, a killer): its
+                                // score counts for the star as well.
+                                if in_star && let Some(&(_, v)) = tried_scores.iter().find(|(a, _)| *a == act) {
+                                    let off = Self::off_best(&nb.info, &nb.cursor, &tops);
+                                    if off.is_empty() {
+                                        best_point = Some(best_point.map_or(v, |b| b.max(v)));
+                                    }
+                                    singles.extend(off.iter().map(|&c| (c, v)));
+                                }
                                 continue;
                             }
-                            let in_star = star_class >= 0 && nb.cursor.last_class() == star_class;
                             if travel || in_star {
                                 // (One creating a timeline comes again among those actions, a
                                 // star action in the rest of the space.)
@@ -3268,7 +3308,7 @@ impl AlphaBeta {
                             // The rank that counts as weak grows with the depth left, so a deeper
                             // search reaches every action (no depth at which one is out of sight).
                             let weak = !pv && Self::weak_on_boards(&nb.cursor, RANK_PER_BOARD + depth.max(0) as u32);
-                            let off = if star_class >= 0 { Self::off_best(&nb.cursor) } else { Vec::new() };
+                            let off = if star_class >= 0 { Self::off_best(&nb.info, &nb.cursor, &tops) } else { Vec::new() };
                             batch.push((self.action_score(s, &act, ply), act, weak, in_star, off));
                         }
                     }
@@ -3291,15 +3331,21 @@ impl AlphaBeta {
                         let ic = self.in_check(s);
                         child_check = Some(ic);
                         if !ic {
-                            r = lmr(depth, searched) - pv as i32;
-                            // A combination whose every move failed alone, clearly.
-                            if !in_star && !pv && off.len() >= 2 && off.iter().all(|c| singles.iter().any(|(k, w)| k == c && *w < alpha - COMBO_MARGIN)) {
-                                r += 1;
-                            }
-                            r = r.clamp(0, depth - 2);
+                            r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
                         }
                     }
                     if weak && quiet && searched >= BOARD_RANK_MIN_INDEX && !*child_check.get_or_insert_with(|| self.in_check(s)) {
+                        s.unmake(mark);
+                        skipped = true;
+                        continue;
+                    }
+                    // A dominated combination (see `DOMINANCE_MARGIN`), decided by this depth's
+                    // star: a quiet one that gives no check, away from the PV.
+                    if !pv && !in_star && quiet && off.len() >= 2
+                        && let Some(b) = best_point
+                        && off.iter().any(|c| singles.iter().any(|(k, w)| k == c && *w < b - DOMINANCE_MARGIN))
+                        && !*child_check.get_or_insert_with(|| self.in_check(s))
+                    {
                         s.unmake(mark);
                         skipped = true;
                         continue;
@@ -3325,6 +3371,9 @@ impl AlphaBeta {
                         break 'search Some(0);
                     }
                     if in_star {
+                        if off.is_empty() {
+                            best_point = Some(best_point.map_or(v, |b: i32| b.max(v)));
+                        }
                         singles.extend(off.iter().map(|&c| (c, v)));
                     }
                     if quiet {
