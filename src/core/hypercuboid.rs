@@ -2504,6 +2504,30 @@ impl BestFirstCursor {
     }
 
     /// Enumerate `ss` (of the context `info`) from the start under the current ordering.
+    /// `restart` on `ss` with the hypercuboids `extra` as one more class, right after the first
+    /// `after` classes of `ss`: its points come before the rest's, best bound first across all
+    /// of its hypercuboids. They must hold no branch coordinate but the null one.
+    pub fn restart_with(&mut self, info: &HcInfo, ss: SearchSpace, extra: Vec<Hc>, after: i32) {
+        self.restart(info, ss);
+        if extra.is_empty() {
+            return;
+        }
+        // Classes `after` and later move up by one (a key holds minus the class).
+        let items = std::mem::take(&mut self.heap.heap).into_vec();
+        self.heap.heap = items
+            .into_iter()
+            .map(|mut it| {
+                if -it.key.0 >= after {
+                    it.key.0 -= 1;
+                }
+                it
+            })
+            .collect();
+        for hc in extra {
+            self.heap.push(hc, after, &mut |_, _| unreachable!("no branch coordinate"));
+        }
+    }
+
     pub fn restart(&mut self, info: &HcInfo, ss: SearchSpace) {
         self.limit_below = 0;
         self.limit_class = -1;

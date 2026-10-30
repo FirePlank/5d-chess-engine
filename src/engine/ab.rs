@@ -67,6 +67,10 @@ const LMR_MIN_INDEX: usize = 4;
 /// their cutoffs.)
 const BOARD_RANK_MIN_INDEX: usize = 12;
 const RANK_PER_BOARD: u32 = 5;
+/// A combination of moves on several boards whose every move, played alone with the best moves
+/// elsewhere (in the star, see `AlphaBeta::star`), scored this far below alpha is reduced a
+/// ply more.
+const COMBO_MARGIN: i32 = RFP_MARGIN;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
 const ROOT_LMR_MIN_INDEX: usize = 6;
@@ -2454,6 +2458,79 @@ impl AlphaBeta {
         out
     }
 
+    /// The star of a node's space `hcs` (ordered by `orders`), searched before the rest: for
+    /// each hypercuboid with two or more boards to choose on, its best point (every board on
+    /// its first non-travel coordinate in the order), each single physical move away from it,
+    /// and each travel between two of its boards, every other board on its best coordinate.
+    /// Actions differ mostly in moves on boards that do not touch each other: at many-timeline
+    /// nodes the best point and single alternatives gave nearly all cutoffs (rates 40-60% and
+    /// 13-17%) while combinations, two thirds of the actions searched in best-first order,
+    /// gave 2-4%. Travels creating a timeline stay with the rest (their ordering is deferred).
+    fn star(info: &HcInfo, orders: &AxisOrders, hcs: &[Hc]) -> Vec<Hc> {
+        let fba = info.first_branch_axis();
+        let nonjump = |n: usize, i: Index| matches!(info.entry(n, i), Entry::Physical { .. } | Entry::Null);
+        let mut out = Vec::new();
+        for hc in hcs {
+            let dim = hc.dimension();
+            if (fba..dim).any(|n| !hc[n].contains(0)) || (0..fba).filter(|&n| hc[n].single().is_none()).count() < 2 {
+                continue;
+            }
+            let best = |n: usize| match hc[n].single() {
+                Some(i) => Some(i),
+                None => orders.axis(n).iter().copied().find(|&i| hc[n].contains(i) && nonjump(n, i)),
+            };
+            let Some(pt): Option<Vec<Index>> = (0..fba).map(best).collect() else { continue };
+            let mut base = hc.clone();
+            for n in 0..dim {
+                base[n].assign_singleton(if n < fba { pt[n] } else { 0 });
+            }
+            for n in 0..fba {
+                if hc[n].single().is_some() {
+                    continue;
+                }
+                let mut moves = IntegerSet::from_bits(&hc[n]);
+                moves.erase_if(|i| i == pt[n] || !matches!(info.entry(n, i), Entry::Physical { .. }));
+                if !moves.is_empty() {
+                    let mut h = base.clone();
+                    h[n].assign(&moves);
+                    out.push(h);
+                }
+            }
+            for a in 0..fba {
+                let mut deps = IntegerSet::from_bits(&hc[a]);
+                deps.erase_if(|i| !matches!(info.entry(a, i), Entry::Departing { .. }));
+                if deps.is_empty() {
+                    continue;
+                }
+                for b in (0..fba).filter(|&b| b != a) {
+                    let mut arrs = IntegerSet::from_bits(&hc[b]);
+                    arrs.erase_if(|i| !matches!(info.entry(b, i), Entry::Arriving { fa, .. } if *fa as usize == a));
+                    if !arrs.is_empty() {
+                        let mut h = base.clone();
+                        h[a].assign(&deps);
+                        h[b].assign(&arrs);
+                        out.push(h);
+                    }
+                }
+            }
+            out.push(base);
+        }
+        out
+    }
+
+    /// The moves of the last action `cursor` found that are not first in their boards' orders:
+    /// (axis, coordinate).
+    fn off_best(cursor: &BestFirstCursor) -> Vec<(usize, Index)> {
+        let scores = cursor.scores();
+        cursor
+            .last_point()
+            .iter()
+            .enumerate()
+            .filter(|&(n, &c)| c != 0 && scores.get(n).and_then(|a| a.get(c as usize)).is_none_or(|&v| scores[n].iter().any(|&x| x > v)))
+            .map(|(n, &c)| (n, c))
+            .collect()
+    }
+
     /// Whether the last action `cursor` found plays two or more boards and its moves' ranks in
     /// their boards' orders sum to `RANK_PER_BOARD` per board or more.
     fn weak_on_boards(cursor: &BestFirstCursor, per_board: u32) -> bool {
@@ -3044,14 +3121,29 @@ impl AlphaBeta {
             pre_tried.push(act);
         }
         let mut first = Self::without_future(s, &nb.info, &ss);
+        let star_hcs = first.hcs.clone();
         // Capturing travels first: the first classes of the cursor (see `travel_class`).
         let travels = self.optional_travels(s, &nb.info, &ss, &mut first);
         let mut full = Some(ss);
+        // The star (see `star`) right after them, unless in check (evasions are searched as
+        // they come); its actions are searched only once (`pre_tried`).
+        let mut star_class = -1i32;
+        let node_check = known_check.unwrap_or_else(|| self.in_check(s));
         {
             let NodeBufs { info, cursor, order, .. } = &mut *nb;
+            let again = (!node_check).then(|| SearchSpace::from_vec(first.hcs.clone()));
             self.start_actions(s, info, cursor, order, first, true);
+            if let Some(again) = again {
+                let star = Self::star(info, &*cursor.ordering_mut().0, &star_hcs);
+                if !star.is_empty() {
+                    cursor.restart_with(info, again, star, travels as i32);
+                    star_class = travels as i32;
+                }
+            }
             cursor.limit_classes(travels as i32, TRAVEL_CAPTURE_STEPS);
         }
+        // The star's single moves' scores (fail-soft, below alpha when they failed low).
+        let mut singles: Vec<((usize, Index), i32)> = Vec::new();
         let mut generated = 0usize;
         let mut exhausted = false;
         // An action was left unsearched (the action cap, or a TT action that failed validation).
@@ -3062,7 +3154,8 @@ impl AlphaBeta {
                 if searched >= cap && !Self::mated_cap(&mut cap, &mut cap_raised, best) {
                     break;
                 }
-                let mut batch: Vec<(i32, MoveSeq, bool)> = Vec::with_capacity(BATCH);
+                // (ordering score, action, weak on boards, from the star, moves off the best)
+                let mut batch: Vec<(i32, MoveSeq, bool, bool, Vec<(usize, Index)>)> = Vec::with_capacity(BATCH);
                 let size = batch_size;
                 batch_size = (2 * batch_size).min(BATCH);
                 while batch.len() < size {
@@ -3090,6 +3183,7 @@ impl AlphaBeta {
                                         self.order_skipped(s, info, order, cursor);
                                     }
                                     nb.cursor.restart(&nb.info, f);
+                                    star_class = -1;
                                     continue;
                                 }
                             exhausted = true;
@@ -3101,8 +3195,10 @@ impl AlphaBeta {
                             if pre_tried.contains(&act) {
                                 continue;
                             }
-                            if travel {
-                                // (One creating a timeline comes again among those actions.)
+                            let in_star = star_class >= 0 && nb.cursor.last_class() == star_class;
+                            if travel || in_star {
+                                // (One creating a timeline comes again among those actions, a
+                                // star action in the rest of the space.)
                                 pre_tried.push(act.clone());
                             }
                             if tt_action.as_ref() == Some(&act) {
@@ -3114,12 +3210,13 @@ impl AlphaBeta {
                             // The rank that counts as weak grows with the depth left, so a deeper
                             // search reaches every action (no depth at which one is out of sight).
                             let weak = !pv && Self::weak_on_boards(&nb.cursor, RANK_PER_BOARD + depth.max(0) as u32);
-                            batch.push((self.action_score(s, &act, ply), act, weak));
+                            let off = if star_class >= 0 { Self::off_best(&nb.cursor) } else { Vec::new() };
+                            batch.push((self.action_score(s, &act, ply), act, weak, in_star, off));
                         }
                     }
                 }
                 batch.sort_by(|a, b| b.0.cmp(&a.0));
-                for (sc, act, weak) in batch {
+                for (sc, act, weak, in_star, off) in batch {
                     if searched >= cap && !Self::mated_cap(&mut cap, &mut cap_raised, best) {
                         skipped = true;
                         break;
@@ -3136,7 +3233,12 @@ impl AlphaBeta {
                         let ic = self.in_check(s);
                         child_check = Some(ic);
                         if !ic {
-                            r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
+                            r = lmr(depth, searched) - pv as i32;
+                            // A combination whose every move failed alone, clearly.
+                            if !in_star && !pv && off.len() >= 2 && off.iter().all(|c| singles.iter().any(|(k, w)| k == c && *w < alpha - COMBO_MARGIN)) {
+                                r += 1;
+                            }
+                            r = r.clamp(0, depth - 2);
                         }
                     }
                     if weak && quiet && searched >= BOARD_RANK_MIN_INDEX && !*child_check.get_or_insert_with(|| self.in_check(s)) {
@@ -3163,6 +3265,9 @@ impl AlphaBeta {
                     s.unmake(mark);
                     if self.aborted {
                         break 'search Some(0);
+                    }
+                    if in_star {
+                        singles.extend(off.iter().map(|&c| (c, v)));
                     }
                     if quiet {
                         self.quiets[ply].push(act.clone());
@@ -3894,9 +3999,22 @@ impl AlphaBeta {
         }
         let mut agen = BestFirstCursor::default();
         let mut first = Self::without_future(root, &hc, &ss);
+        let star_hcs = first.hcs.clone();
         let travels = self.optional_travels(root, &hc, &ss, &mut first);
         let mut travel_acts: Vec<MoveSeq> = Vec::new();
+        // The star (see `star`) right after the capturing travels: every board's moves are
+        // root actions however many combinations the cap leaves out.
+        let again = (!self.in_check(root)).then(|| SearchSpace::from_vec(first.hcs.clone()));
         self.start_actions(root, &hc, &mut agen, &mut OrderScratch::default(), first, false);
+        let mut star_class = -1i32;
+        if let Some(again) = again {
+            let star = Self::star(&hc, &*agen.ordering_mut().0, &star_hcs);
+            if !star.is_empty() {
+                agen.restart_with(&hc, again, star, travels as i32);
+                star_class = travels as i32;
+            }
+        }
+        let mut star_acts: std::collections::HashSet<MoveSeq> = std::collections::HashSet::new();
         agen.limit_classes(travels as i32, TRAVEL_CAPTURE_STEPS);
         let mut full = Some(ss);
         let mut roots: Vec<(i32, MoveSeq)> = Vec::new();
@@ -3927,13 +4045,20 @@ impl AlphaBeta {
                     if full.is_some() && Self::travel_class(&mut agen, travels) {
                         travel_acts.push(a.clone());
                         roots.push((self.action_score(root, &a, 0), a));
-                    } else if !travel_acts.contains(&a) {
+                    } else if star_class >= 0 && agen.last_class() == star_class {
+                        if !travel_acts.contains(&a) && star_acts.insert(a.clone()) {
+                            roots.push((self.action_score(root, &a, 0), a));
+                        }
+                    } else if !travel_acts.contains(&a) && !star_acts.contains(&a) {
                         roots.push((self.action_score(root, &a, 0), a));
                     }
                 }
                 None if interrupted() && roots.is_empty() && unclocked.is_none() => unclocked = Some(interrupt_off()),
                 None if interrupted() => break,
-                None if roots.is_empty() && full.is_some() => agen.restart(&hc, full.take().unwrap()),
+                None if roots.is_empty() && full.is_some() => {
+                    star_class = -1;
+                    agen.restart(&hc, full.take().unwrap())
+                }
                 // Out of steps with actions found: the root searches those.
                 None if agen.budget_spent() => break,
                 None => {
