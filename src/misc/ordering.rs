@@ -8,6 +8,31 @@ use super::integer_set::{Bits, Index};
 pub struct AxisOrders {
     pub lists: Vec<Vec<Index>>,
     pub shared: usize,
+    /// Per list, the same order split by kind of coordinate (see `AxisSplit`). Whoever writes
+    /// a list rebuilds its split or marks it invalid.
+    pub splits: Vec<AxisSplit>,
+}
+
+/// An axis order split by what its coordinates are to the hypercuboid search: the non-jump
+/// ones (null and physical moves) and the arrivals from each departure axis, each in order.
+#[derive(Clone, Debug, Default)]
+pub struct AxisSplit {
+    pub valid: bool,
+    pub nonjump: Vec<Index>,
+    /// The arrivals from departure axis `fa` are `arrivals[from[fa]..from[fa + 1]]`.
+    pub arrivals: Vec<Index>,
+    pub from: Vec<u32>,
+}
+
+impl AxisSplit {
+    /// The arrivals from departure axis `fa`, in order.
+    #[inline]
+    pub fn arrivals_from(&self, fa: usize) -> &[Index] {
+        match self.from.get(fa..fa + 2) {
+            Some(r) => &self.arrivals[r[0] as usize..r[1] as usize],
+            None => &[],
+        }
+    }
 }
 
 impl Default for AxisOrders {
@@ -19,13 +44,19 @@ impl Default for AxisOrders {
 impl AxisOrders {
     /// One list per axis, none shared.
     pub fn new(lists: Vec<Vec<Index>>) -> Self {
-        AxisOrders { lists, shared: usize::MAX }
+        AxisOrders { lists, shared: usize::MAX, splits: Vec::new() }
     }
 
     /// The order of axis `n`.
     #[inline(always)]
     pub fn axis(&self, n: usize) -> &[Index] {
         &self.lists[n.min(self.shared)]
+    }
+
+    /// The split of axis `n`'s order, when it has a valid one.
+    #[inline(always)]
+    pub fn split(&self, n: usize) -> Option<&AxisSplit> {
+        self.splits.get(n.min(self.shared)).filter(|s| s.valid)
     }
 }
 
