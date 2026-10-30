@@ -1,6 +1,6 @@
 {
-  "name": "net_past5",
-  "old": "1c215d3118c5bc9b18254cab1ea08c3c90ff1570",
+  "name": "additive_bound",
+  "old": "cf75861554b97a9531572d35430cf5c2a28cbfd4",
   "games": 8775,
   "shards": 39,
   "tc": "tc 10+0.1",
@@ -11,5 +11,9 @@
   "base": "self",
   "book": "data/books/mixed.g",
   "max_seconds": 840,
-  "threads": 1
+  "threads": 1,
+  "selfplay": false,
+  "book_plies": 10,
+  "book_margin": 1200,
+  "seed_base": 0
 }
