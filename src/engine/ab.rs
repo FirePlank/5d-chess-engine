@@ -861,13 +861,18 @@ struct CheckDetector<'a> {
     buf: CheckBuf,
     /// Superphysical reach from the next board of each line with physical moves.
     reach: Vec<(i32, SpReach)>,
+    /// The same from a new line's board at a half-turn: (line, half-turn), for travels creating
+    /// a timeline.
+    branch_reach: Vec<((i32, i32), SpReach)>,
 }
 
 impl<'a> CheckDetector<'a> {
     fn new(info: &'a HcInfo, s: &'a State, scratch: &mut OrderScratch) -> Self {
         let mut reach = std::mem::take(&mut scratch.reach);
         reach.clear();
-        CheckDetector { info, s, checks: None, buf: std::mem::take(&mut scratch.checks), reach }
+        let mut branch_reach = std::mem::take(&mut scratch.branch_reach);
+        branch_reach.clear();
+        CheckDetector { info, s, checks: None, buf: std::mem::take(&mut scratch.checks), reach, branch_reach }
     }
 
     /// Give the buffers back to `scratch`.
@@ -877,6 +882,7 @@ impl<'a> CheckDetector<'a> {
             None => self.buf,
         };
         scratch.reach = self.reach;
+        scratch.branch_reach = self.branch_reach;
     }
 
     /// `gives_check` of a physical move past its own board: the moved piece's superphysical
@@ -938,8 +944,59 @@ impl<'a> CheckDetector<'a> {
             let dt = next_turn((mv.from.t(), player));
             BoardOverlay { l: mv.from.l(), t: dt.0, c: dt.1, value: d }
         });
+        // A travel whose departure's new board no ray or jump from the arrival reaches, with no
+        // piece of the side to move on the arrival square there: that board changes nothing
+        // the moved piece sees (a board added only adds what rays find), so the reach from the
+        // arrival's board decides, as for a physical move: its line's (shared with the physical
+        // moves there), or for a travel creating a timeline the new line's at its half-turn.
+        if let Some(dep) = departure
+            && dep.value.hostile(!player) & mask == 0
+            && !slot_visible(s, (arrival.t, arrival.l, arrival.c), (dep.t, dep.l, dep.c), mb.result.kind(mv.to.xy()) == KNIGHT_W)
+        {
+            let (l, v) = (arrival.l, 2 * at.0 + at.1 as i32 + 1);
+            let reach = if l == mv.to.l() {
+                let i = match self.reach.iter().position(|r| r.0 == l) {
+                    Some(i) => i,
+                    None => {
+                        self.reach.push((l, checks.sp_reach(l, v)));
+                        self.reach.len() - 1
+                    }
+                };
+                &self.reach[i].1
+            } else {
+                let i = match self.branch_reach.iter().position(|r| r.0 == (l, v)) {
+                    Some(i) => i,
+                    None => {
+                        self.branch_reach.push(((l, v), checks.sp_reach(l, v)));
+                        self.branch_reach.len() - 1
+                    }
+                };
+                &self.branch_reach[i].1
+            };
+            return reach.attacks(mb.result, mv.to.xy());
+        }
         checks.gives_check_masked(CheckKind::Superphysical, arrival, player, departure, mask)
     }
+}
+
+/// Whether a piece on the board at `from` (turn, line, colour) could reach the board slot `to`
+/// (turn, line, colour) of the same colour: along a (turn, line) direction whose boards in
+/// between all exist (every piece steps or slides along those; a slide stops at a missing
+/// board), or, for a knight (`knight`), within two steps.
+fn slot_visible(s: &State, from: (i32, i32, bool), to: (i32, i32, bool), knight: bool) -> bool {
+    if from.2 != to.2 {
+        return false;
+    }
+    let (dt, dl) = (to.0 - from.0, to.1 - from.1);
+    if knight && dt.abs().max(dl.abs()) <= 2 {
+        return true;
+    }
+    if !(dt == 0 || dl == 0 || dt.abs() == dl.abs()) {
+        return false;
+    }
+    let (st, sl) = (dt.signum(), dl.signum());
+    // The boards in between exist now or not at all (`to` is the only one the travel adds).
+    (1..dt.abs().max(dl.abs())).all(|k| s.get_board_ptr(from.1 + k * sl, from.0 + k * st, from.2).is_some())
 }
 
 /// The part of a physical move's ordering score that depends on its board alone (see
@@ -970,6 +1027,7 @@ struct OrderScratch {
     sort: Vec<u64>,
     checks: CheckBuf,
     reach: Vec<(i32, SpReach)>,
+    branch_reach: Vec<((i32, i32), SpReach)>,
     /// History values of the branch coordinates, by coordinate, as they were when the
     /// node was ordered (the branch axes may be scored later).
     branch_history: Vec<i32>,
