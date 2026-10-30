@@ -67,14 +67,10 @@ const LMR_MIN_INDEX: usize = 4;
 /// their cutoffs.)
 const BOARD_RANK_MIN_INDEX: usize = 12;
 const RANK_PER_BOARD: u32 = 5;
-/// Margin of the additive bound on a combination (see `AlphaBeta::negamax`'s use of the star):
-/// a quiet combination of physical moves on boards no travel links is skipped when the best
-/// point plus each move's gain or loss alone (in the star, see `AlphaBeta::star`) stays this far
-/// below alpha. When the boards' values add up (boards that do not interact), the bound is the
-/// combination's value: it cannot raise alpha, as with independent subgames in decomposition
-/// search (Muller 1999). A move that did worse alone than the best point makes the bound lower
-/// than the combination without it (dominance).
-const ADDITIVE_MARGIN: i32 = RFP_MARGIN / 5;
+/// A combination of moves on several boards whose every move, played alone with the best moves
+/// elsewhere (in the star, see `AlphaBeta::star`), scored this far below alpha is reduced a
+/// ply more.
+const COMBO_MARGIN: i32 = RFP_MARGIN;
 /// Late root actions (by the previous iteration's order) are searched shallower from this
 /// index on, and re-searched at full depth if they beat alpha.
 const ROOT_LMR_MIN_INDEX: usize = 6;
@@ -3204,31 +3200,8 @@ impl AlphaBeta {
             }
             cursor.limit_classes(travels as i32, TRAVEL_CAPTURE_STEPS);
         }
-        // The star's single moves' scores and its best point's (fail-soft: bounds when they
-        // failed low).
+        // The star's single moves' scores (fail-soft, below alpha when they failed low).
         let mut singles: Vec<((usize, Index), i32)> = Vec::new();
-        let mut best_point: Option<i32> = None;
-        // Boards a travel links (a departure on one, its arrival on the other), as bit masks by
-        // axis: their moves may interact, so the additive bound leaves their combinations alone.
-        let linked: Vec<u64> = if star_class >= 0 && nb.info.first_branch_axis() <= 64 {
-            let fba = nb.info.first_branch_axis();
-            let u = nb.info.get_universe();
-            let mut m = vec![0u64; fba];
-            for b in 0..fba {
-                for i in u[b].iter() {
-                    if let Entry::Arriving { fa, .. } = nb.info.entry(b, i) {
-                        let a = *fa as usize;
-                        if a < fba {
-                            m[a] |= 1 << b;
-                            m[b] |= 1 << a;
-                        }
-                    }
-                }
-            }
-            m
-        } else {
-            Vec::new()
-        };
         let mut generated = 0usize;
         let mut exhausted = false;
         // An action was left unsearched (the action cap, or a TT action that failed validation).
@@ -3318,25 +3291,15 @@ impl AlphaBeta {
                         let ic = self.in_check(s);
                         child_check = Some(ic);
                         if !ic {
-                            r = (lmr(depth, searched) - pv as i32).clamp(0, depth - 2);
+                            r = lmr(depth, searched) - pv as i32;
+                            // A combination whose every move failed alone, clearly.
+                            if !in_star && !pv && off.len() >= 2 && off.iter().all(|c| singles.iter().any(|(k, w)| k == c && *w < alpha - COMBO_MARGIN)) {
+                                r += 1;
+                            }
+                            r = r.clamp(0, depth - 2);
                         }
                     }
                     if weak && quiet && searched >= BOARD_RANK_MIN_INDEX && !*child_check.get_or_insert_with(|| self.in_check(s)) {
-                        s.unmake(mark);
-                        skipped = true;
-                        continue;
-                    }
-                    // The additive bound (see `ADDITIVE_MARGIN`), from this depth's star: a quiet
-                    // combination of physical moves on unlinked boards that gives no check, away
-                    // from the PV.
-                    if !pv && !in_star && quiet && off.len() >= 2 && !linked.is_empty()
-                        && let Some(b) = best_point
-                        && off.iter().all(|&(n, i)| matches!(nb.info.entry(n, i), Entry::Physical { .. }))
-                        && off.iter().all(|&(n, _)| off.iter().all(|&(m, _)| n == m || linked[n] >> m & 1 == 0))
-                        && let Some(bound) = off.iter().try_fold(b, |acc, c| singles.iter().find(|(k, _)| k == c).map(|(_, w)| acc + (w - b)))
-                        && bound + ADDITIVE_MARGIN <= alpha
-                        && !*child_check.get_or_insert_with(|| self.in_check(s))
-                    {
                         s.unmake(mark);
                         skipped = true;
                         continue;
@@ -3362,9 +3325,6 @@ impl AlphaBeta {
                         break 'search Some(0);
                     }
                     if in_star {
-                        if off.is_empty() {
-                            best_point = Some(best_point.map_or(v, |b: i32| b.max(v)));
-                        }
                         singles.extend(off.iter().map(|&c| (c, v)));
                     }
                     if quiet {
