@@ -27,6 +27,8 @@ ROLES = int(__import__('os').environ.get('NNUE_ROLES', 6))
 ND = int(__import__('os').environ.get('NNUE_ND', 2 * 54 + 2 * 30 + 4))
 NR = 2 * 12 * 9 * 5 * 2 * 2 + 2 * 12 * 12 * 5 * 2  # relation features (nnue::NR)
 MAGIC = b'KNNUE003'
+# A network whose head also reads each role's elementwise max of the board embeddings.
+MAGIC_MAX = b'KNNUE004'
 REC = np.dtype([('h', '<f4', 4), ('d', '<i2', ND)])
 BRD = np.dtype([('rec', '<u4'), ('role', '<u2'), ('n', '<u2'), ('off', '<u8')])
 
@@ -131,15 +133,18 @@ def ranges(starts, counts):
 
 
 class Net(torch.nn.Module):
-    def __init__(self, acc, emb, hidden, racc, use_dense, dense_mul, out_scale):
+    def __init__(self, acc, emb, hidden, racc, use_dense, dense_mul, out_scale, pool_max=False):
         super().__init__()
         self.acc, self.emb, self.hidden, self.racc, self.use_dense = acc, emb, hidden, racc, use_dense
+        # Each role's boards pooled by sum, and with `pool_max` by elementwise max as well: a
+        # sum dilutes the one board that decides (a mate on any board loses) among the rest.
+        self.pool_max = pool_max
         self.rel = torch.nn.EmbeddingBag(NR, max(racc, 1), mode='sum')  # unused when racc is 0
         self.rb = torch.nn.Parameter(torch.full((max(racc, 1),), 0.1))
         self.ft = torch.nn.EmbeddingBag(NB, acc, mode='sum')
         self.b1 = torch.nn.Parameter(torch.zeros(acc))
         self.l2 = torch.nn.Linear(2 * acc, emb)
-        self.lh = torch.nn.Linear(ROLES * emb + ROLES + racc + ND, hidden)
+        self.lh = torch.nn.Linear(ROLES * emb * (2 if pool_max else 1) + ROLES + racc + ND, hidden)
         self.lo = torch.nn.Linear(hidden, 1)
         self.register_buffer('dense_mul', torch.as_tensor(dense_mul, dtype=torch.float32))
         self.out_scale = out_scale
@@ -158,7 +163,12 @@ class Net(torch.nn.Module):
         counts = torch.zeros(n * ROLES, device=e.device).index_add_(0, slot, torch.ones_like(slot, dtype=torch.float32))
         r = torch.clamp(self.rel(b['rel'], b['rel_offsets']) + self.rb, 0, 1)[:, :self.racc]
         d = b['dense'] * self.dense_mul if self.use_dense else torch.zeros_like(b['dense'])
-        x = torch.cat([pooled.view(n, ROLES * self.emb), counts.view(n, ROLES), r, d], 1)
+        parts = [pooled.view(n, ROLES * self.emb)]
+        if self.pool_max:
+            # (Embeddings are >= 0, so a role without boards keeps the zeros it starts from.)
+            mx = torch.zeros(n * ROLES, self.emb, device=e.device).scatter_reduce(0, slot.unsqueeze(1).expand(-1, self.emb), e, reduce='amax', include_self=True)
+            parts.append(mx.view(n, ROLES * self.emb))
+        x = torch.cat(parts + [counts.view(n, ROLES), r, d], 1)
         h = torch.clamp(self.lh(x), 0, 1)
         return self.lo(h).squeeze(1) * self.out_scale
 
@@ -190,7 +200,7 @@ class Net(torch.nn.Module):
             'out_b': int(r(g(self.lo.bias) * ONE * 64)[0]),
             'out_q': int(r(np.array(self.out_scale / (ONE * 64) * (1 << FIX)))),
         }
-        q.update(acc=self.acc, emb=self.emb, hidden=self.hidden, racc=self.racc, use_dense=self.use_dense)
+        q.update(acc=self.acc, emb=self.emb, hidden=self.hidden, racc=self.racc, use_dense=self.use_dense, pool_max=self.pool_max)
         return q
 
     def to_bytes(self):
@@ -205,7 +215,7 @@ MAX_FEATURES = 128  # nnue::MAX_BOARD_FEATURES
 
 
 def qbytes(q):
-    out = bytearray(MAGIC)
+    out = bytearray(MAGIC_MAX if q.get('pool_max') else MAGIC)
     out += struct.pack('<9I', NB, q['acc'], q['emb'], ROLES, ND, q['hidden'], NR, q['racc'], int(q['use_dense']))
     for k in ('ft_w', 'ft_b', 'l2_w', 'l2_b', 'rel_w', 'rel_b', 'dense_m', 'head_w', 'head_b', 'out_w'):
         out += np.ascontiguousarray(q[k]).astype(q[k].dtype.newbyteorder('<')).tobytes()
@@ -240,6 +250,11 @@ def qforward(q, b):
     counts = np.zeros((n, ROLES), dtype=np.int64)
     np.add.at(pooled, (rec, role), out_e)
     np.add.at(counts, (rec, role), 1)
+    parts = [np.minimum(pooled.reshape(n, ROLES * emb), 32767)]
+    if q.get('pool_max'):
+        maxed = np.zeros((n, ROLES, emb), dtype=np.int64)
+        np.maximum.at(maxed, (rec, role), out_e)
+        parts.append(maxed.reshape(n, ROLES * emb))
     racc = q['racc']
     relw = q['rel_w'].reshape(NR, racc).astype(np.int64)
     rel, ro = b['rel'].numpy(), np.append(b['rel_offsets'].numpy(), len(b['rel']))
@@ -248,7 +263,7 @@ def qforward(q, b):
     if not q['use_dense']:
         d = np.zeros_like(d)
     dq = np.where(d != 0, np.clip(shr_round(d * q['dense_m'].astype(np.int64), FIX), -32767, 32767), 0)
-    x = np.concatenate([np.minimum(pooled.reshape(n, ROLES * emb), 32767), np.minimum(counts * ONE, 32767), ract, dq], 1)
+    x = np.concatenate(parts + [np.minimum(counts * ONE, 32767), ract, dq], 1)
     s = q['head_b'].astype(np.int64) + x @ q['head_w'].reshape(-1, hid).astype(np.int64)
     h = np.clip(s >> SHIFT, 0, ONE)
     o = q['out_b'] + h @ q['out_w'].astype(np.int64)
@@ -259,12 +274,12 @@ def save(net, out):
     """The engine's file, and the float checkpoint (`out`.pt) to resume or check from."""
     open(out, 'wb').write(net.to_bytes())
     torch.save({'acc': net.acc, 'emb': net.emb, 'hidden': net.hidden, 'racc': net.racc, 'use_dense': net.use_dense, 'out_scale': net.out_scale,
-                'state': net.state_dict()}, out + '.pt')
+                'pool_max': net.pool_max, 'state': net.state_dict()}, out + '.pt')
 
 
 def load(path):
     c = torch.load(path, map_location='cpu')
-    net = Net(c['acc'], c['emb'], c['hidden'], c['racc'], c['use_dense'], np.zeros(ND), c['out_scale'])
+    net = Net(c['acc'], c['emb'], c['hidden'], c['racc'], c['use_dense'], np.zeros(ND), c['out_scale'], c.get('pool_max', False))
     net.load_state_dict(c['state'])
     return net
 
@@ -367,6 +382,7 @@ def main():
     ap.add_argument('--hidden', type=int, default=32)
     ap.add_argument('--racc', type=int, default=64, help='relation accumulator width')
     ap.add_argument('--no-dense', action='store_true', help='without the handcrafted counts (a pure NNUE)')
+    ap.add_argument('--pool-max', action='store_true', help="the head also reads each role's elementwise max of the board embeddings (KNNUE004)")
     ap.add_argument('--k', type=float, default=4350.0, help='internal units per logistic unit')
     ap.add_argument('--lam', type=float, default=0.9, help='teacher share of the target')
     ap.add_argument('--epochs', type=int, default=10)
@@ -380,6 +396,9 @@ def main():
     ap.add_argument('--device', help='cuda or cpu (default: cuda when available)')
     ap.add_argument('--parity', help='print the integer evaluation of --init (a .pt) of the first records of this prefix')
     ap.add_argument('--parity-n', type=int, default=20)
+    ap.add_argument('--resume', action='store_true',
+                    help='continue the unfinished run saved in <out>.resume (same arguments): weights, optimizer, schedule and shuffle as if never stopped')
+    ap.add_argument('--stop-after', type=int, help='stop after this epoch, the run left resumable')
     args = ap.parse_args()
     dev = args.device or ('cuda' if torch.cuda.is_available() else 'cpu')
     if args.parity:
@@ -397,7 +416,7 @@ def main():
     if args.init:
         net = load(args.init)
     else:
-        net = Net(args.acc, args.emb, args.hidden, args.racc, not args.no_dense, dense_scale(data), args.out_scale)
+        net = Net(args.acc, args.emb, args.hidden, args.racc, not args.no_dense, dense_scale(data), args.out_scale, args.pool_max)
     net.to(dev)
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=1e-5)
     steps = args.epochs * sum(math.ceil(d.n / args.batch) for d in data)
@@ -411,10 +430,29 @@ def main():
             line += f' test_result_ll {t[1]:.5f} test_result_mse {t[2]:.5f}'
         return v[0], line
 
-    best, line = report(0)
-    print(line, flush=True)
-    save(net, args.out)
-    for ep in range(1, args.epochs + 1):
+    # The run's state after each epoch, so a stopped run continues exactly (`--resume`). It exists
+    # only while the run is unfinished: a fresh start would overwrite the best checkpoint.
+    resume = args.out + '.resume'
+    same = {k: v for k, v in vars(args).items() if k not in ('device', 'resume', 'stop_after')}
+    if args.resume:
+        st = torch.load(resume, map_location='cpu', weights_only=False)
+        if st['args'] != same:
+            diff = {k: (st['args'].get(k), v) for k, v in same.items() if st['args'].get(k) != v}
+            raise SystemExit(f'{resume} was saved with other arguments (saved, given): {diff}')
+        net.load_state_dict(st['net'])
+        opt.load_state_dict(st['opt'])
+        sched.load_state_dict(st['sched'])
+        rng.bit_generator.state = st['rng']
+        best, first = st['best'], st['epoch'] + 1
+        print(f'resumed after epoch {st["epoch"]} (best val {best:.6f})', flush=True)
+    else:
+        if os.path.exists(resume):
+            raise SystemExit(f'{resume} holds an unfinished run: continue it with --resume, or delete it to start over')
+        best, line = report(0)
+        print(line, flush=True)
+        save(net, args.out)
+        first = 1
+    for ep in range(first, args.epochs + 1):
         tot, n, t0 = 0.0, 0, time.time()
         plan = [(d, a, b) for d in data for a, b in blocks_of(d)]
         rng.shuffle(plan)
@@ -441,6 +479,15 @@ def main():
             save(net, args.out)
             line += ' saved'
         print(line, flush=True)
+        if ep < args.epochs:
+            torch.save({'args': same, 'epoch': ep, 'best': best, 'net': net.state_dict(), 'opt': opt.state_dict(),
+                        'sched': sched.state_dict(), 'rng': rng.bit_generator.state}, resume + '.tmp')
+            os.replace(resume + '.tmp', resume)
+            if args.stop_after and ep >= args.stop_after:
+                print(f'stopped after epoch {ep}: continue with --resume', flush=True)
+                return
+        elif os.path.exists(resume):
+            os.remove(resume)
 
 
 if __name__ == '__main__':

@@ -3,8 +3,9 @@
 //! Every timeline's latest board is encoded alone by a shared network: its pieces as sparse
 //! features (kind x own/enemy x square, from one colour's view) summed into an accumulator, seen
 //! from both colours, then compressed to a small board embedding. The embeddings are summed per
-//! board role (must play, may play, opponent's, inactive) and a small head reads those sums, the
-//! role counts and dense "bridge" inputs: the handcrafted evaluation's per-side counts
+//! board role (must play, may play, opponent's, inactive), and in a `KNNUE004` model also
+//! maximized elementwise per role (a mate on any one board loses, and a sum dilutes that board
+//! among the rest); a small head reads those, the role counts and dense "bridge" inputs: the handcrafted evaluation's per-side counts
 //! (`hce::Sides`, unweighted), which carry what history does to travel and royal danger until a
 //! learned relation channel replaces them. The HCE score itself is not an input.
 //!
@@ -52,7 +53,7 @@ const MAX_ACC: usize = 512;
 const MAX_EMB: usize = 64;
 const MAX_HIDDEN: usize = 64;
 const MAX_RACC: usize = 128;
-const MAX_INPUTS: usize = ROLES * MAX_EMB + ROLES + MAX_RACC + ND;
+const MAX_INPUTS: usize = 2 * ROLES * MAX_EMB + ROLES + MAX_RACC + ND;
 /// Activation of 1.0, and the weight scale after the first layer (a shift of `SHIFT`).
 pub const ONE: i32 = 127;
 pub const SHIFT: u32 = 6;
@@ -234,6 +235,8 @@ pub fn relation_features(s: &State, out: &mut Vec<u16>) {
 }
 
 const MAGIC: &[u8; 8] = b"KNNUE003";
+/// The same layout for a model whose head also reads each role's elementwise max (`pool_max`).
+const MAGIC_MAX: &[u8; 8] = b"KNNUE004";
 
 static EMBEDDED: std::sync::OnceLock<Option<std::sync::Arc<Model>>> = std::sync::OnceLock::new();
 
@@ -252,6 +255,9 @@ pub struct Model {
     pub racc: usize,
     /// Whether the head reads the dense bridge inputs (else they are 0 and never computed).
     pub use_dense: bool,
+    /// Whether the head also reads each role's elementwise max of its boards' embeddings, after
+    /// their sums (`KNNUE004`).
+    pub pool_max: bool,
     /// [NB][acc] at scale `ONE`, and its bias.
     ft_w: Vec<i16>,
     ft_b: Vec<i16>,
@@ -284,15 +290,21 @@ fn shr_round(x: i64, bits: u32) -> i64 {
 }
 
 impl Model {
-    /// Head inputs: pooled embeddings per role, role counts, relation activations, dense inputs.
+    /// Head inputs: pooled embeddings per role (sums, then maxima with `pool_max`), role counts,
+    /// relation activations, dense inputs.
     pub fn head_inputs(&self) -> usize {
-        ROLES * self.emb + ROLES + self.racc + ND
+        Self::inputs(self.emb, self.racc, self.pool_max)
+    }
+
+    fn inputs(emb: usize, racc: usize, pool_max: bool) -> usize {
+        ROLES * emb * (1 + pool_max as usize) + ROLES + racc + ND
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Model, String> {
-        if bytes.len() < 44 || &bytes[..8] != MAGIC {
-            return Err("not a kairos NNUE file (KNNUE003)".into());
+        if bytes.len() < 44 || (&bytes[..8] != MAGIC && &bytes[..8] != MAGIC_MAX) {
+            return Err("not a kairos NNUE file (KNNUE003 or KNNUE004)".into());
         }
+        let pool_max = &bytes[..8] == MAGIC_MAX;
         let u = |i: usize| u32::from_le_bytes(bytes[8 + 4 * i..12 + 4 * i].try_into().unwrap()) as usize;
         let (nb, acc, emb, roles, nd, hidden, nr, racc, use_dense) = (u(0), u(1), u(2), u(3), u(4), u(5), u(6), u(7), u(8) != 0);
         if nb != NB || roles != ROLES || nd != ND || nr != NR {
@@ -310,7 +322,7 @@ impl Model {
         let i16s = |b: &[u8]| b.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect::<Vec<_>>();
         let i32s = |b: &[u8]| b.chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().unwrap())).collect::<Vec<_>>();
         let i8s = |b: &[u8]| b.iter().map(|&x| x as i8).collect::<Vec<_>>();
-        let inputs = ROLES * emb + ROLES + racc + ND;
+        let inputs = Self::inputs(emb, racc, pool_max);
         let ft_w = i16s(take(2 * NB * acc)?);
         let ft_b = i16s(take(2 * acc)?);
         let l2_w = i8s(take(2 * acc * emb)?);
@@ -334,11 +346,11 @@ impl Model {
                 return Err(format!("accumulator {} can reach {}, past i16", j, bound));
             }
         }
-        Ok(Model { acc, emb, hidden, racc, use_dense, ft_w, ft_b, l2_w, l2_b, rel_w, rel_b, dense_m, head_w, head_b, out_w, out_b: tail[0], out_q: tail[1], l2_c: Vec::new(), head_p: Vec::new() }.with_layouts())
+        Ok(Model { acc, emb, hidden, racc, use_dense, pool_max, ft_w, ft_b, l2_w, l2_b, rel_w, rel_b, dense_m, head_w, head_b, out_w, out_b: tail[0], out_q: tail[1], l2_c: Vec::new(), head_p: Vec::new() }.with_layouts())
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut b = MAGIC.to_vec();
+        let mut b = if self.pool_max { MAGIC_MAX } else { MAGIC }.to_vec();
         for v in [NB, self.acc, self.emb, ROLES, ND, self.hidden, NR, self.racc, self.use_dense as usize] {
             b.extend_from_slice(&(v as u32).to_le_bytes());
         }
@@ -354,6 +366,11 @@ impl Model {
 
     /// A model with pseudo-random weights (tests and the speed-cost measurement).
     pub fn random(acc: usize, emb: usize, hidden: usize, racc: usize, use_dense: bool, seed: u64) -> Model {
+        Self::random_pooled(acc, emb, hidden, racc, use_dense, false, seed)
+    }
+
+    /// The same, with the head reading each role's maxima too when `pool_max`.
+    pub fn random_pooled(acc: usize, emb: usize, hidden: usize, racc: usize, use_dense: bool, pool_max: bool, seed: u64) -> Model {
         let mut z = seed;
         let mut r = move |lo: i32, hi: i32| -> i32 {
             z = z.wrapping_add(0x9e3779b97f4a7c15);
@@ -362,13 +379,14 @@ impl Model {
             x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
             lo + ((x >> 33) % (hi - lo + 1) as u64) as i32
         };
-        let inputs = ROLES * emb + ROLES + racc + ND;
+        let inputs = Self::inputs(emb, racc, pool_max);
         Model {
             acc,
             emb,
             hidden,
             racc,
             use_dense,
+            pool_max,
             ft_w: (0..NB * acc).map(|_| r(-24, 24) as i16).collect(),
             ft_b: (0..acc).map(|_| r(-40, 80) as i16).collect(),
             l2_w: (0..2 * acc * emb).map(|_| r(-40, 40) as i8).collect(),
@@ -478,16 +496,22 @@ impl Model {
         }
     }
 
-    /// The score from the pooled embeddings `pooled` (per role), the role counts and the dense
-    /// inputs.
-    fn head(&self, pooled: &[i32], counts: &[i32; ROLES], rel: &[u16], d: &[i16; ND]) -> i32 {
+    /// The score from the pooled embeddings `pooled` (sums per role), their maxima `maxed` (read
+    /// with `pool_max`), the role counts and the dense inputs.
+    fn head(&self, pooled: &[i32], maxed: &[u8], counts: &[i32; ROLES], rel: &[u16], d: &[i16; ND]) -> i32 {
         let _prof = crate::misc::prof::scope(22);
         let mut x = [0i16; MAX_INPUTS];
         let x = &mut x[..self.head_inputs()];
         for (o, &p) in x.iter_mut().zip(pooled) {
             *o = p.min(i16::MAX as i32) as i16;
         }
-        let base = ROLES * self.emb;
+        let mut base = ROLES * self.emb;
+        if self.pool_max {
+            for (o, &m) in x[base..2 * base].iter_mut().zip(maxed) {
+                *o = m as i16;
+            }
+            base *= 2;
+        }
         for (r, &n) in counts.iter().enumerate() {
             x[base + r] = (n * ONE).min(i16::MAX as i32) as i16;
         }
@@ -532,6 +556,8 @@ impl Model {
         let h = s.get_board_size().1;
         let mut pooled = [0i32; ROLES * MAX_EMB];
         let pooled = &mut pooled[..ROLES * self.emb];
+        let mut maxed = [0u8; ROLES * MAX_EMB];
+        let maxed = &mut maxed[..ROLES * self.emb];
         let mut counts = [0i32; ROLES];
         {
             let _prof = crate::misc::prof::scope(20);
@@ -540,6 +566,11 @@ impl Model {
                 let r = bi.role as usize;
                 for (p, &x) in pooled[r * self.emb..(r + 1) * self.emb].iter_mut().zip(e) {
                     *p += x as i32;
+                }
+                if self.pool_max {
+                    for (m, &x) in maxed[r * self.emb..(r + 1) * self.emb].iter_mut().zip(e) {
+                        *m = (*m).max(x);
+                    }
                 }
                 counts[r] += 1;
             }
@@ -555,7 +586,7 @@ impl Model {
             let _prof = crate::misc::prof::scope(23);
             relation_features(s, &mut rel);
         }
-        let v = self.head(pooled, &counts, &rel, &d);
+        let v = self.head(pooled, maxed, &counts, &rel, &d);
         cache.rel = rel;
         v
     }
@@ -565,6 +596,7 @@ impl Model {
     pub fn evaluate_features(&self, boards: &[(u8, &[u16], &[u16])], rel: &[u16], d: &[i16; ND]) -> i32 {
         let d = if self.use_dense { *d } else { [0; ND] };
         let mut pooled = vec![0i32; ROLES * self.emb];
+        let mut maxed = vec![0u8; ROLES * self.emb];
         let mut counts = [0i32; ROLES];
         let mut acc = vec![0i16; 2 * self.acc];
         let mut e = vec![0u8; self.emb];
@@ -577,9 +609,12 @@ impl Model {
             for (p, &x) in pooled[r * self.emb..(r + 1) * self.emb].iter_mut().zip(&e) {
                 *p += x as i32;
             }
+            for (m, &x) in maxed[r * self.emb..(r + 1) * self.emb].iter_mut().zip(&e) {
+                *m = (*m).max(x);
+            }
             counts[r] += 1;
         }
-        self.head(&pooled, &counts, rel, &d)
+        self.head(&pooled, &maxed, &counts, rel, &d)
     }
 }
 
@@ -821,11 +856,14 @@ mod tests {
 
     #[test]
     fn file_round_trip() {
-        let m = Model::random(16, 8, 8, 16, true, 7);
-        let b = m.to_bytes();
-        let m2 = Model::from_bytes(&b).unwrap();
-        assert_eq!(m2.to_bytes(), b);
-        assert!(Model::from_bytes(&b[..b.len() - 4]).is_err());
+        for pool_max in [false, true] {
+            let m = Model::random_pooled(16, 8, 8, 16, true, pool_max, 7);
+            let b = m.to_bytes();
+            let m2 = Model::from_bytes(&b).unwrap();
+            assert_eq!(m2.pool_max, pool_max);
+            assert_eq!(m2.to_bytes(), b);
+            assert!(Model::from_bytes(&b[..b.len() - 4]).is_err());
+        }
     }
 
     #[test]
@@ -907,7 +945,12 @@ mod tests {
 
     #[test]
     fn cached_and_incremental_match_the_reference() {
-        let m = Model::random(32, 16, 8, 16, true, 3);
+        for pool_max in [false, true] {
+            cached_and_incremental_match(&Model::random_pooled(32, 16, 8, 16, true, pool_max, 3));
+        }
+    }
+
+    fn cached_and_incremental_match(m: &Model) {
         let mut s = start();
         let mut cache = Cache::new();
         // Captures, a travel that creates a timeline (5.Qb3>>x(0T1)f7+) and moves on both lines.
@@ -917,7 +960,7 @@ mod tests {
             let sd = hce::sides(&s);
             let a = m.evaluate(&s, Some(&sd), &mut cache);
             assert_eq!(a, m.evaluate(&s, Some(&sd), &mut Cache::new()), "after {}", mv);
-            assert_eq!(a, reference(&m, &s, &sd), "after {}", mv);
+            assert_eq!(a, reference(m, &s, &sd), "after {}", mv);
         }
     }
 }
