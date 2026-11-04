@@ -3016,11 +3016,6 @@ impl AlphaBeta {
         // shallower, which also leaves one for the next iteration to find.
         let depth = if tt_action.is_none() && depth >= IIR_DEPTH && !known_check.unwrap_or_else(|| self.in_check(s)) { depth - 1 } else { depth };
 
-        // A mate threat: passing here gets mated (the null move's search found the mate), so
-        // the static evaluation that let the null move be tried misses it. The node's actions
-        // are then neither reduced nor skipped by board rank: the few that stop the mate may
-        // rank anywhere.
-        let mut threat = false;
         if !pv && beta.abs() < MATE - 1000 && (depth <= RFP_DEPTH || depth >= NMP_MIN_DEPTH) && !known_check.unwrap_or_else(|| self.in_check(s)) {
             if depth <= RFP_DEPTH {
                 let e = self.static_eval(s);
@@ -3043,7 +3038,6 @@ impl AlphaBeta {
                     self.proven = false;
                     return if v > MATE - 1000 { beta } else { v };
                 }
-                threat = v < -(MATE - 1000);
             }
         }
 
@@ -3292,9 +3286,8 @@ impl AlphaBeta {
                     let mark = Self::make(s, &act);
                     let mut r = 0;
                     let mut child_check = None;
-                    // Checking actions are not reduced: mating lines run through them. Nor is any
-                    // action at a mate threat (see `threat`).
-                    if !threat && depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet {
+                    // Checking actions are not reduced: mating lines run through them.
+                    if depth >= LMR_MIN_DEPTH && searched >= LMR_MIN_INDEX && quiet {
                         let ic = self.in_check(s);
                         child_check = Some(ic);
                         if !ic {
@@ -3306,7 +3299,7 @@ impl AlphaBeta {
                             r = r.clamp(0, depth - 2);
                         }
                     }
-                    if weak && !threat && quiet && searched >= BOARD_RANK_MIN_INDEX && !*child_check.get_or_insert_with(|| self.in_check(s)) {
+                    if weak && quiet && searched >= BOARD_RANK_MIN_INDEX && !*child_check.get_or_insert_with(|| self.in_check(s)) {
                         s.unmake(mark);
                         skipped = true;
                         continue;
