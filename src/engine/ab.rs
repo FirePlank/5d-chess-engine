@@ -2819,90 +2819,37 @@ impl AlphaBeta {
             // mate score.)
             return (stand + gain).clamp(-EVAL_MAX, EVAL_MAX);
         }
-        // In check: the transposition table first (a bound that settles the node, else its
-        // action), then the evasion that failed high at this ply last, before building the
-        // rest. Re-searches come back to the same checks, and building their evasions is the
-        // dearest part of a node with many timelines.
-        let key = s.hash();
-        // An evasion search is stored at depth `qd - QDEPTH` (0 or below), so a node searched
-        // with more evasion plies, or by `negamax` (depth 1 or more), counts as deeper.
-        let qdepth = qd - QDEPTH;
-        let alpha0 = alpha;
-        // As in `negamax`, only a null window takes a stored bound: a PV window's line runs on
-        // to the mate (see `pv_update`).
-        let null_window = beta == alpha + 1;
-        let probe = self.tt.probe(key, |e| {
-            let sc = mate_from_tt(e.score, ply);
-            let proven_mate = e.proven && sc.abs() >= MATE - 1000;
-            // (The main thread trusts a helper's entry only for its action, see `negamax`.)
-            let trusted = !e.helper || self.thread_id != 0 || proven_mate;
-            if null_window && trusted && (e.depth as i32 >= qdepth || proven_mate) {
-                let cut = match e.bound {
-                    Bound::Exact => true,
-                    Bound::Lower => sc >= beta,
-                    Bound::Upper => sc <= alpha,
-                    Bound::Empty => false,
-                };
-                if cut {
-                    return Ok((sc, e.proven));
-                }
-            }
-            Err((e.depth as i32, if e.action.is_empty() { None } else { Some(e.action.clone()) }))
-        });
-        let (stored_depth, tt_action) = match probe {
-            Some(Ok((sc, proven))) => {
-                self.proven = proven;
-                return sc;
-            }
-            Some(Err((d, a))) => (Some(d), a),
-            None => (None, None),
-        };
-        // A deeper entry of the position is left as it is (its action included).
-        let store = stored_depth.is_none_or(|d| d <= qdepth);
+        // In check: the evasion that failed high here last first, before building the rest.
         let mut best = -INF;
-        let mut best_action = MoveSeq::new();
         let mut any = false;
         let mut tried = 0;
         // Mate proof: the best reply's, and every reply's with all evasions searched.
         let (mut best_proven, mut all_proven) = (false, true);
-        let mut remembered: Vec<MoveSeq> = tt_action.into_iter().collect();
-        if ply <= MAX_PLY
-            && let Some(k) = &self.qkillers[ply]
-            && !remembered.contains(k) {
-                remembered.push(k.clone());
-            }
-        // Remembered evasions searched: skipped when the evasions come round to them.
-        let mut searched_first: Vec<MoveSeq> = Vec::with_capacity(remembered.len());
-        for k in remembered {
-            let Some(mark) = Self::make_checked(s, &k) else { continue };
-            let v = -self.qsearch(s, ply + 1, -beta, -alpha, qd - 1, None);
-            s.unmake(mark);
-            if self.aborted {
-                return 0;
-            }
-            any = true;
-            tried += 1;
-            all_proven &= self.proven;
-            if v > best {
+        let mut qkiller = if ply <= MAX_PLY { self.qkillers[ply].clone() } else { None };
+        if let Some(k) = qkiller.take()
+            && let Some(mark) = Self::make_checked(s, &k) {
+                let v = -self.qsearch(s, ply + 1, -beta, -alpha, qd - 1, None);
+                s.unmake(mark);
+                if self.aborted {
+                    return 0;
+                }
+                // Searched: skipped when the evasions come round to it.
+                qkiller = Some(k);
+                any = true;
+                tried = 1;
                 best = v;
                 best_proven = self.proven;
-                best_action = k.clone();
+                all_proven &= self.proven;
                 if v > alpha {
                     alpha = v;
                     if v >= beta {
-                        self.proven = mate_proven(best, best_proven, false);
-                        if store {
-                            self.tt_store(key, qdepth, Bound::Lower, mate_to_tt(best, ply), self.proven, &best_action);
-                        }
                         return v;
                     }
-                    self.pv_update(ply, &k);
+                    if let Some(k) = &qkiller {
+                        self.pv_update(ply, k);
+                    }
                 }
             }
-            searched_first.push(k);
-        }
-        // Every evasion was searched (none left out by the cap or a cutoff).
-        let mut exhausted = false;
         // Search the evasions.
         let mut nb = self.bufs.pop().unwrap_or_default();
         {
@@ -2936,10 +2883,10 @@ impl AlphaBeta {
                         break 'search true;
                     }
                     // Every evasion was searched.
-                    exhausted = true;
                     break 'search false;
                 };
-                if searched_first.contains(&act) {
+                if qkiller.as_ref() == Some(&act) {
+                    qkiller = None;
                     continue;
                 }
                 any = true;
@@ -2954,7 +2901,6 @@ impl AlphaBeta {
                 if v > best {
                     best = v;
                     best_proven = self.proven;
-                    best_action = act.clone();
                     if v > alpha {
                         alpha = v;
                         if v >= beta {
@@ -2978,28 +2924,9 @@ impl AlphaBeta {
         if !any {
             // Only reached in check: mated.
             self.proven = true;
-            let v = -(MATE - ply as i32);
-            if store {
-                self.tt_store(key, qdepth, Bound::Exact, mate_to_tt(v, ply), true, &MoveSeq::new());
-            }
-            return v;
+            return -(MATE - ply as i32);
         }
         self.proven = mate_proven(best, best_proven, all_proven);
-        // A fail high is a lower bound; anything else bounds the node only when every evasion
-        // was searched: past the evasion cap one left out may score higher (as `negamax` does
-        // with its action cap), so a capped fail low stores nothing.
-        let bound = if best >= beta {
-            Some(Bound::Lower)
-        } else if !exhausted {
-            (best > alpha0).then_some(Bound::Lower)
-        } else if best > alpha0 {
-            Some(Bound::Exact)
-        } else {
-            Some(Bound::Upper)
-        };
-        if store && let Some(bound) = bound {
-            self.tt_store(key, qdepth, bound, mate_to_tt(best, ply), self.proven, &best_action);
-        }
         best
     }
 
