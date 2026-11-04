@@ -48,7 +48,7 @@ const LMP: [usize; 5] = [0, 20, 32, 44, 56];
 const PV_CAP_MULT: usize = 4;
 /// Root actions considered.
 const ROOT_CAP: usize = 1000;
-/// Actions generated at a time at interior nodes (searched in the cursor's order): the first
+/// Actions generated (and sorted by action score) at a time at interior nodes: the first
 /// batch holds one action and each next one twice as many, up to this.
 const BATCH: usize = 12;
 const QDEPTH: i32 = 2;
@@ -2497,12 +2497,22 @@ impl AlphaBeta {
         let mut agen = BestFirstCursor::default();
         self.start_actions(s, &info, &mut agen, &mut OrderScratch::default(), ss, false);
         let mut out = Vec::new();
-        while out.len() < cap {
-            match agen.next(&info, s) {
-                None => break,
-                Some(a) => out.push(a),
+        let mut exhausted = false;
+        while out.len() < cap && !exhausted {
+            let mut batch: Vec<(i32, MoveSeq)> = Vec::new();
+            while batch.len() < BATCH {
+                match agen.next(&info, s) {
+                    None => {
+                        exhausted = true;
+                        break;
+                    }
+                    Some(a) => batch.push((self.action_score(s, &a, 1), a)),
+                }
             }
+            batch.sort_by(|a, b| b.0.cmp(&a.0));
+            out.extend(batch.into_iter().map(|x| x.1));
         }
+        out.truncate(cap);
         out
     }
 
@@ -3202,10 +3212,8 @@ impl AlphaBeta {
                 if searched >= cap && !Self::mated_cap(&mut cap, &mut cap_raised, best) {
                     break;
                 }
-                // (action, weak on boards, from the star, moves off the best), in the cursor's
-                // order: its coordinate scores already rank checks, captures, promotions and
-                // hanging moves, which a re-sort by `action_score` (no check bonus) undid.
-                let mut batch: Vec<(MoveSeq, bool, bool, Vec<(usize, Index)>)> = Vec::with_capacity(BATCH);
+                // (ordering score, action, weak on boards, from the star, moves off the best)
+                let mut batch: Vec<(i32, MoveSeq, bool, bool, Vec<(usize, Index)>)> = Vec::with_capacity(BATCH);
                 let size = batch_size;
                 batch_size = (2 * batch_size).min(BATCH);
                 while batch.len() < size {
@@ -3261,17 +3269,19 @@ impl AlphaBeta {
                             // search reaches every action (no depth at which one is out of sight).
                             let weak = !pv && Self::weak_on_boards(&nb.cursor, RANK_PER_BOARD + depth.max(0) as u32);
                             let off = if star_class >= 0 { Self::off_best(&nb.cursor) } else { Vec::new() };
-                            batch.push((act, weak, in_star, off));
+                            batch.push((self.action_score(s, &act, ply), act, weak, in_star, off));
                         }
                     }
                 }
-                for (act, weak, in_star, off) in batch {
+                batch.sort_by(|a, b| b.0.cmp(&a.0));
+                for (sc, act, weak, in_star, off) in batch {
                     if searched >= cap && !Self::mated_cap(&mut cap, &mut cap_raised, best) {
                         skipped = true;
                         break;
                     }
                     // Quiet: no move of the action captures or promotes (an ordering score summed
                     // over boards tells neither).
+                    let _ = sc;
                     let quiet = !Self::is_tactical(s, &act);
                     let mark = Self::make(s, &act);
                     let mut r = 0;
