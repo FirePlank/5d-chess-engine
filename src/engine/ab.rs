@@ -678,6 +678,9 @@ pub struct AlphaBeta {
     terms: Box<hce::TermCache>,
     /// Whether the position the next `negamax` call searches is in check, when known.
     known_check: Option<bool>,
+    /// Whether the next `negamax` call searches an expected cut node (Stockfish's `cutNode`):
+    /// a null-window child expected to fail high. Its late quiet actions are reduced one more.
+    next_cut: bool,
     /// Static evaluations and in-check status of recently seen positions.
     known: KnownCache,
     /// The board NNUE that replaces the handcrafted evaluation at full strength (`EvalFile`),
@@ -1089,6 +1092,7 @@ impl AlphaBeta {
             terms: Box::default(),
             phys_static: std::cell::RefCell::new(Vec::new()),
             known_check: None,
+            next_cut: false,
             known: KnownCache::new(),
             nnue: super::nnue::embedded(),
             nnue_cache: Box::default(),
@@ -2938,10 +2942,12 @@ impl AlphaBeta {
 
     /// Search one remembered action (TT move or killer) with PVS; returns its score.
     #[allow(clippy::too_many_arguments)]
-    fn search_child(&mut self, s: &mut State, mark: Mark, first: bool, depth: i32, ply: usize, alpha: i32, beta: i32, pv: bool) -> i32 {
+    fn search_child(&mut self, s: &mut State, mark: Mark, first: bool, depth: i32, ply: usize, alpha: i32, beta: i32, pv: bool, cut: bool) -> i32 {
         let v = if first {
+            self.next_cut = !pv && !cut;
             -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, pv)
         } else {
+            self.next_cut = !cut;
             let mut v = -self.negamax(s, depth - 1, ply + 1, -alpha - 1, -alpha, false);
             if !self.aborted && v > alpha && v < beta && pv {
                 v = -self.negamax(s, depth - 1, ply + 1, -beta, -alpha, true);
@@ -2954,6 +2960,7 @@ impl AlphaBeta {
 
     fn negamax(&mut self, s: &mut State, depth: i32, ply: usize, mut alpha: i32, beta: i32, pv: bool) -> i32 {
         let known_check = self.known_check.take();
+        let cut = std::mem::take(&mut self.next_cut);
         self.pv_clear(ply);
         if depth <= 0 {
             return self.qsearch(s, ply, alpha, beta, QDEPTH, known_check);
@@ -3032,6 +3039,7 @@ impl AlphaBeta {
                 let r = NMP_R + depth / NMP_DIV;
                 let mark = s.make_null();
                 let null_child = std::mem::replace(&mut self.null_child, ply + 1);
+                self.next_cut = !cut;
                 let v = -self.negamax(s, depth - 1 - r, ply + 1, -beta, -beta + 1, false);
                 self.null_child = null_child;
                 s.unmake(mark);
@@ -3074,6 +3082,7 @@ impl AlphaBeta {
                         // The exclusion holds at this node only (a verification search below
                         // may run its own and puts this one back after).
                         let outer = (self.excluded.replace(ta), std::mem::replace(&mut self.excl_key, key));
+                        self.next_cut = cut;
                         let v = self.negamax(s, (depth - 1) / 2, ply, sb - 1, sb, false);
                         (self.excluded, self.excl_key) = outer;
                         if self.aborted {
@@ -3096,11 +3105,12 @@ impl AlphaBeta {
             let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act);
             // The TT action keeps the node's PV status; killers after it are null-window.
             let v = if k == 0 && tt_action.is_some() && !(excl_node && self.excluded.as_ref() == tt_action.as_ref()) {
+                self.next_cut = !pv && !cut;
                 let v = -self.negamax(s, child_depth - 1 + tt_ext, ply + 1, -beta, -alpha, pv);
                 s.unmake(mark);
                 v
             } else {
-                self.search_child(s, mark, searched == 0, child_depth, ply, alpha, beta, pv)
+                self.search_child(s, mark, searched == 0, child_depth, ply, alpha, beta, pv, cut)
             };
             if self.aborted {
                 return 0;
@@ -3156,7 +3166,7 @@ impl AlphaBeta {
             }
             let mark = Self::make(s, &act);
             let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act);
-            let v = self.search_child(s, mark, searched == 0, child_depth, ply, alpha, beta, pv);
+            let v = self.search_child(s, mark, searched == 0, child_depth, ply, alpha, beta, pv, cut);
             if self.aborted {
                 self.bufs.push(nb);
                 return 0;
@@ -3298,7 +3308,8 @@ impl AlphaBeta {
                         let ic = self.in_check(s);
                         child_check = Some(ic);
                         if !ic {
-                            r = lmr(depth, searched) - pv as i32;
+                            // One more at an expected cut node (never a PV node).
+                            r = lmr(depth, searched) - pv as i32 + cut as i32;
                             // A combination whose every move failed alone, clearly.
                             if !in_star && !pv && off.len() >= 2 && off.iter().all(|c| singles.iter().any(|(k, w)| k == c && *w < alpha - COMBO_MARGIN)) {
                                 r += 1;
@@ -3315,11 +3326,15 @@ impl AlphaBeta {
                     let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act);
                     self.known_check = child_check;
                     if searched == 0 {
+                        self.next_cut = !pv && !cut;
                         v = -self.negamax(s, child_depth - 1, ply + 1, -beta, -alpha, pv);
                     } else {
+                        // A reduced child is expected to fail high; else the other kind.
+                        self.next_cut = r > 0 || !cut;
                         v = -self.negamax(s, child_depth - 1 - r, ply + 1, -alpha - 1, -alpha, false);
                         if !self.aborted && v > alpha && r > 0 {
                             self.known_check = child_check;
+                            self.next_cut = !cut;
                             v = -self.negamax(s, child_depth - 1, ply + 1, -alpha - 1, -alpha, false);
                         }
                         if !self.aborted && v > alpha && v < beta && pv {
@@ -3410,7 +3425,7 @@ impl AlphaBeta {
                     }
                     let mark = Self::make(s, &act);
                     let child_depth = depth - super::skill::travel_reduction(self.skill_level, &act);
-                    let v = self.search_child(s, mark, false, child_depth, ply, alpha, beta, pv);
+                    let v = self.search_child(s, mark, false, child_depth, ply, alpha, beta, pv, cut);
                     if self.aborted {
                         break 'widen Some(0);
                     }
@@ -4364,9 +4379,11 @@ impl AlphaBeta {
                             let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(self.in_check(&work)) } else { None };
                             let r = if child_check == Some(false) { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
                             self.known_check = child_check;
+                            self.next_cut = true;
                             let mut v = -self.negamax(&mut work, child_depth - 1 - r, 1, -alpha - 1, -alpha, false);
                             if !self.aborted && v > alpha && r > 0 {
                                 self.known_check = child_check;
+                                self.next_cut = true;
                                 v = -self.negamax(&mut work, child_depth - 1, 1, -alpha - 1, -alpha, false);
                             }
                             if !self.aborted && v > alpha {
@@ -4588,9 +4605,11 @@ impl AlphaBeta {
                 let child_check = if depth >= 3 && k >= ROOT_LMR_MIN_INDEX { Some(self.in_check(work)) } else { None };
                 let r = if child_check == Some(false) { (lmr(depth, k) - 1).clamp(0, depth - 2) } else { 0 };
                 self.known_check = child_check;
+                self.next_cut = true;
                 let mut v = -self.negamax(work, child_depth - 1 - r, 1, -bar - 1, -bar, false);
                 if !self.aborted && v > bar && r > 0 {
                     self.known_check = child_check;
+                    self.next_cut = true;
                     v = -self.negamax(work, child_depth - 1, 1, -bar - 1, -bar, false);
                 }
                 if !self.aborted && v > bar {
