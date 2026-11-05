@@ -380,6 +380,9 @@ def main():
     ap.add_argument('--device', help='cuda or cpu (default: cuda when available)')
     ap.add_argument('--parity', help='print the integer evaluation of --init (a .pt) of the first records of this prefix')
     ap.add_argument('--parity-n', type=int, default=20)
+    ap.add_argument('--resume', action='store_true',
+                    help='continue the unfinished run saved in <out>.resume (same arguments): weights, optimizer, schedule and shuffle as if never stopped')
+    ap.add_argument('--stop-after', type=int, help='stop after this epoch, the run left resumable')
     args = ap.parse_args()
     dev = args.device or ('cuda' if torch.cuda.is_available() else 'cpu')
     if args.parity:
@@ -411,10 +414,29 @@ def main():
             line += f' test_result_ll {t[1]:.5f} test_result_mse {t[2]:.5f}'
         return v[0], line
 
-    best, line = report(0)
-    print(line, flush=True)
-    save(net, args.out)
-    for ep in range(1, args.epochs + 1):
+    # The run's state after each epoch, so a stopped run continues exactly (`--resume`). It exists
+    # only while the run is unfinished: a fresh start would overwrite the best checkpoint.
+    resume = args.out + '.resume'
+    same = {k: v for k, v in vars(args).items() if k not in ('device', 'resume', 'stop_after')}
+    if args.resume:
+        st = torch.load(resume, map_location='cpu', weights_only=False)
+        if st['args'] != same:
+            diff = {k: (st['args'].get(k), v) for k, v in same.items() if st['args'].get(k) != v}
+            raise SystemExit(f'{resume} was saved with other arguments (saved, given): {diff}')
+        net.load_state_dict(st['net'])
+        opt.load_state_dict(st['opt'])
+        sched.load_state_dict(st['sched'])
+        rng.bit_generator.state = st['rng']
+        best, first = st['best'], st['epoch'] + 1
+        print(f'resumed after epoch {st["epoch"]} (best val {best:.6f})', flush=True)
+    else:
+        if os.path.exists(resume):
+            raise SystemExit(f'{resume} holds an unfinished run: continue it with --resume, or delete it to start over')
+        best, line = report(0)
+        print(line, flush=True)
+        save(net, args.out)
+        first = 1
+    for ep in range(first, args.epochs + 1):
         tot, n, t0 = 0.0, 0, time.time()
         plan = [(d, a, b) for d in data for a, b in blocks_of(d)]
         rng.shuffle(plan)
@@ -441,6 +463,15 @@ def main():
             save(net, args.out)
             line += ' saved'
         print(line, flush=True)
+        if ep < args.epochs:
+            torch.save({'args': same, 'epoch': ep, 'best': best, 'net': net.state_dict(), 'opt': opt.state_dict(),
+                        'sched': sched.state_dict(), 'rng': rng.bit_generator.state}, resume + '.tmp')
+            os.replace(resume + '.tmp', resume)
+            if args.stop_after and ep >= args.stop_after:
+                print(f'stopped after epoch {ep}: continue with --resume', flush=True)
+                return
+        elif os.path.exists(resume):
+            os.remove(resume)
 
 
 if __name__ == '__main__':
