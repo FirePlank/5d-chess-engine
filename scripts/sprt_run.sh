@@ -16,6 +16,10 @@
 #        played with both colors; default: generated openings),
 #        THREADS (search threads of both engines, default 1; a runner then plays nproc/THREADS
 #        games at once),
+#        PRIOR (continue a test: the earlier run's pentanomial counts "LL,LD,WL+DD,WD,WW", from
+#        its summary, are added to the live LLR, so the bounds apply to both runs together, and
+#        the combined result is appended to the summary; give the continuation another NAME and
+#        SEED_BASE=<SHARDS> so its shards play other opening orders),
 #        GH_RETRY_S (how long one GitHub call is retried through network errors, default 1800),
 #        SELFPLAY=1 (self-play data instead of a test: new may equal old, no BOOK, every game
 #        gets its own generated opening of BOOK_PLIES actions (default 10) within BOOK_MARGIN internal
@@ -102,7 +106,7 @@ while :; do
     LINES=$(gh api "repos/$REPO/commits/$SHA/status?per_page=100" \
       -q '[.statuses[] | select(.context | startswith("sprt/shard-"))] | group_by(.context)
           | map(max_by(.updated_at)) | .[] | "\(.context)|\(.state)|\(.description)"' 2> /dev/null || true)
-    SUM=$(awk -F'|' 'NF == 3 { split($3, c, ","); for (i = 1; i <= 5; i++) s[i] += c[i] }
+    SUM=$(awk -F'|' -v prior="${PRIOR:-0,0,0,0,0}" 'BEGIN { split(prior, s, ",") } NF == 3 { split($3, c, ","); for (i = 1; i <= 5; i++) s[i] += c[i] }
           END { printf "%d,%d,%d,%d,%d", s[1], s[2], s[3], s[4], s[5] }' <<< "$LINES")
     OUT=$(python "$R/scripts/sprt_merge.py" --from-counts "$SUM" --elo0 "$E0" --elo1 "$E1")
     echo "$(date +%H:%M:%S) $(tr '\n' ' ' <<< "$OUT")"
@@ -146,3 +150,11 @@ python "$R/scripts/sprt_merge.py" --label "$NAME" --old "${OLD_SHA:-$BASE_SHA}" 
   --out "$R/games/sprt/games_${NAME}.jsonl" "$T"/shard-*/shard_*.jsonl \
   | tee "$R/games/sprt/summary_${NAME}.txt"
 rm -rf "$T"
+# A continued test: its pairs and the earlier run's together.
+if [ -n "${PRIOR:-}" ]; then
+  NEWC=$(sed -n 's/^Pentanomial [^:]*: \[\(.*\)\]$/\1/p' "$R/games/sprt/summary_${NAME}.txt" | tr -d ' ')
+  COMB=$(awk -F, -v p="$PRIOR" '{ split(p, q, ","); printf "%d,%d,%d,%d,%d", $1 + q[1], $2 + q[2], $3 + q[3], $4 + q[4], $5 + q[5] }' <<< "$NEWC")
+  { echo "==== Combined with the earlier run (pentanomial $PRIOR) ===="
+    python "$R/scripts/sprt_merge.py" --from-counts "$COMB" --elo0 "$E0" --elo1 "$E1"; } \
+    | tee -a "$R/games/sprt/summary_${NAME}.txt"
+fi
