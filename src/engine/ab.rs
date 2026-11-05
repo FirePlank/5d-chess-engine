@@ -4331,6 +4331,8 @@ impl AlphaBeta {
             let mut iter_pv: Vec<MoveSeq>;
             let mut all_proven;
             let mut scores: Vec<i32>;
+            // Nodes each root action took (single-line search; empty with MultiPV).
+            let mut root_nodes: Vec<u64> = Vec::new();
             let mut depth_lines: Vec<PvLine> = Vec::new();
             // Share of the iteration's nodes the chosen action took (see the clock below).
             let mut effort = 0.0f64;
@@ -4351,6 +4353,7 @@ impl AlphaBeta {
                     iter_pv = Vec::new();
                     all_proven = roots_complete;
                     scores = Vec::with_capacity(roots.len());
+                    root_nodes = Vec::with_capacity(roots.len());
                     let mut top = -INF;
                     let (iter_nodes0, mut best_nodes) = (self.nodes, 0u64);
                     for (k, (_, act)) in roots.iter().enumerate() {
@@ -4380,6 +4383,7 @@ impl AlphaBeta {
                             break;
                         }
                         scores.push(v);
+                        root_nodes.push(self.nodes - act_nodes0);
                         all_proven &= self.proven;
                         top = top.max(v);
                         if v > alpha {
@@ -4469,9 +4473,14 @@ impl AlphaBeta {
             let elapsed = start.elapsed().as_secs_f64();
             if !self.aborted {
                 completed_depth = depth;
-                // Reorder roots: best first, rest by this iteration's scores.
+                // Reorder roots: best first, rest by the nodes each took this iteration (a root
+                // that took long to refute is a close one; late roots are reduced, so the order
+                // decides which), ties and MultiPV by this iteration's scores.
                 let mut idx: Vec<usize> = (0..roots.len()).collect();
                 idx.sort_by(|&a, &b| scores.get(b).copied().unwrap_or(-INF).cmp(&scores.get(a).copied().unwrap_or(-INF)));
+                if !root_nodes.is_empty() && idx.len() > 2 {
+                    idx[1..].sort_by(|&a, &b| root_nodes.get(b).copied().unwrap_or(0).cmp(&root_nodes.get(a).copied().unwrap_or(0)));
+                }
                 roots = idx.into_iter().map(|i| roots[i].clone()).collect();
                 if kept {
                     // The kept mate is searched first at the next depth.
