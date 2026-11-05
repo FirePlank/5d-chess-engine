@@ -66,7 +66,7 @@ const LMR_MIN_INDEX: usize = 4;
 /// many-timeline nodes: such actions are four in ten of those searched there and give 0.3% of
 /// their cutoffs.)
 const BOARD_RANK_MIN_INDEX: usize = 12;
-const RANK_PER_BOARD: u32 = 6;
+const RANK_PER_BOARD: u32 = 5;
 /// A combination of moves on several boards whose every move, played alone with the best moves
 /// elsewhere (in the star, see `AlphaBeta::star`), scored this far below alpha is reduced a
 /// ply more.
