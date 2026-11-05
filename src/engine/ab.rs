@@ -167,6 +167,11 @@ const DEFAULT_HASH_MB: usize = 64;
 const EVAL_MAX: i32 = 20000;
 /// History entries stay within plus or minus this (gravity, `on_cutoff`).
 const HISTORY_MAX: i32 = 16384;
+/// Low-ply history (Stockfish's lowPlyHistory): plies 1..=LOW_PLIES (the expensive interior
+/// nodes right below the root) keep a history of their own, cleared each search, that the
+/// ordering adds to the main one with weight LOW_PLY_WEIGHT / (ply + 1).
+const LOW_PLIES: usize = 3;
+const LOW_PLY_WEIGHT: i32 = 4;
 
 /// How far the search for a checkmate in one goes (`MateVerify` option, `MateVerify::Auto` by
 /// default): in a game a share of the move's time, in an analysis a few seconds.
@@ -653,6 +658,8 @@ pub struct AlphaBeta {
     /// Shared with the helper threads.
     tt: Arc<TtTable>,
     history: Vec<i32>,
+    /// The low-ply history, LOW_PLIES tables like `history` (see `hist`).
+    low_history: Vec<i32>,
     killers: Vec<[Option<MoveSeq>; 2]>,
     /// Per ply: the last evasion that failed high in quiescence (tried before building).
     qkillers: Vec<Option<MoveSeq>>,
@@ -1024,6 +1031,8 @@ const PHYS_STATIC_SLOTS: usize = 1024;
 /// Scratch of `node_ordering`.
 #[derive(Default)]
 struct OrderScratch {
+    /// The ply of the node ordered, for the low-ply history (0 where it does not apply).
+    ply: usize,
     sort: Vec<u64>,
     checks: CheckBuf,
     reach: Vec<(i32, SpReach)>,
@@ -1073,6 +1082,7 @@ impl AlphaBeta {
             hce,
             tt,
             history: vec![0; 2 << 16],
+            low_history: vec![0; LOW_PLIES << 17],
             killers: vec![[None, None]; MAX_PLY + 1],
             qkillers: vec![None; MAX_PLY + 1],
             nodes: 0,
@@ -1232,7 +1242,20 @@ impl AlphaBeta {
         PhysStatic { base, history: history_index_of(mover, m, s.get_present().1) as u32, capture: victim != NO_PIECE, physical_check: has_physical_check(b, !s.get_present().1) }
     }
 
-    fn coord_score(&self, s: &State, info: &HcInfo, n: usize, i: Index, checks: &mut Option<CheckDetector>, history: Option<i32>) -> i32 {
+    /// The history of move slot `idx` as the ordering at `ply` reads it: the main table, plus
+    /// that ply's low-ply table at plies 1..=LOW_PLIES.
+    #[inline]
+    fn hist(&self, idx: usize, ply: usize) -> i32 {
+        let h = self.history[idx];
+        if (1..=LOW_PLIES).contains(&ply) {
+            h + self.low_history[(ply - 1) << 17 | idx] * LOW_PLY_WEIGHT / (ply as i32 + 1)
+        } else {
+            h
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn coord_score(&self, s: &State, info: &HcInfo, n: usize, i: Index, checks: &mut Option<CheckDetector>, history: Option<i32>, ply: usize) -> i32 {
         match info.entry(n, i) {
             Entry::Null => -5,
             Entry::Departing { .. } => 0,
@@ -1244,7 +1267,7 @@ impl AlphaBeta {
                 if victim != NO_PIECE {
                     sc += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
                 } else {
-                    sc += history.unwrap_or_else(|| self.history[history_index_of(mover, m, s.get_present().1)]) / 3;
+                    sc += history.unwrap_or_else(|| self.hist(history_index_of(mover, m, s.get_present().1), ply)) / 3;
                 }
                 if (mover == PAWN_W || mover == BRAWN_W) && m.to.y() == promotion_rank(s.get_board_size().1, s.get_present().1) {
                     sc += 9000;
@@ -1276,6 +1299,7 @@ impl AlphaBeta {
         branch: BranchOrder,
     ) {
         let _prof = crate::misc::prof::scope(6);
+        let ply = scratch.ply;
         let u = info.get_universe();
         // Branch axes share entries: they are scored once and share the first one's lists.
         let fba = info.first_branch_axis();
@@ -1315,10 +1339,10 @@ impl AlphaBeta {
                 hist.resize(u[n].max().map(|i| i as usize + 1).unwrap_or(0), 0);
                 for i in u[n].iter() {
                     if let Some((m, mover)) = info.branch_arrival(i) {
-                        hist[i as usize] = self.history[history_index_of(mover, &m, s.get_present().1)];
+                        hist[i as usize] = self.hist(history_index_of(mover, &m, s.get_present().1), ply);
                     }
                 }
-                sc.push(self.coord_score(s, info, n, 0, &mut detector, None));
+                sc.push(self.coord_score(s, info, n, 0, &mut detector, None, ply));
                 continue;
             }
             sc.resize(u[n].max().map(|i| i as usize + 1).unwrap_or(0), 0);
@@ -1350,7 +1374,7 @@ impl AlphaBeta {
                         let p = st[i as usize - 1];
                         let mut sc = p.base;
                         if !p.capture {
-                            sc += self.history[p.history as usize] / 3;
+                            sc += self.hist(p.history as usize, ply) / 3;
                         }
                         if let Some(d) = detector.as_mut()
                             && (p.physical_check || d.reach_check(n, i)) {
@@ -1358,7 +1382,7 @@ impl AlphaBeta {
                             }
                         sc
                     }
-                    _ => self.coord_score(s, info, n, i, &mut detector, recorded),
+                    _ => self.coord_score(s, info, n, i, &mut detector, recorded, ply),
                 };
                 let score = if filler && i != 0 { score / FILLER_DIV } else { score };
                 sc[i as usize] = score;
@@ -1801,6 +1825,7 @@ impl AlphaBeta {
     /// is remembered for `replay_escape`.
     fn evasion(&mut self, s: &State, steps: u32, deadline: Option<Instant>) -> (Evasion, u32) {
         let mut nb = self.bufs.pop().unwrap_or_default();
+        nb.order.ply = 0;
         let r = {
             let NodeBufs { info, evasions, .. } = &mut *nb;
             evasions.ss = info.rebuild(s, false);
@@ -2471,7 +2496,7 @@ impl AlphaBeta {
             if victim != NO_PIECE {
                 v += 10_000 + 10 * piece_value(victim) - piece_value(mover) / 10;
             } else {
-                v += self.history[history_index_of(mover, m, s.get_present().1)] / 3 / 4;
+                v += self.hist(history_index_of(mover, m, s.get_present().1), ply) / 3 / 4;
             }
             if m.from.tl() != m.to.tl() && victim == NO_PIECE {
                 v -= 300;
@@ -2668,6 +2693,7 @@ impl AlphaBeta {
         let mut s = s.clone();
         s.enable_undo();
         let mut nb = self.bufs.pop().unwrap_or_default();
+        nb.order.ply = 0;
         let ss = nb.info.rebuild(&s, true);
         let t = Instant::now();
         let mut tchecks: Vec<MoveSeq> = Vec::new();
@@ -2852,6 +2878,7 @@ impl AlphaBeta {
             }
         // Search the evasions.
         let mut nb = self.bufs.pop().unwrap_or_default();
+        nb.order.ply = 0;
         {
             let NodeBufs { info, evasions, order, evasion_scores, .. } = &mut *nb;
             evasions.ss = info.rebuild(s, true);
@@ -3129,6 +3156,7 @@ impl AlphaBeta {
         }
 
         let mut nb = self.bufs.pop().unwrap_or_default();
+        nb.order.ply = ply;
         let ss = nb.info.rebuild(s, true);
         // At ply 1, search travel_mate's checking travels right after the remembered actions;
         // otherwise they fall past the action cap and their mates go unseen.
@@ -3515,13 +3543,23 @@ impl AlphaBeta {
         // `HISTORY_MAX` and move less the closer they are to it.
         let bonus = (8 * depth * depth).min(4000);
         let gravity = |h: &mut i32, b: i32| *h += b - *h * b.abs() / HISTORY_MAX;
+        // The low-ply table of this ply, if it has one.
+        let low = (1..=LOW_PLIES).contains(&ply).then(|| (ply - 1) << 17);
         for m in act {
-            gravity(&mut self.history[history_index(s, m)], bonus);
+            let i = history_index(s, m);
+            gravity(&mut self.history[i], bonus);
+            if let Some(o) = low {
+                gravity(&mut self.low_history[o | i], bonus);
+            }
         }
         let tried = std::mem::take(&mut self.quiets[ply.min(MAX_PLY)]);
         for q in tried.iter().filter(|q| *q != act) {
             for m in q {
-                gravity(&mut self.history[history_index(s, m)], -bonus);
+                let i = history_index(s, m);
+                gravity(&mut self.history[i], -bonus);
+                if let Some(o) = low {
+                    gravity(&mut self.low_history[o | i], -bonus);
+                }
             }
         }
         self.quiets[ply.min(MAX_PLY)] = tried;
@@ -4289,6 +4327,7 @@ impl AlphaBeta {
         resume: Option<&SearchResume>,
     ) -> ThreadResult {
         let main = self.thread_id == 0;
+        self.low_history.iter_mut().for_each(|h| *h = 0);
         let mut work = root.clone();
         work.enable_undo();
         let mut best: MoveSeq = resume.map_or_else(|| roots[0].1.clone(), |r| r.best.clone());
